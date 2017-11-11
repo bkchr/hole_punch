@@ -1,0 +1,8 @@
+[package]
+name = "hole_punch"
+version = "0.1.0"
+authors = ["Bastian Köcher <git@kchr.de>"]
+
+[dependencies]
+pnet_datalink = "0.20.0"
+tokio-core = "0.1.10"
