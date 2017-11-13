@@ -1,27 +1,31 @@
 use std::net::IpAddr;
 
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Registration {
-    pub name: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AddressInformation {
-    addresses: Vec<IpAddr>,
-    port: u16,
+    pub addresses: Vec<IpAddr>,
+    pub port: u16,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-pub enum CACRequest {
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum Protocol {
     RequestConnection {
         public: AddressInformation,
         private: AddressInformation,
         connection_id: u32,
     },
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub enum CACAnswer {
-    ConnectionInformation { private: AddressInformation },
+    RequestConnection2 {
+        private: AddressInformation,
+        name: String,
+    },
     KeepAlive,
+    ConnectionInformation {},
+    Registration {
+        name: String,
+        private: AddressInformation,
+    },
+    ConnectionInformation2 {
+        public: AddressInformation,
+        private: AddressInformation,
+    },
+    DeviceNotExist,
 }

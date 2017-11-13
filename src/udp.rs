@@ -27,6 +27,10 @@ impl UdpConnectStream {
     pub fn new(socket: UdpSocket) -> UdpConnectStream {
         UdpConnectStream { socket }
     }
+
+    pub fn port(&self) -> Result<u16> {
+        self.socket.local_addr().map(|a| a.port()).chain_err(|| "error")
+    }
 }
 
 impl io::Write for UdpConnectStream {
@@ -155,6 +159,12 @@ impl UdpServer {
             UdpConnection::new(stream_receiver, con_sender),
             UdpAcceptStream::new(con_receiver, stream_sender),
         )
+    }
+
+    pub fn connect(&mut self, addr: SocketAddr) -> UdpAcceptStream {
+        let (con, stream) = Self::create_connection_and_stream(self.buffer_size);
+        self.connections.insert(addr, con);
+        stream
     }
 }
 
@@ -288,5 +298,18 @@ pub fn accept_async(
     UdpSocket::bind(&listen_addr, handle)
         .chain_err(|| "error binding to socket")
         .and_then(|socket| Ok(UdpServer::new(socket, channel_buffer)))
+        .into_future()
+}
+
+pub fn connect_and_accept_async(
+    connect: SocketAddr,
+    listen_addr: SocketAddr,
+    handle: &Handle,
+    channel_buffer: usize,
+) -> FutureResult<(UdpServer, UdpAcceptStream), Error> {
+    UdpSocket::bind(&listen_addr, handle)
+        .chain_err(|| "error binding to socket")
+        .and_then(|socket| Ok(UdpServer::new(socket, channel_buffer)))
+        .and_then(|mut server| { let stream = server.connect(connect); Ok((server, stream))})
         .into_future()
 }
