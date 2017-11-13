@@ -62,18 +62,30 @@ pub fn peer_client_main(server: SocketAddr) {
             evt_loop_handle.spawn(
                 UdpStuff::new(accept, crecv)
                     .for_each(move |c| {
+                        let timer = tokio_timer::wheel().build();
+                        let (swriter, sreader) = c.0.split();
+
                         evt_loop_handle2.spawn(
-                            tio::write_all(c.0, b"hello\n")
-                                .and_then(|c| {
-                                    let reader = BufReader::new(c.0);
-                                    tio::read_until(reader, b'\n', Vec::new()).map(|d| {
-                                        let d = String::from_utf8(d.1).unwrap();
-                                        println!("{}", d);
-                                        ()
-                                    })
-                                })
+                            swriter
+                                .send_all(
+                                    timer
+                                        .interval(Duration::from_millis(500))
+                                        .map(|_| {
+                                            //println!("SEND");
+                                            "hello".to_string().as_bytes().to_vec()
+                                        })
+                                        .map_err(|_| panic!("ERROR")),
+                                )
+                                .map(|_| ())
                                 .map_err(|_| ()),
                         );
+
+                        evt_loop_handle2.spawn(sreader.for_each(|d| {
+                            let d = String::from_utf8(d).unwrap();
+                            println!("GOT2: {}", d);
+                            Ok(())
+                        }));
+
                         println!("DATA: {:?}", c.1);
                         Ok(())
                     })
@@ -86,7 +98,7 @@ pub fn peer_client_main(server: SocketAddr) {
                     futures::stream::once(Ok(protocol::Protocol::Registration {
                         name: "peer_client".to_string(),
                         private: protocol::AddressInformation {
-                            addresses: vec![[127, 0, 0, 1].into()],
+                            addresses: vec![[192, 168, 1, 62].into()],
                             port: 22223,
                         },
                     })).select(
