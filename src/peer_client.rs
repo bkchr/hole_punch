@@ -13,6 +13,10 @@ use tokio_timer;
 
 use futures::{self, Future, Sink, Stream};
 
+use pnet_datalink::interfaces;
+
+use itertools::Itertools;
+
 pub fn peer_client_main(server_addr: SocketAddr) {
     let mut evt_loop = Core::new().expect("error creating evt loop");
     let handle = evt_loop.handle();
@@ -22,6 +26,7 @@ pub fn peer_client_main(server_addr: SocketAddr) {
     let registration = udp::connect_and_accept_async(listen.into(), &handle, 4)
         .then(|r| r.chain_err(|| "error"))
         .and_then(|(server, connect)| {
+            let port = server.local_addr().map(|a| a.port()).unwrap();
             connect.connect(server_addr);
 
             server
@@ -44,8 +49,15 @@ pub fn peer_client_main(server_addr: SocketAddr) {
                                             Ok(protocol::Protocol::Registration {
                                                 name: "peer_client".to_string(),
                                                 private: protocol::AddressInformation {
-                                                    addresses: vec![[192, 168, 1, 62].into()],
-                                                    port: 22223,
+                                                    addresses: interfaces()
+                                                        .iter()
+                                                        .map(|v| v.ips.clone())
+                                                        .concat()
+                                                        .iter()
+                                                        .map(|v| v.ip())
+                                                        .filter(|ip| !ip.is_loopback())
+                                                        .collect_vec(),
+                                                    port,
                                                 },
                                             }),
                                         ).select(

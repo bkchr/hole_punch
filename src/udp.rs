@@ -167,10 +167,14 @@ impl UdpServer {
         )
     }
 
-    pub fn connect(&mut self, addr: SocketAddr) -> UdpAcceptStream {
+    fn connect(&mut self, addr: SocketAddr) -> UdpAcceptStream {
         let (con, stream) = Self::create_connection_and_stream(self.buffer_size);
         self.connections.insert(addr, con);
         stream
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.socket.local_addr().chain_err(|| "error")
     }
 }
 
@@ -338,6 +342,10 @@ impl ConnectUdpServer {
         };
 
         (server, connect)
+    }
+
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        self.server.local_addr()
     }
 }
 

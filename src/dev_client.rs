@@ -17,6 +17,10 @@ use futures::{self, Future, Poll, Sink, Stream};
 use futures::sync::mpsc::{channel, Receiver, Sender};
 use futures::Async::{NotReady, Ready};
 
+use pnet_datalink::interfaces;
+
+use itertools::Itertools;
+
 pub fn dev_client_main() {
     let mut evt_loop = Core::new().expect("error creating evt loop");
     let handle = evt_loop.handle();
@@ -37,7 +41,14 @@ pub fn dev_client_main() {
             json_writer
                 .send(protocol::Protocol::RequestConnection2 {
                     private: protocol::AddressInformation {
-                        addresses: vec![[192, 168, 1, 80].into()],
+                        addresses: interfaces()
+                            .iter()
+                            .map(|v| v.ips.clone())
+                            .concat()
+                            .iter()
+                            .map(|v| v.ip())
+                            .filter(|ip| !ip.is_loopback())
+                            .collect_vec(),
                         port: port,
                     },
                     name: "peer_client".to_string(),
@@ -68,12 +79,13 @@ pub fn dev_client_main() {
     let connect = udp::connect_and_accept_async(listen.into(), &handle, 4)
         .then(|r| r.chain_err(|| "error"))
         .and_then(move |(server, connect)| {
-            for addr in public.addresses {
-                connect.connect((addr, public.port).into());
-            }
-
-            for addr in private.addresses {
-                connect.connect((addr, public.port).into());
+            for addr in public
+                .addresses
+                .iter()
+                .map(|v| (*v, public.port))
+                .chain(private.addresses.iter().map(|v| (*v, private.port)))
+            {
+                connect.connect(addr.into());
             }
 
             server
