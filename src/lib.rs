@@ -9,7 +9,7 @@ extern crate serde_json;
 extern crate tokio_core;
 #[macro_use]
 extern crate tokio_io;
-extern crate tokio_serde_json;
+extern crate tokio_serde_bincode;
 extern crate tokio_timer;
 extern crate itertools;
 

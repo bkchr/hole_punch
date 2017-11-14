@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use tokio_core::reactor::Core;
 use tokio_io::codec::length_delimited;
-use tokio_serde_json::{ReadJson, WriteJson};
+use tokio_serde_bincode::{ReadBincode, WriteBincode};
 
 use futures::{Future, Sink, Stream};
 use futures::sync::mpsc::{channel, Receiver, Sender};
@@ -37,8 +37,8 @@ pub fn server_main() {
 
                     let (writer, reader) = length_delimited.split();
 
-                    let send = WriteJson::new(writer);
-                    let recv = ReadJson::<_, protocol::Protocol>::new(reader);
+                    let send = WriteBincode::new(writer);
+                    let recv = ReadBincode::<_, protocol::Protocol>::new(reader);
 
                     let (csender, crecv) = channel(10);
 
@@ -93,8 +93,8 @@ pub fn server_main() {
 
                     let (writer, reader) = length_delimited.split();
 
-                    let send = WriteJson::new(writer);
-                    let recv = ReadJson::<_, protocol::Protocol>::new(reader);
+                    let send = WriteBincode::new(writer);
+                    let recv = ReadBincode::<_, protocol::Protocol>::new(reader);
 
                     let connections = connections.clone();
                     evt_loop_handle.spawn(

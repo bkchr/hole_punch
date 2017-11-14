@@ -8,7 +8,7 @@ use std::io;
 
 use tokio_core::reactor::Core;
 use tokio_io::codec::length_delimited;
-use tokio_serde_json::{ReadJson, WriteJson};
+use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_timer;
 
 use futures::{self, Future, Sink, Stream};
@@ -38,8 +38,8 @@ pub fn peer_client_main(server_addr: SocketAddr) {
                             let length_delimited = length_delimited::Framed::new(stream);
                             let (writer, reader) = length_delimited.split();
 
-                            let json_writer = WriteJson::new(writer);
-                            let json_reader = ReadJson::<_, protocol::Protocol>::new(reader);
+                            let json_writer = WriteBincode::new(writer);
+                            let json_reader = ReadBincode::<_, protocol::Protocol>::new(reader);
                             let timer = tokio_timer::wheel().build();
 
                             evt_loop_handle.spawn(

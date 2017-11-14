@@ -10,7 +10,7 @@ use std::io::BufReader;
 use tokio_core::reactor::Core;
 use tokio_io::codec::length_delimited;
 use tokio_io::io as tio;
-use tokio_serde_json::{ReadJson, WriteJson};
+use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_timer;
 
 use futures::{self, Future, Poll, Sink, Stream};
@@ -35,8 +35,8 @@ pub fn dev_client_main() {
             let length_delimited = length_delimited::Framed::new(socket);
             let (writer, reader) = length_delimited.split();
 
-            let json_writer = WriteJson::new(writer);
-            let json_reader = ReadJson::<_, protocol::Protocol>::new(reader);
+            let json_writer = WriteBincode::new(writer);
+            let json_reader = ReadBincode::<_, protocol::Protocol>::new(reader);
 
             json_writer
                 .send(protocol::Protocol::RequestConnection2 {
