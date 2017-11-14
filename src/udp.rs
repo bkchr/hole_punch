@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use std::collections::HashMap;
 use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::cmp::min;
+use std::result;
 
 use tokio_core::net::UdpSocket;
 use tokio_core::reactor::Handle;
@@ -14,8 +15,10 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use futures::Async::{NotReady, Ready};
 use futures::future::FutureResult;
 use futures::{AsyncSink, StartSend};
-use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::sync::mpsc::{channel, unbounded, Receiver, SendError, Sender, UnboundedReceiver,
+                          UnboundedSender};
 use futures::{self, IntoFuture, Poll, Sink, Stream};
+use futures::stream::Fuse;
 
 /// Represents an `UdpStream` that is connected to a remote socket.
 pub struct UdpConnectStream {
@@ -29,7 +32,10 @@ impl UdpConnectStream {
     }
 
     pub fn port(&self) -> Result<u16> {
-        self.socket.local_addr().map(|a| a.port()).chain_err(|| "error")
+        self.socket
+            .local_addr()
+            .map(|a| a.port())
+            .chain_err(|| "error")
     }
 }
 
@@ -301,15 +307,71 @@ pub fn accept_async(
         .into_future()
 }
 
+#[derive(Clone)]
+pub struct Connect {
+    connect_sender: UnboundedSender<SocketAddr>,
+}
+
+impl Connect {
+    pub fn connect(&self, addr: SocketAddr) -> result::Result<(), SendError<SocketAddr>> {
+        self.connect_sender.unbounded_send(addr)
+    }
+}
+
+pub struct ConnectUdpServer {
+    server: UdpServer,
+    connect_recv: Fuse<UnboundedReceiver<SocketAddr>>,
+}
+
+impl ConnectUdpServer {
+    fn new(socket: UdpSocket, channel_buffer: usize) -> (ConnectUdpServer, Connect) {
+        let server = UdpServer::new(socket, channel_buffer);
+        let (sender, recv) = unbounded();
+
+        let server = ConnectUdpServer {
+            server,
+            connect_recv: recv.fuse(),
+        };
+
+        let connect = Connect {
+            connect_sender: sender,
+        };
+
+        (server, connect)
+    }
+}
+
+/// The type of a stream the `ConnectUdpServer` provides.
+pub enum StreamType {
+    /// The stream was created by connecting to a remote address.
+    Connect,
+    /// The stream was created by accepting a connection from a remote address.
+    Accept,
+}
+
+impl Stream for ConnectUdpServer {
+    type Item = (UdpAcceptStream, SocketAddr, StreamType);
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match self.connect_recv.poll() {
+            Ok(Ready(Some(addr))) => Ok(Ready(
+                Some((self.server.connect(addr), addr, StreamType::Connect)),
+            )),
+            _ => self.server.poll().map(|async| {
+                async.map(|option| option.map(|v| (v.0, v.1, StreamType::Accept)))
+            }),
+        }
+    }
+}
+
 pub fn connect_and_accept_async(
-    connect: SocketAddr,
     listen_addr: SocketAddr,
     handle: &Handle,
     channel_buffer: usize,
-) -> FutureResult<(UdpServer, UdpAcceptStream), Error> {
+) -> FutureResult<(ConnectUdpServer, Connect), Error> {
     UdpSocket::bind(&listen_addr, handle)
         .chain_err(|| "error binding to socket")
-        .and_then(|socket| Ok(UdpServer::new(socket, channel_buffer)))
-        .and_then(|mut server| { let stream = server.connect(connect); Ok((server, stream))})
+        .and_then(|socket| Ok(ConnectUdpServer::new(socket, channel_buffer)))
         .into_future()
 }

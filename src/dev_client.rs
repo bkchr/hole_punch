@@ -65,117 +65,66 @@ pub fn dev_client_main() {
 
     let listen = ([0, 0, 0, 0], info.0);
     let evt_loop_handle = evt_loop.handle();
-    let connect = udp::connect_and_accept_async(
-        (*public.addresses.get(0).unwrap(), public.port).into(),
-        listen.into(),
-        &handle,
-        4,
-    ).then(|r| r.chain_err(|| "error"))
-        .and_then(move |(server, socket)| {
-            let evt_loop_handle2 = evt_loop_handle.clone();
-            let timer = tokio_timer::wheel().build();
+    let connect = udp::connect_and_accept_async(listen.into(), &handle, 4)
+        .then(|r| r.chain_err(|| "error"))
+        .and_then(move |(server, connect)| {
+            for addr in public.addresses {
+                connect.connect((addr, public.port).into());
+            }
 
-            let (swriter, sreader) = socket.split();
-
-            evt_loop_handle.spawn(
-                swriter
-                    .send_all(
-                        timer
-                            .interval(Duration::from_millis(500))
-                            .map(|_| {
-                                //println!("SEND");
-                                "hello monkeydonkey".to_string().as_bytes().to_vec()
-                            })
-                            .map_err(|_| panic!("ERROR"))
-                    )
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
-
-            evt_loop_handle.spawn(sreader.for_each(|d| {
-                let d = String::from_utf8(d).unwrap();
-                println!("GOT2: {} PUBLIC", d);
-                Ok(())
-            }));
-
+            for addr in private.addresses {
+                connect.connect((addr, public.port).into());
+            }
 
             server
-                .for_each(move |(con, addr)| {
+                .for_each(move |(stream, addr, stype)| {
                     println!("con from: {:?}", addr);
-                    evt_loop_handle2.spawn(
-                        tio::write_all(con, b"hello monkeydonkey\n")
-                            .and_then(move |c| {
-                                let reader = BufReader::new(c.0);
-                                tio::read_until(reader, b'\n', Vec::new()).map(move |d| {
-                                    let d = String::from_utf8(d.1).unwrap();
-                                    println!("GOT: {}, {:?}", d, addr);
-                                    ()
-                                })
-                            })
-                            .map_err(|_| ()),
-                    );
+
+                    match stype {
+                        udp::StreamType::Connect => {
+                            let timer = tokio_timer::wheel().build();
+
+                            let (swriter, sreader) = stream.split();
+
+                            evt_loop_handle.spawn(
+                                swriter
+                                    .send_all(
+                                        timer
+                                            .interval(Duration::from_millis(500))
+                                            .map(|_| {
+                                                "hello monkeydonkey".to_string().as_bytes().to_vec()
+                                            })
+                                            .map_err(|_| panic!("ERROR")),
+                                    )
+                                    .map(|_| ())
+                                    .map_err(|_| ()),
+                            );
+
+                            evt_loop_handle.spawn(sreader.for_each(move |d| {
+                                let d = String::from_utf8(d).unwrap();
+                                println!("GOT2: {} {}", d, addr);
+                                Ok(())
+                            }));
+                        }
+                        udp::StreamType::Accept => {
+                            evt_loop_handle.spawn(
+                                tio::write_all(stream, b"hello monkeydonkey\n")
+                                    .and_then(move |c| {
+                                        let reader = BufReader::new(c.0);
+                                        tio::read_until(reader, b'\n', Vec::new()).map(move |d| {
+                                            let d = String::from_utf8(d.1).unwrap();
+                                            println!("GOT: {}, {:?}", d, addr);
+                                            ()
+                                        })
+                                    })
+                                    .map_err(|_| ()),
+                            );
+                        }
+                    };
                     Ok(())
                 })
                 .then(|r| r.chain_err(|| "error"))
         });
-/*
-    evt_loop.handle().spawn(connect.map_err(|_| ()));
 
-    let listen = ([0, 0, 0, 0], info.0);
-    let evt_loop_handle = evt_loop.handle();
-    let connect = udp::connect_and_accept_async(
-        (*private.addresses.get(0).unwrap(), private.port).into(),
-        listen.into(),
-        &handle,
-        4,
-    ).then(|r| r.chain_err(|| "error"))
-        .and_then(|(server, socket)| {
-            let evt_loop_handle2 = evt_loop_handle.clone();
-            let timer = tokio_timer::wheel().build();
-
-            let (swriter, sreader) = socket.split();
-
-            evt_loop_handle.spawn(
-                swriter
-                    .send_all(
-                        timer
-                            .interval(Duration::from_millis(500))
-                            .map(|_| {
-                                //println!("SEND");
-                                "hello monkeydonkey".to_string().as_bytes().to_vec()
-                            })
-                            .map_err(|_| panic!("ERROR"))
-                    )
-                    .map(|_| ())
-                    .map_err(|_| ()),
-            );
-
-            evt_loop_handle.spawn(sreader.for_each(|d| {
-                let d = String::from_utf8(d).unwrap();
-                println!("GOT2: {}, PRIVATE", d);
-                Ok(())
-            }));
-
-
-            server
-                .for_each(move |(con, addr)| {
-                    println!("con from: {:?}", addr);
-                    evt_loop_handle2.spawn(
-                        tio::write_all(con, b"hello monkeydonkey\n")
-                            .and_then(|c| {
-                                let reader = BufReader::new(c.0);
-                                tio::read_until(reader, b'\n', Vec::new()).map(|d| {
-                                    let d = String::from_utf8(d.1).unwrap();
-                                    println!("GOT: {}", d);
-                                    ()
-                                })
-                            })
-                            .map_err(|_| ()),
-                    );
-                    Ok(())
-                })
-                .then(|r| r.chain_err(|| "error"))
-        });
-*/
     evt_loop.run(connect).expect("error connect");
 }
