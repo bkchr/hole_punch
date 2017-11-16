@@ -74,13 +74,13 @@ struct UdpConnection {
 impl UdpConnection {
     /// Creates a new `UdpConnection`
     ///
-    /// * `recv` - The receiver to receive data from the connected `UdpAcceptStream`
-    /// * `sender` - The sender to send data to the connected `UdpAcceptStream`
+    /// * `recv` - The receiver to receive data from the connected `UdpServerStream`
+    /// * `sender` - The sender to send data to the connected `UdpServerStream`
     fn new(recv: Receiver<Vec<u8>>, sender: Sender<Vec<u8>>) -> UdpConnection {
         UdpConnection { sender, recv }
     }
 
-    /// Forwards received data to the connected `UdpAcceptStream`
+    /// Forwards received data to the connected `UdpServerStream`
     fn recv(&mut self, data: Vec<u8>) {
         // if we see an error here, abort the function.
         // this connection will be dropped in the next `poll` call of `UdpServer`.
@@ -91,7 +91,7 @@ impl UdpConnection {
         }
     }
 
-    /// Checks if the connected `UdpAcceptStream` wants to send data
+    /// Checks if the connected `UdpServerStream` wants to send data
     ///
     /// # Return value
     ///
@@ -117,7 +117,7 @@ pub struct UdpServer {
     connections: HashMap<SocketAddr, UdpConnection>,
     /// Temp buffer for receiving messages
     buf: Vec<u8>,
-    /// The buffer size of the `UdpConnection` and `UdpAcceptStream` channels
+    /// The buffer size of the `UdpConnection` and `UdpServerStream` channels
     buffer_size: usize,
 }
 
@@ -126,7 +126,7 @@ impl UdpServer {
     ///
     /// * `socket` - The `UdpSocket` this server should use.
     /// * `channel_buffer` - Defines the buffer size of the channel that connects
-    ///                      `UdpConnection` and `UdpAcceptStream`. Both sides drop data/return
+    ///                      `UdpConnection` and `UdpServerStream`. Both sides drop data/return
     ///                      `WouldBlock` if the channel is full.
     fn new(socket: UdpSocket, channel_buffer: usize) -> UdpServer {
         UdpServer {
@@ -156,18 +156,18 @@ impl UdpServer {
         retain(&mut self.connections, &mut self.socket);
     }
 
-    /// Creates a new `UdpConnection` and the connected `UdpAcceptStream`
-    fn create_connection_and_stream(buffer_size: usize) -> (UdpConnection, UdpAcceptStream) {
+    /// Creates a new `UdpConnection` and the connected `UdpServerStream`
+    fn create_connection_and_stream(buffer_size: usize) -> (UdpConnection, UdpServerStream) {
         let (con_sender, con_receiver) = channel(buffer_size);
         let (stream_sender, stream_receiver) = channel(buffer_size);
 
         (
             UdpConnection::new(stream_receiver, con_sender),
-            UdpAcceptStream::new(con_receiver, stream_sender),
+            UdpServerStream::new(con_receiver, stream_sender),
         )
     }
 
-    fn connect(&mut self, addr: SocketAddr) -> UdpAcceptStream {
+    fn connect(&mut self, addr: SocketAddr) -> UdpServerStream {
         let (con, stream) = Self::create_connection_and_stream(self.buffer_size);
         self.connections.insert(addr, con);
         stream
@@ -179,7 +179,7 @@ impl UdpServer {
 }
 
 impl Stream for UdpServer {
-    type Item = (UdpAcceptStream, SocketAddr);
+    type Item = (UdpServerStream, SocketAddr);
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -202,21 +202,21 @@ impl Stream for UdpServer {
 }
 
 /// UdpStream that is created by a `UdpServer` and is connected to a `UdpConnection`.
-pub struct UdpAcceptStream {
+pub struct UdpServerStream {
     /// The sender to send data to the connected `UdpConnection` and effectively over the socket
     sender: Sender<Vec<u8>>,
     /// The receiver to recv data from the connected `UdpConnection`
     receiver: Receiver<Vec<u8>>,
 }
 
-impl UdpAcceptStream {
-    /// Creates a new UdpAcceptStream
-    fn new(receiver: Receiver<Vec<u8>>, sender: Sender<Vec<u8>>) -> UdpAcceptStream {
-        UdpAcceptStream { receiver, sender }
+impl UdpServerStream {
+    /// Creates a new UdpServerStream
+    fn new(receiver: Receiver<Vec<u8>>, sender: Sender<Vec<u8>>) -> UdpServerStream {
+        UdpServerStream { receiver, sender }
     }
 }
 
-impl Stream for UdpAcceptStream {
+impl Stream for UdpServerStream {
     type Item = Vec<u8>;
     type Error = ();
 
@@ -225,7 +225,7 @@ impl Stream for UdpAcceptStream {
     }
 }
 
-impl Sink for UdpAcceptStream {
+impl Sink for UdpServerStream {
     type SinkItem = Vec<u8>;
     type SinkError = <Sender<Vec<u8>> as Sink>::SinkError;
 
@@ -242,7 +242,7 @@ fn to_io_error<E: fmt::Debug>(error: E) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("{:?}", error))
 }
 
-impl io::Write for UdpAcceptStream {
+impl io::Write for UdpServerStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if let AsyncSink::NotReady(_) = self.start_send(buf.to_vec()).map_err(to_io_error)? {
             return Err(io::ErrorKind::WouldBlock.into());
@@ -258,7 +258,7 @@ impl io::Write for UdpAcceptStream {
     }
 }
 
-impl io::Read for UdpAcceptStream {
+impl io::Read for UdpServerStream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let res = self.poll().map_err(to_io_error)?;
 
@@ -276,9 +276,9 @@ impl io::Read for UdpAcceptStream {
     }
 }
 
-impl AsyncRead for UdpAcceptStream {}
+impl AsyncRead for UdpServerStream {}
 
-impl AsyncWrite for UdpAcceptStream {
+impl AsyncWrite for UdpServerStream {
     fn shutdown(&mut self) -> io::Result<futures::Async<()>> {
         Ok(Ready(()))
     }
@@ -358,7 +358,7 @@ pub enum StreamType {
 }
 
 impl Stream for ConnectUdpServer {
-    type Item = (UdpAcceptStream, SocketAddr, StreamType);
+    type Item = (UdpServerStream, SocketAddr, StreamType);
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {

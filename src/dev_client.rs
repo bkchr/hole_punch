@@ -1,5 +1,5 @@
 use errors::*;
-use udp::{self, UdpAcceptStream};
+use udp;
 use protocol;
 
 use std::net::SocketAddr;
