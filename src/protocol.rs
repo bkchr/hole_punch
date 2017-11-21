@@ -19,7 +19,7 @@ pub enum Protocol {
     },
     KeepAlive,
     ConnectionInformation {},
-    Registration {
+    Register {
         name: String,
         private: AddressInformation,
     },

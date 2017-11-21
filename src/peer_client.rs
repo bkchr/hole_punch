@@ -46,7 +46,7 @@ pub fn peer_client_main(server_addr: SocketAddr) {
                                 json_writer
                                     .send_all(
                                         futures::stream::once(
-                                            Ok(protocol::Protocol::Registration {
+                                            Ok(protocol::Protocol::Register {
                                                 name: "peer_client".to_string(),
                                                 private: protocol::AddressInformation {
                                                     addresses: interfaces()

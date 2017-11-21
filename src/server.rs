@@ -46,7 +46,7 @@ pub fn server_main() {
                     evt_loop_handle.spawn(
                         send.send_all(
                             recv.map(move |v| match v {
-                                protocol::Protocol::Registration { name, private } => {
+                                protocol::Protocol::Register { name, private } => {
                                     println!("Registered {}", name);
                                     let info = protocol::Protocol::ConnectionInformation2 {
                                         public: protocol::AddressInformation {
