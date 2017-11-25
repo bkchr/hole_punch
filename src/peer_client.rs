@@ -45,22 +45,20 @@ pub fn peer_client_main(server_addr: SocketAddr) {
                             evt_loop_handle.spawn(
                                 json_writer
                                     .send_all(
-                                        futures::stream::once(
-                                            Ok(protocol::Protocol::Register {
-                                                name: "peer_client".to_string(),
-                                                private: protocol::AddressInformation {
-                                                    addresses: interfaces()
-                                                        .iter()
-                                                        .map(|v| v.ips.clone())
-                                                        .concat()
-                                                        .iter()
-                                                        .map(|v| v.ip())
-                                                        .filter(|ip| !ip.is_loopback())
-                                                        .collect_vec(),
-                                                    port,
-                                                },
-                                            }),
-                                        ).select(
+                                        futures::stream::once(Ok(protocol::Protocol::Register {
+                                            name: "peer_client".to_string(),
+                                            private: protocol::AddressInformation {
+                                                addresses: interfaces()
+                                                    .iter()
+                                                    .map(|v| v.ips.clone())
+                                                    .concat()
+                                                    .iter()
+                                                    .map(|v| v.ip())
+                                                    .filter(|ip| !ip.is_loopback())
+                                                    .collect_vec(),
+                                                port,
+                                            },
+                                        })).select(
                                             timer
                                                 .interval_range(
                                                     Duration::from_secs(30),

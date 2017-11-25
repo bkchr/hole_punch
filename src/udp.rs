@@ -144,12 +144,14 @@ impl UdpServer {
         // the borrow checker does not want 2 mutable references to self, but with this trick it
         // works
         fn retain(connections: &mut HashMap<SocketAddr, UdpConnection>, socket: &mut UdpSocket) {
-            connections.retain(|addr, c| loop {
-                let _ = match c.send() {
-                    Ok(Some(ref data)) => socket.send_to(&data, &addr),
-                    Ok(None) => return true,
-                    _ => return false,
-                };
+            connections.retain(|addr, c| {
+                loop {
+                    let _ = match c.send() {
+                        Ok(Some(ref data)) => socket.send_to(&data, &addr),
+                        Ok(None) => return true,
+                        _ => return false,
+                    };
+                }
             });
         }
 

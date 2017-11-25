@@ -1,17 +1,65 @@
 use errors::*;
 use udp;
 use protocol;
+use strategies::Strategy;
 
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
 use tokio_io::codec::length_delimited;
 use tokio_serde_bincode::{ReadBincode, WriteBincode};
 
-use futures::{Future, Sink, Stream};
+use futures::{Future, Poll, Sink, Stream};
+use futures::Async::{NotReady, Ready};
 use futures::sync::mpsc::{channel, Receiver, Sender};
+
+trait Service {
+    type Message;
+    fn message(msg: &Self::Message) -> Result<Option<Self::Message>>;
+    fn close();
+}
+
+type ServiceId = u64;
+
+trait NewService {
+    type Service;
+    fn new_service(id: u64) -> Self::Service;
+}
+
+struct Server<N>
+where
+    N: NewService,
+    <N as NewService>::Service: Service,
+{
+    sockets: Vec<Strategy>,
+    new_service: N,
+}
+
+impl<N> Future for Server<N>
+where
+    N: NewService,
+    <N as NewService>::Service: Service,
+{
+    type Item = ();
+    type Error = Error;
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        for socket in &mut self.sockets {
+            match socket.poll()? {
+                Ready(Some(con)) => {
+                    continue;
+                }
+                Ready(None) => {
+                    bail!("strategy returned None!");
+                }
+                _ => {}
+            }
+        }
+
+        Ok(NotReady)
+    }
+}
 
 pub fn server_main() {
     let mut evt_loop = Core::new().expect("could not initialize event loop");
