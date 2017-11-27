@@ -7,7 +7,7 @@ pub struct AddressInformation {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Protocol {
+pub enum Protocol<P> {
     RequestConnection {
         public: AddressInformation,
         private: AddressInformation,
@@ -28,4 +28,5 @@ pub enum Protocol {
         private: AddressInformation,
     },
     DeviceNotExist,
+    Embedded(P)
 }

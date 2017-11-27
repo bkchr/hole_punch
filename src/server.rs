@@ -1,7 +1,7 @@
 use errors::*;
 use udp;
 use protocol;
-use strategies::Strategy;
+use strategies::{Connection, Strategy};
 
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -15,6 +15,8 @@ use futures::{Future, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
 use futures::sync::mpsc::{channel, Receiver, Sender};
 
+use serde::{Deserialize, Serialize};
+
 trait Service {
     type Message;
     fn message(msg: &Self::Message) -> Result<Option<Self::Message>>;
@@ -25,29 +27,70 @@ type ServiceId = u64;
 
 trait NewService {
     type Service;
-    fn new_service(id: u64) -> Self::Service;
+    fn new_service(&self, id: ServiceId) -> Self::Service;
 }
 
-struct Server<N>
+struct ServiceHandler<T, P>
+where
+    T: Service,
+{
+    connection: Connection<P>,
+    service: T,
+}
+
+impl<T, P> Future for ServiceHandler<T, P>
+where
+    T: Service,
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let msg = match self.connection.poll()? {
+            Ready(Some(msg)) => msg,
+            Ready(None) => return Ok(Ready(())),
+            NotReady => return Ok(NotReady),
+        };
+
+
+    }
+}
+
+struct Server<N, P>
 where
     N: NewService,
     <N as NewService>::Service: Service,
 {
-    sockets: Vec<Strategy>,
+    sockets: Vec<Strategy<P>>,
     new_service: N,
+    services: HashMap<ServiceId, ServiceHandler<<N as NewService>::Service, P>>,
+    unused_ids: Vec<ServiceId>,
 }
 
-impl<N> Future for Server<N>
+impl<N, P> Future for Server<N, P>
 where
     N: NewService,
     <N as NewService>::Service: Service,
+    P: Serialize + for<'de> Deserialize<'de>,
 {
     type Item = ();
     type Error = Error;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        for socket in &mut self.sockets {
+        for socket in self.sockets.iter() {
             match socket.poll()? {
                 Ready(Some(con)) => {
+                    let service_id = self.unused_ids
+                        .pop()
+                        .unwrap_or_else(|| self.services.len() as u64);
+                    let service = self.new_service.new_service(service_id);
+                    let handler = ServiceHandler {
+                        connection: con.0,
+                        service,
+                    };
+
+                    self.services.insert(service_id, handler);
+
                     continue;
                 }
                 Ready(None) => {
