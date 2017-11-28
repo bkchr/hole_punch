@@ -4,7 +4,7 @@ use protocol::Protocol;
 use std::net::SocketAddr;
 
 use futures::Async::{NotReady, Ready};
-use futures::{Future, Poll, Stream};
+use futures::{Future, Poll, Sink, StartSend, Stream};
 
 use tokio_core::reactor::Handle;
 
@@ -64,6 +64,28 @@ where
             &mut Connection::Udp(ref mut stream) => stream
                 .poll()
                 .chain_err(|| "error polling udp strategy connection"),
+        }
+    }
+}
+
+impl<P> Sink for Connection<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type SinkItem = Protocol<P>;
+    type SinkError = Error;
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        match self {
+            &mut Connection::Udp(ref mut sink) => sink.start_send(item)
+                .map_err(|_| "error at start_send on udp connection".into()),
+        }
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        match self {
+            &mut Connection::Udp(ref mut sink) => sink.poll_complete()
+                .map_err(|_| "error at poll_complete on udp connection".into()),
         }
     }
 }

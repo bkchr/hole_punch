@@ -1,78 +1,138 @@
 use errors::*;
 use udp;
-use protocol;
-use strategies::{Connection, Strategy};
+use protocol::Protocol;
+use strategies::{self, Connection, Strategy};
 
-use std::io;
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
 
 use tokio_core::reactor::{Core, Handle};
-use tokio_io::codec::length_delimited;
-use tokio_serde_bincode::{ReadBincode, WriteBincode};
 
 use futures::{Future, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
-use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 
 use serde::{Deserialize, Serialize};
 
-trait Service {
+pub trait Service {
     type Message;
-    fn message(msg: &Self::Message) -> Result<Option<Self::Message>>;
-    fn close();
+    fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>>;
+    fn close(&self);
 }
 
-type ServiceId = u64;
+pub type ServiceId = u64;
 
-trait NewService {
+pub trait NewService {
     type Service;
     fn new_service(&self, id: ServiceId) -> Self::Service;
 }
 
 struct ServiceHandler<T, P>
 where
-    T: Service,
+    T: Service<Message = P>,
+    P: Serialize + for<'de> Deserialize<'de>,
 {
     connection: Connection<P>,
     service: T,
+    receiver: UnboundedReceiver<Protocol<P>>,
+    id: ServiceId,
+    state: Arc<Mutex<State<P>>>,
 }
 
-impl<T, P> Future for ServiceHandler<T, P>
+impl<T, P> ServiceHandler<T, P>
 where
-    T: Service,
+    T: Service<Message = P>,
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = ();
-    type Error = Error;
+    fn send_message(&self, msg: Protocol<P>) -> Result<()> {
+        self.connection
+            .start_send(msg)
+            .chain_err(|| "error sending message")?;
+        self.connection
+            .poll_complete()
+            .chain_err(|| "error sending message")
+            .map(|_| ())
+    }
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll_impl(&mut self) -> Poll<(), Error> {
         let msg = match self.connection.poll()? {
             Ready(Some(msg)) => msg,
             Ready(None) => return Ok(Ready(())),
             NotReady => return Ok(NotReady),
         };
 
+        let answer = match msg {
+            Protocol::Embedded(v) => self.service.on_message(&v)?.map(|v| Protocol::Embedded(v)),
+            _ => None,
+        };
 
+        if let Some(answer) = answer {
+            self.send_message(answer)?;
+        }
+
+        Ok(NotReady)
     }
 }
 
-struct Server<N, P>
+impl<T, P> Future for ServiceHandler<T, P>
+where
+    T: Service<Message = P>,
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.poll_impl() {
+            r @ Ok(NotReady) => r,
+            r @ _ => {
+                self.service.close();
+                self.state.free_service(self.id);
+                r
+            }
+        }
+    }
+}
+
+pub struct Server<N, P>
 where
     N: NewService,
     <N as NewService>::Service: Service,
 {
     sockets: Vec<Strategy<P>>,
     new_service: N,
-    services: HashMap<ServiceId, ServiceHandler<<N as NewService>::Service, P>>,
-    unused_ids: Vec<ServiceId>,
+    state: Arc<Mutex<State<P>>>,
+    handle: Handle,
+}
+
+impl<N, P> Server<N, P>
+where
+    N: NewService,
+    <N as NewService>::Service: Service<Message = P> + 'static,
+    P: Serialize + for<'de> Deserialize<'de> + 'static,
+{
+    pub fn new(new_service: N, handle: Handle) -> Server<N, P> {
+        let state = Arc::new(Mutex::new(State::new()));
+        let sockets = strategies::accept(&handle);
+
+        Server {
+            sockets,
+            new_service,
+            state,
+            handle,
+        }
+    }
+
+    pub fn run(self, evt_loop: &Core) -> Result<()> {
+        evt_loop.run(self)
+    }
 }
 
 impl<N, P> Future for Server<N, P>
 where
     N: NewService,
-    <N as NewService>::Service: Service,
-    P: Serialize + for<'de> Deserialize<'de>,
+    <N as NewService>::Service: Service<Message = P> + 'static,
+    P: Serialize + for<'de> Deserialize<'de> + 'static,
 {
     type Item = ();
     type Error = Error;
@@ -80,16 +140,23 @@ where
         for socket in self.sockets.iter() {
             match socket.poll()? {
                 Ready(Some(con)) => {
-                    let service_id = self.unused_ids
-                        .pop()
-                        .unwrap_or_else(|| self.services.len() as u64);
-                    let service = self.new_service.new_service(service_id);
-                    let handler = ServiceHandler {
-                        connection: con.0,
-                        service,
-                    };
+                    self.state.new_service(|id| {
+                        let service = self.new_service.new_service(id);
 
-                    self.services.insert(service_id, handler);
+                        let (sender, receiver) = unbounded();
+
+                        let handler = ServiceHandler {
+                            connection: con.0,
+                            service,
+                            receiver,
+                            id,
+                            state: self.state.clone(),
+                        };
+
+                        self.handle.spawn(handler.map_err(|_| ()));
+
+                        sender
+                    });
 
                     continue;
                 }
@@ -104,120 +171,50 @@ where
     }
 }
 
-pub fn server_main() {
-    let mut evt_loop = Core::new().expect("could not initialize event loop");
+struct State<P> {
+    services: HashMap<ServiceId, UnboundedSender<Protocol<P>>>,
+    unused_ids: Vec<ServiceId>,
+}
 
-    let evt_loop_handle = evt_loop.handle();
-    let evt_loop_handle3 = evt_loop.handle();
+impl<P> State<P> {
+    fn new() -> State<P> {
+        State {
+            services: HashMap::new(),
+            unused_ids: Vec::new(),
+        }
+    }
+}
 
-    let connections = Arc::new(Mutex::new(HashMap::<
-        String,
-        (
-            protocol::Protocol,
-            Sender<(protocol::AddressInformation, protocol::AddressInformation)>,
-        ),
-    >::new()));
-    let connections2 = connections.clone();
+trait ServerState<P> {
+    fn new_service<F>(&self, create_service: F)
+    where
+        F: FnOnce(ServiceId) -> UnboundedSender<Protocol<P>>;
 
-    // listen for all incoming requests
-    let server = udp::accept_async(([0, 0, 0, 0], 22222).into(), &evt_loop_handle3, 4).and_then(
-        move |server| {
-            server
-                .for_each(move |(con, addr)| {
-                    let length_delimited = length_delimited::Framed::new(con);
+    fn free_service(&self, id: ServiceId);
+}
 
-                    let (writer, reader) = length_delimited.split();
+impl<P> ServerState<P> for Arc<Mutex<State<P>>> {
+    fn new_service<F>(&self, create_service: F)
+    where
+        F: FnOnce(ServiceId) -> UnboundedSender<Protocol<P>>,
+    {
+        let state = self.lock().unwrap();
 
-                    let send = WriteBincode::new(writer);
-                    let recv = ReadBincode::<_, protocol::Protocol>::new(reader);
+        let service_id = state
+            .unused_ids
+            .pop()
+            .unwrap_or_else(|| state.services.len() as u64);
 
-                    let (csender, crecv) = channel(10);
+        let sender = create_service(service_id);
 
-                    let connections = connections.clone();
-                    evt_loop_handle.spawn(
-                        send.send_all(
-                            recv.map(move |v| match v {
-                                protocol::Protocol::Register { name, private } => {
-                                    println!("Registered {}", name);
-                                    let info = protocol::Protocol::ConnectionInformation2 {
-                                        public: protocol::AddressInformation {
-                                            addresses: vec![addr.ip()],
-                                            port: addr.port(),
-                                        },
-                                        private,
-                                    };
-                                    connections
-                                        .lock()
-                                        .unwrap()
-                                        .insert(name, (info, csender.clone()));
-                                    protocol::Protocol::KeepAlive {}
-                                }
-                                _ => protocol::Protocol::KeepAlive {},
-                            }).map_err(|_| ())
-                                .select(crecv.map(|(public, private)| {
-                                    protocol::Protocol::RequestConnection {
-                                        public,
-                                        private,
-                                        connection_id: 1,
-                                    }
-                                }))
-                                .map_err(|_| io::Error::new(io::ErrorKind::Other, "other")),
-                        ).map(|_| ())
-                            .map_err(|_| ()),
-                    );
+        state.services.insert(service_id, sender);
+    }
 
-                    Ok(())
-                })
-                .then(|r| r.chain_err(|| "error"))
-        },
-    );
+    fn free_service(&self, id: ServiceId) {
+        let state = self.lock().unwrap();
 
-    evt_loop_handle3.spawn(server.map_err(|_| ()));
-    let evt_loop_handle = evt_loop_handle3.clone();
-    let connections = connections2;
-
-    let server2 = udp::accept_async(([0, 0, 0, 0], 22224).into(), &evt_loop_handle3, 4).and_then(
-        move |server| {
-            server
-                .for_each(move |(con, addr)| {
-                    let length_delimited = length_delimited::Framed::new(con);
-
-                    let (writer, reader) = length_delimited.split();
-
-                    let send = WriteBincode::new(writer);
-                    let recv = ReadBincode::<_, protocol::Protocol>::new(reader);
-
-                    let connections = connections.clone();
-                    evt_loop_handle.spawn(
-                        send.send_all(
-                            recv.map(move |v| match v {
-                                protocol::Protocol::RequestConnection2 { private, name } => {
-                                    println!("REQUEST DEVICE: {}", name);
-                                    if let Some(&mut (ref info, ref mut csender)) =
-                                        connections.lock().unwrap().get_mut(&name)
-                                    {
-                                        let public = protocol::AddressInformation {
-                                            addresses: vec![addr.ip()],
-                                            port: addr.port(),
-                                        };
-                                        csender.start_send((public, private));
-                                        csender.poll_complete();
-                                        info.clone()
-                                    } else {
-                                        protocol::Protocol::DeviceNotExist {}
-                                    }
-                                }
-                                _ => protocol::Protocol::DeviceNotExist {},
-                            }).map_err(|_| io::Error::new(io::ErrorKind::Other, "other")),
-                        ).map(|_| ())
-                            .map_err(|_| ()),
-                    );
-
-                    Ok(())
-                })
-                .then(|r| r.chain_err(|| "error"))
-        },
-    );
-
-    evt_loop.run(server2).expect("AHHH");
+        if state.services.remove(&id).is_some() {
+            state.unused_ids.push(id);
+        }
+    }
 }

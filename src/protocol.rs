@@ -8,25 +8,12 @@ pub struct AddressInformation {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Protocol<P> {
-    RequestConnection {
+    Register { private: AddressInformation },
+    Connect {
         public: AddressInformation,
         private: AddressInformation,
         connection_id: u32,
     },
-    RequestConnection2 {
-        private: AddressInformation,
-        name: String,
-    },
     KeepAlive,
-    ConnectionInformation {},
-    Register {
-        name: String,
-        private: AddressInformation,
-    },
-    ConnectionInformation2 {
-        public: AddressInformation,
-        private: AddressInformation,
-    },
-    DeviceNotExist,
-    Embedded(P)
+    Embedded(P),
 }
