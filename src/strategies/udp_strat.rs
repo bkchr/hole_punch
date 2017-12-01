@@ -41,7 +41,7 @@ where
 }
 
 pub struct Server<P> {
-    server: FutureResultResolver<FutureResult<(udp::ConnectUdpServer, udp::Connect), Error>>,
+    server: FutureResultResolver<FutureResult<(udp::UdpServer, udp::Connect), Error>>,
     marker: PhantomData<P>,
     connect_to: Vec<SocketAddr>,
 }

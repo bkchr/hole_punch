@@ -124,7 +124,7 @@ where
     P: Serialize + for<'de> Deserialize<'de>,
 {
     fn new(addr: SocketAddr, handle: &Handle) -> Connect<P> {
-        let mut strategies = strategies::connect(handle);
+        let strategies = strategies::connect(handle);
         let addresses = interfaces()
             .iter()
             .map(|v| v.ips.clone())
@@ -167,13 +167,11 @@ where
                 ConnectState::None => {
                     let mut initial = self.strategies.pop().unwrap();
                     initial.connect(self.addr);
-                    println!("Initial");
                     (ConnectState::Initiating(initial), None)
                 }
                 ConnectState::Initiating(mut server) => match server.poll() {
                     Ok(Ready(Some((mut con, _, cty)))) => {
                         if let strategies::ConnectionType::Outgoing = cty {
-                            println!("Out");
                             self.address_infos.port = server.local_addr().unwrap().port();
                             // TODO: do not use expect
                             con.start_send(protocol::Protocol::Register {
@@ -190,11 +188,13 @@ where
                     Ok(NotReady) => (ConnectState::Initiating(server), Some(Ok(NotReady))),
                 },
                 ConnectState::Connecting((mut con, mut server)) => {
-                    println!("CONNECTING!");
                     server.poll()?;
                     match con.poll() {
                         Ok(Ready(Some(msg))) => if let protocol::Protocol::KeepAlive = msg {
-                            (ConnectState::Connected((con, server)), Some(Ok(Ready(Some(msg)))))
+                            (
+                                ConnectState::Connected((con, server)),
+                                Some(Ok(Ready(Some(msg)))),
+                            )
                         } else {
                             (ConnectState::Connecting((con, server)), Some(Ok(NotReady)))
                         },
@@ -238,5 +238,64 @@ where
             ConnectState::Connected((ref mut con, _)) => con.poll_complete(),
             _ => bail!("Not connected!"),
         }
+    }
+}
+
+struct ConnectionHandler<P> {
+    // this should be ordered!
+    strategies: Vec<strategies::Strategy<P>>,
+    dest_addr: SocketAddr,
+    active_strat: Option<strategies::Strategy<P>>,
+}
+
+impl<P> ConnectionHandler<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    fn new(dest_addr: SocketAddr, handle: &Handle) -> ConnectionHandler<P> {
+        let strategies = strategies::connect(handle);
+
+        ConnectionHandler {
+            strategies,
+            dest_addr,
+            active_strat: None,
+        }
+    }
+}
+
+impl<P> Stream for ConnectionHandler<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = (
+        strategies::Strategy<P>,
+        <strategies::Strategy<P> as Stream>::Item,
+    );
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if self.active_strat.is_none() {
+            self.active_strat = self.strategies.pop().map(|mut s| {
+                s.connect(self.dest_addr);
+                s
+            });
+        }
+
+        if let Some(mut strat) = self.active_strat.take() {
+            let (strat, result) = match strat.poll() {
+                Err(_) | Ok(Ready(None)) => (None, Ok(NotReady)),
+                Ok(NotReady) => (Some(strat), Ok(NotReady)),
+                Ok(Ready(Some(con))) => if let strategies::ConnectionType::Outgoing = con.2 {
+                    (None, Ok(Ready(Some((strat, con)))))
+                } else {
+                    (Some(strat), Ok(NotReady))
+                },
+            };
+
+            self.active_strat = strat;
+            return result;
+        }
+
+        bail!("No more strategies left!")
     }
 }
