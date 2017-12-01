@@ -19,6 +19,7 @@ use futures::sync::mpsc::{channel, unbounded, Receiver, SendError, Sender, Unbou
                           UnboundedSender};
 use futures::{self, IntoFuture, Poll, Sink, Stream};
 use futures::stream::Fuse;
+use futures::task;
 
 /// Represents an `UdpStream` that is connected to a remote socket.
 pub struct UdpConnectStream {
@@ -119,6 +120,8 @@ pub struct UdpServer {
     buf: Vec<u8>,
     /// The buffer size of the `UdpConnection` and `UdpServerStream` channels
     buffer_size: usize,
+    /// Overflow element when the Socket currently is not able to send data
+    send_overflow: Option<(Vec<u8>, SocketAddr)>,
 }
 
 impl UdpServer {
@@ -134,6 +137,7 @@ impl UdpServer {
             buf: vec![0; 1024],
             connections: HashMap::new(),
             buffer_size: channel_buffer,
+            send_overflow: None,
         }
     }
 
@@ -143,19 +147,42 @@ impl UdpServer {
     fn send_data(&mut self) {
         // the borrow checker does not want 2 mutable references to self, but with this trick it
         // works
-        fn retain(connections: &mut HashMap<SocketAddr, UdpConnection>, socket: &mut UdpSocket) {
+        fn retain(
+            connections: &mut HashMap<SocketAddr, UdpConnection>,
+            socket: &mut UdpSocket,
+        ) -> Option<(Vec<u8>, SocketAddr)> {
+            let mut overflow = None;
             connections.retain(|addr, c| {
                 loop {
+                    if overflow.is_some() {
+                        return true;
+                    }
+
                     let _ = match c.send() {
-                        Ok(Some(ref data)) => socket.send_to(&data, &addr),
+                        Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
+                            socket.send_to(&data, &addr)
+                        } else {
+                            overflow = Some((data, addr.clone()));
+                            return true;
+                        },
                         Ok(None) => return true,
                         _ => return false,
                     };
                 }
             });
+
+            overflow
         }
 
-        retain(&mut self.connections, &mut self.socket);
+        if let (Ready(()), Some((data, addr))) =
+            (self.socket.poll_write(), self.send_overflow.take())
+        {
+            let _ = self.socket.send_to(&data, &addr);
+        }
+
+        if let Ready(()) = self.socket.poll_write() {
+            self.send_overflow = retain(&mut self.connections, &mut self.socket);
+        }
     }
 
     /// Creates a new `UdpConnection` and the connected `UdpServerStream`
@@ -196,6 +223,11 @@ impl Stream for UdpServer {
                 Vacant(entry) => {
                     let (con, stream) = Self::create_connection_and_stream(self.buffer_size);
                     entry.insert(con).recv(self.buf[..len].to_vec());
+
+                    if let Ready(()) = self.socket.poll_read() {
+                        task::current().notify();
+                    }
+
                     return Ok(Ready(Some((stream, addr))));
                 }
             };

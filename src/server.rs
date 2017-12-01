@@ -44,7 +44,7 @@ where
     T: Service<Message = P>,
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    fn send_message(&self, msg: Protocol<P>) -> Result<()> {
+    fn send_message(&mut self, msg: Protocol<P>) -> Result<()> {
         self.connection
             .start_send(msg)
             .chain_err(|| "error sending message")?;
@@ -55,6 +55,7 @@ where
     }
 
     fn poll_impl(&mut self) -> Poll<(), Error> {
+        println!("POLL");
         let msg = match self.connection.poll()? {
             Ready(Some(msg)) => msg,
             Ready(None) => return Ok(Ready(())),
@@ -63,6 +64,10 @@ where
 
         let answer = match msg {
             Protocol::Embedded(v) => self.service.on_message(&v)?.map(|v| Protocol::Embedded(v)),
+            Protocol::Register { private } => {
+                println!("REGISTER: {:?}", private);
+                Some(Protocol::KeepAlive)
+            }
             _ => None,
         };
 
@@ -123,7 +128,7 @@ where
         }
     }
 
-    pub fn run(self, evt_loop: &Core) -> Result<()> {
+    pub fn run(self, evt_loop: &mut Core) -> Result<()> {
         evt_loop.run(self)
     }
 }
@@ -137,8 +142,14 @@ where
     type Item = ();
     type Error = Error;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        for socket in self.sockets.iter() {
-            match socket.poll()? {
+        let new_connections = self.sockets
+            .iter_mut()
+            .map(|s| s.poll())
+            .collect::<Vec<_>>();
+
+        println!("CHECK: {}", new_connections.len());
+        for con_poll in new_connections {
+            match con_poll? {
                 Ready(Some(con)) => {
                     self.state.new_service(|id| {
                         let service = self.new_service.new_service(id);
@@ -153,7 +164,8 @@ where
                             state: self.state.clone(),
                         };
 
-                        self.handle.spawn(handler.map_err(|_| ()));
+                        self.handle
+                            .spawn(handler.map_err(|e| println!("Error: {:?}", e)));
 
                         sender
                     });
@@ -198,7 +210,7 @@ impl<P> ServerState<P> for Arc<Mutex<State<P>>> {
     where
         F: FnOnce(ServiceId) -> UnboundedSender<Protocol<P>>,
     {
-        let state = self.lock().unwrap();
+        let mut state = self.lock().unwrap();
 
         let service_id = state
             .unused_ids
@@ -211,7 +223,7 @@ impl<P> ServerState<P> for Arc<Mutex<State<P>>> {
     }
 
     fn free_service(&self, id: ServiceId) {
-        let state = self.lock().unwrap();
+        let mut state = self.lock().unwrap();
 
         if state.services.remove(&id).is_some() {
             state.unused_ids.push(id);

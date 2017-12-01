@@ -18,6 +18,7 @@ use pnet_datalink::interfaces;
 use itertools::Itertools;
 
 pub fn peer_client_main(server_addr: SocketAddr) {
+    /*
     let mut evt_loop = Core::new().expect("error creating evt loop");
     let handle = evt_loop.handle();
     let listen = ([0, 0, 0, 0], 0);
@@ -133,4 +134,5 @@ pub fn peer_client_main(server_addr: SocketAddr) {
         });
 
     evt_loop.run(registration).expect("error registering");
+    */
 }

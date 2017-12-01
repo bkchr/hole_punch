@@ -12,6 +12,12 @@ use serde::{Deserialize, Serialize};
 
 mod udp_strat;
 
+pub enum ConnectionType {
+    /// The connection was created by an incoming connection from a remote address
+    Incoming,
+    /// The connection was created by connecting to a remote address
+    Outgoing,
+}
 
 pub enum Strategy<P> {
     Udp(udp_strat::Server<P>),
@@ -21,20 +27,20 @@ impl<P> Stream for Strategy<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = (Connection<P>, SocketAddr);
+    type Item = (Connection<P>, SocketAddr, ConnectionType);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         //syntactic sugar
-        struct Result<P>(Poll<Option<(Connection<P>, SocketAddr)>, Error>);
+        struct Result<P>(Poll<Option<(Connection<P>, SocketAddr, ConnectionType)>, Error>);
 
-        impl<P, C> From<Poll<Option<(C, SocketAddr)>, Error>> for Result<P>
+        impl<P, C> From<Poll<Option<(C, SocketAddr, ConnectionType)>, Error>> for Result<P>
         where
             Connection<P>: From<C>,
         {
-            fn from(value: Poll<Option<(C, SocketAddr)>, Error>) -> Result<P> {
+            fn from(value: Poll<Option<(C, SocketAddr, ConnectionType)>, Error>) -> Result<P> {
                 match value {
-                    Ok(Ready(Some(v))) => Result(Ok(Ready(Some((v.0.into(), v.1))))),
+                    Ok(Ready(Some(v))) => Result(Ok(Ready(Some((v.0.into(), v.1, v.2))))),
                     e @ _ => Result(e.map(|r| r.map(|_| None))),
                 }
             }
@@ -45,6 +51,28 @@ where
         };
 
         result.0
+    }
+}
+
+impl<P> ConnectTo for Strategy<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    fn connect(&mut self, addr: SocketAddr) {
+        match self {
+            &mut Strategy::Udp(ref mut server) => server.connect(addr),
+        }
+    }
+}
+
+impl<P> Strategy<P>
+    where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    pub fn local_addr(&self) -> Result<SocketAddr> {
+        match self {
+            &Strategy::Udp(ref server) => server.local_addr(),
+        }
     }
 }
 
@@ -163,4 +191,14 @@ pub fn accept<P>(handle: &Handle) -> Vec<Strategy<P>> {
     let udp = udp_strat::accept_async(handle);
 
     vec![udp]
+}
+
+pub fn connect<P>(handle: &Handle) -> Vec<Strategy<P>> {
+    let udp = udp_strat::connect_async(handle);
+
+    vec![udp]
+}
+
+pub trait ConnectTo {
+    fn connect(&mut self, addr: SocketAddr);
 }

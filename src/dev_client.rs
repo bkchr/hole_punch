@@ -1,142 +1,242 @@
 use errors::*;
 use udp;
 use protocol;
+use strategies::{self, ConnectTo};
 
 use std::net::SocketAddr;
-use std::time::Duration;
-use std::io;
-use std::io::BufReader;
+use std::mem;
 
-use tokio_core::reactor::Core;
-use tokio_io::codec::length_delimited;
-use tokio_io::io as tio;
-use tokio_serde_bincode::{ReadBincode, WriteBincode};
+use tokio_core::reactor::Handle;
 use tokio_timer;
 
-use futures::{self, Future, Poll, Sink, Stream};
-use futures::sync::mpsc::{channel, Receiver, Sender};
+use futures::{self, Future, Poll, Sink, StartSend, Stream};
 use futures::Async::{NotReady, Ready};
 
 use pnet_datalink::interfaces;
 
 use itertools::Itertools;
 
-pub fn dev_client_main() {
-    let mut evt_loop = Core::new().expect("error creating evt loop");
-    let handle = evt_loop.handle();
-    let server = ([176, 9, 73, 99], 22224);
-    let evt_loop_handle = handle.clone();
+use serde::{Deserialize, Serialize};
 
-    let registration = udp::connect_async(server.into(), &handle)
-        .then(|r| r.chain_err(|| "error"))
-        .and_then(|socket| {
-            let port = socket.port().unwrap();
-            // we work with a length delimited stream
-            let length_delimited = length_delimited::Framed::new(socket);
-            let (writer, reader) = length_delimited.split();
+pub trait Service {
+    type Message;
+    fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>>;
+    fn new_connection(&mut self, addr: SocketAddr) -> Option<Self::Message>;
+    fn connect_to(&self) -> SocketAddr;
+}
 
-            let json_writer = WriteBincode::new(writer);
-            let json_reader = ReadBincode::<_, protocol::Protocol>::new(reader);
+pub struct Client<S, P>
+where
+    S: Service<Message = P>,
+{
+    service: S,
+    handle: Handle,
+    connect: Connect<P>,
+    last_connected_address: Option<SocketAddr>,
+}
 
-            json_writer
-                .send(protocol::Protocol::RequestConnection2 {
-                    private: protocol::AddressInformation {
-                        addresses: interfaces()
-                            .iter()
-                            .map(|v| v.ips.clone())
-                            .concat()
-                            .iter()
-                            .map(|v| v.ip())
-                            .filter(|ip| !ip.is_loopback())
-                            .collect_vec(),
-                        port: port,
-                    },
-                    name: "peer_client".to_string(),
-                })
-                .then(|r| r.chain_err(|| "error"))
-                .and_then(move |_| {
-                    json_reader
-                        .into_future()
-                        .map(|v| v.0)
-                        .map_err(|e| e.0)
-                        .then(|r| r.chain_err(|| "error"))
-                })
-                .map(move |v| (port, v))
-        });
+impl<S, P> Client<S, P>
+where
+    S: Service<Message = P>,
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    pub fn new(service: S, handle: Handle) -> Client<S, P> {
+        let connect = Connect::new(service.connect_to(), &handle);
 
-    let info = evt_loop.run(registration).expect("error registering");
-    println!("GOT: {:?}", info);
-
-    let (public, private) = match info.1.unwrap() {
-        protocol::Protocol::ConnectionInformation2 { public, private } => (public, private),
-        _ => {
-            panic!("AHHHH");
+        Client {
+            service,
+            handle,
+            connect,
+            last_connected_address: None,
         }
-    };
+    }
 
-    let listen = ([0, 0, 0, 0], info.0);
-    let evt_loop_handle = evt_loop.handle();
-    let connect = udp::connect_and_accept_async(listen.into(), &handle, 4)
-        .then(|r| r.chain_err(|| "error"))
-        .and_then(move |(server, connect)| {
-            for addr in public
-                .addresses
-                .iter()
-                .map(|v| (*v, public.port))
-                .chain(private.addresses.iter().map(|v| (*v, private.port)))
-            {
-                connect.connect(addr.into());
+    fn send_message(&mut self, msg: protocol::Protocol<P>) -> Result<()> {
+        self.connect
+            .start_send(msg)
+            .chain_err(|| "error sending message")?;
+        self.connect
+            .poll_complete()
+            .chain_err(|| "error sending message")
+            .map(|_| ())
+    }
+}
+
+impl<S, P> Future for Client<S, P>
+where
+    S: Service<Message = P>,
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = strategies::Connection<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if self.connect.get_addr() != self.service.connect_to() {
+            self.connect = Connect::new(self.service.connect_to(), &self.handle);
+        }
+
+        let msg = match self.connect.poll()? {
+            Ready(Some(msg)) => msg,
+            Ready(None) => bail!("connect returned None!"),
+            NotReady => return Ok(NotReady),
+        };
+
+        let answer = if self.connect.is_connected()
+            && Some(self.connect.get_addr()) != self.last_connected_address
+        {
+            self.last_connected_address = Some(self.connect.get_addr());
+            self.service
+                .new_connection(self.connect.get_addr())
+                .map(|v| protocol::Protocol::Embedded(v))
+        } else {
+            match msg {
+                protocol::Protocol::Embedded(msg) => self.service
+                    .on_message(&msg)?
+                    .map(|v| protocol::Protocol::Embedded(v)),
+                _ => None,
             }
+        };
 
-            server
-                .for_each(move |(stream, addr, stype)| {
-                    println!("con from: {:?}", addr);
+        if let Some(msg) = answer {
+            self.send_message(msg)?;
+        }
 
-                    match stype {
-                        udp::StreamType::Connect => {
-                            let timer = tokio_timer::wheel().build();
+        Ok(NotReady)
+    }
+}
 
-                            let (swriter, sreader) = stream.split();
+enum ConnectState<P> {
+    None,
+    Initiating(strategies::Strategy<P>),
+    Connecting((strategies::Connection<P>, strategies::Strategy<P>)),
+    Connected((strategies::Connection<P>, strategies::Strategy<P>)),
+}
 
-                            evt_loop_handle.spawn(
-                                swriter
-                                    .send_all(
-                                        timer
-                                            .interval(Duration::from_millis(500))
-                                            .map(|_| {
-                                                "hello monkeydonkey".to_string().as_bytes().to_vec()
-                                            })
-                                            .map_err(|_| panic!("ERROR")),
-                                    )
-                                    .map(|_| ())
-                                    .map_err(|_| ()),
-                            );
+struct Connect<P> {
+    strategies: Vec<strategies::Strategy<P>>,
+    state: ConnectState<P>,
+    addr: SocketAddr,
+    address_infos: protocol::AddressInformation,
+}
 
-                            evt_loop_handle.spawn(sreader.for_each(move |d| {
-                                let d = String::from_utf8(d).unwrap();
-                                println!("GOT2: {} {}", d, addr);
-                                Ok(())
-                            }));
+impl<P> Connect<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    fn new(addr: SocketAddr, handle: &Handle) -> Connect<P> {
+        let mut strategies = strategies::connect(handle);
+        let addresses = interfaces()
+            .iter()
+            .map(|v| v.ips.clone())
+            .concat()
+            .iter()
+            .map(|v| v.ip())
+            .filter(|ip| !ip.is_loopback())
+            .collect_vec();
+
+        Connect {
+            strategies: strategies,
+            addr,
+            state: ConnectState::None,
+            address_infos: protocol::AddressInformation { port: 0, addresses },
+        }
+    }
+
+    fn get_addr(&self) -> SocketAddr {
+        self.addr
+    }
+
+    fn is_connected(&self) -> bool {
+        match self.state {
+            ConnectState::Connected(_) => true,
+            _ => false,
+        }
+    }
+}
+
+impl<P> Stream for Connect<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = protocol::Protocol<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        loop {
+            let (state, result) = match mem::replace(&mut self.state, ConnectState::None) {
+                ConnectState::None => {
+                    let mut initial = self.strategies.pop().unwrap();
+                    initial.connect(self.addr);
+                    println!("Initial");
+                    (ConnectState::Initiating(initial), None)
+                }
+                ConnectState::Initiating(mut server) => match server.poll() {
+                    Ok(Ready(Some((mut con, _, cty)))) => {
+                        if let strategies::ConnectionType::Outgoing = cty {
+                            println!("Out");
+                            self.address_infos.port = server.local_addr().unwrap().port();
+                            // TODO: do not use expect
+                            con.start_send(protocol::Protocol::Register {
+                                private: self.address_infos.clone(),
+                            }).expect("");
+                            con.poll_complete().expect("");
+
+                            (ConnectState::Connecting((con, server)), None)
+                        } else {
+                            (ConnectState::Initiating(server), Some(Ok(NotReady)))
                         }
-                        udp::StreamType::Accept => {
-                            evt_loop_handle.spawn(
-                                tio::write_all(stream, b"hello monkeydonkey\n")
-                                    .and_then(move |c| {
-                                        let reader = BufReader::new(c.0);
-                                        tio::read_until(reader, b'\n', Vec::new()).map(move |d| {
-                                            let d = String::from_utf8(d.1).unwrap();
-                                            println!("GOT: {}, {:?}", d, addr);
-                                            ()
-                                        })
-                                    })
-                                    .map_err(|_| ()),
-                            );
+                    }
+                    Err(_) | Ok(Ready(None)) => (ConnectState::None, None),
+                    Ok(NotReady) => (ConnectState::Initiating(server), Some(Ok(NotReady))),
+                },
+                ConnectState::Connecting((mut con, mut server)) => {
+                    println!("CONNECTING!");
+                    server.poll()?;
+                    match con.poll() {
+                        Ok(Ready(Some(msg))) => if let protocol::Protocol::KeepAlive = msg {
+                            (ConnectState::Connected((con, server)), Some(Ok(Ready(Some(msg)))))
+                        } else {
+                            (ConnectState::Connecting((con, server)), Some(Ok(NotReady)))
+                        },
+                        Ok(NotReady) => {
+                            (ConnectState::Connecting((con, server)), Some(Ok(NotReady)))
                         }
-                    };
-                    Ok(())
-                })
-                .then(|r| r.chain_err(|| "error"))
-        });
+                        Err(_) | Ok(Ready(None)) => (ConnectState::None, None),
+                    }
+                }
+                ConnectState::Connected((mut con, server)) => {
+                    let result = con.poll();
+                    (ConnectState::Connected((con, server)), Some(result))
+                }
+            };
 
-    evt_loop.run(connect).expect("error connect");
+            self.state = state;
+
+            if let Some(result) = result {
+                return result;
+            }
+        }
+    }
+}
+
+impl<P> Sink for Connect<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type SinkItem = protocol::Protocol<P>;
+    type SinkError = Error;
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        match self.state {
+            ConnectState::Connected((ref mut con, _)) => con.start_send(item),
+            _ => bail!("Not connected!"),
+        }
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        match self.state {
+            ConnectState::Connected((ref mut con, _)) => con.poll_complete(),
+            _ => bail!("Not connected!"),
+        }
+    }
 }

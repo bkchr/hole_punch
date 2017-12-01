@@ -18,5 +18,5 @@ pub mod server;
 pub mod peer_client;
 pub mod dev_client;
 mod udp;
-mod errors;
+pub mod errors;
 mod strategies;
