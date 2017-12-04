@@ -77,7 +77,10 @@ impl UdpConnection {
     ///
     /// * `recv` - The receiver to receive data from the connected `UdpServerStream`
     /// * `sender` - The sender to send data to the connected `UdpServerStream`
-    fn new(recv: Receiver<Vec<u8>>, sender: Sender<Vec<u8>>) -> UdpConnection {
+    fn new(mut recv: Receiver<Vec<u8>>, sender: Sender<Vec<u8>>) -> UdpConnection {
+        // we need to poll the receiver once, so that *this* `Task` is registered to be woken up,
+        // when someone wants to send data
+        let _ = recv.poll();
         UdpConnection { sender, recv }
     }
 
@@ -197,7 +200,6 @@ impl UdpServerInner {
 
                     let _ = match c.send() {
                         Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
-                            println!("SEND");
                             socket.send_to(&data, &addr)
                         } else {
                             overflow = Some((data, addr.clone()));
@@ -235,7 +237,7 @@ impl UdpServerInner {
     }
 
     fn connect(&mut self, addr: SocketAddr) -> UdpServerStream {
-        let (con, stream) = Self::create_connection_and_stream(self.buffer_size);
+        let (mut con, stream) = Self::create_connection_and_stream(self.buffer_size);
         self.connections.insert(addr, con);
         stream
     }
@@ -264,14 +266,13 @@ impl Future for UdpServerInner {
         }
 
         loop {
-            println!("AHH");
             let (len, addr) = try_nb!(self.socket.recv_from(&mut self.buf));
 
             // check if the address is already in our connections map
             match self.connections.entry(addr) {
                 Occupied(mut entry) => entry.get_mut().recv(self.buf[..len].to_vec()),
                 Vacant(entry) => {
-                    let (con, stream) = Self::create_connection_and_stream(self.buffer_size);
+                    let (mut con, stream) = Self::create_connection_and_stream(self.buffer_size);
                     entry.insert(con).recv(self.buf[..len].to_vec());
 
                     self.new_connection.start_send((stream, addr, StreamType::Accept));

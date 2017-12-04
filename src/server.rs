@@ -55,7 +55,6 @@ where
     }
 
     fn poll_impl(&mut self) -> Poll<(), Error> {
-        println!("POLL");
         let msg = match self.connection.poll()? {
             Ready(Some(msg)) => msg,
             Ready(None) => return Ok(Ready(())),
@@ -147,7 +146,6 @@ where
             .map(|s| s.poll())
             .collect::<Vec<_>>();
 
-        println!("CHECK: {}", new_connections.len());
         for con_poll in new_connections {
             match con_poll? {
                 Ready(Some(con)) => {

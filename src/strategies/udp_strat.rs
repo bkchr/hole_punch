@@ -83,7 +83,6 @@ where
                             s.1.connect(*addr).expect("Should not happen!")
                         }
                         self.connect_to.clear();
-                        println!("RESOLVED");
                         FutureResultResolver::Resolved(s)
                     }
                     NotReady => return Ok(NotReady),
