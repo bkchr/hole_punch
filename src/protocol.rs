@@ -8,7 +8,7 @@ pub struct AddressInformation {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Protocol<P> {
-    Register { private: AddressInformation },
+    Register,
     Connect {
         public: AddressInformation,
         private: AddressInformation,

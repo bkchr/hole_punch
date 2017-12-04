@@ -17,7 +17,7 @@ use futures::future::FutureResult;
 use futures::{AsyncSink, StartSend};
 use futures::sync::mpsc::{channel, unbounded, Receiver, SendError, Sender, UnboundedReceiver,
                           UnboundedSender};
-use futures::{self, IntoFuture, Poll, Sink, Stream, Future};
+use futures::{self, Future, IntoFuture, Poll, Sink, Stream};
 use futures::stream::Fuse;
 use futures::task;
 
@@ -91,6 +91,7 @@ impl UdpConnection {
         // the check is only required for start_send, but to mute the warning, check the result of
         // poll_complete, too.
         if self.sender.start_send(data).is_err() || self.sender.poll_complete().is_err() {
+            println!("ERROR");
             return;
         }
     }
@@ -124,13 +125,18 @@ impl UdpServer {
 
         handle.spawn(inner.map_err(|e| println!("Inner error: {:?}", e)));
 
-        (UdpServer { new_connection, addr: addr.unwrap() }, connect)
+        (
+            UdpServer {
+                new_connection,
+                addr: addr.unwrap(),
+            },
+            connect,
+        )
     }
 
     pub fn local_addr(&self) -> Result<SocketAddr> {
-        Ok(self.addr) 
+        Ok(self.addr)
     }
-
 }
 
 impl Stream for UdpServer {
@@ -138,7 +144,9 @@ impl Stream for UdpServer {
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.new_connection.poll().map_err(|_| io::Error::new(io::ErrorKind::Other, "UdpServer Stream poll failed"))
+        self.new_connection.poll().map_err(|_| {
+            io::Error::new(io::ErrorKind::Other, "UdpServer Stream poll failed")
+        })
     }
 }
 
@@ -166,19 +174,32 @@ impl UdpServerInner {
     /// * `channel_buffer` - Defines the buffer size of the channel that connects
     ///                      `UdpConnection` and `UdpServerStream`. Both sides drop data/return
     ///                      `WouldBlock` if the channel is full.
-    fn new(socket: UdpSocket, channel_buffer: usize) -> (UdpServerInner, Receiver<(UdpServerStream, SocketAddr, StreamType)>, Connect) {
+    fn new(
+        socket: UdpSocket,
+        channel_buffer: usize,
+    ) -> (
+        UdpServerInner,
+        Receiver<(UdpServerStream, SocketAddr, StreamType)>,
+        Connect,
+    ) {
         let (ncsender, ncreceiver) = channel(channel_buffer);
         let (csender, creceiver) = unbounded();
 
-        (UdpServerInner {
-            socket,
-            buf: vec![0; 1024],
-            connections: HashMap::new(),
-            buffer_size: channel_buffer,
-            send_overflow: None,
-            new_connection: ncsender,
-            connect_to: creceiver.fuse(),
-        }, ncreceiver, Connect { connect_sender: csender })
+        (
+            UdpServerInner {
+                socket,
+                buf: vec![0; 1024],
+                connections: HashMap::new(),
+                buffer_size: channel_buffer,
+                send_overflow: None,
+                new_connection: ncsender,
+                connect_to: creceiver.fuse(),
+            },
+            ncreceiver,
+            Connect {
+                connect_sender: csender,
+            },
+        )
     }
 
     /// Checks all connections if they want to send data.
@@ -258,9 +279,10 @@ impl Future for UdpServerInner {
             match self.connect_to.poll() {
                 Ok(Ready(Some(addr))) => {
                     let stream = self.connect(addr);
-                    self.new_connection.start_send((stream, addr, StreamType::Connect));
+                    self.new_connection
+                        .start_send((stream, addr, StreamType::Connect));
                     self.new_connection.poll_complete();
-                },
+                }
                 _ => break,
             }
         }
@@ -275,7 +297,8 @@ impl Future for UdpServerInner {
                     let (mut con, stream) = Self::create_connection_and_stream(self.buffer_size);
                     entry.insert(con).recv(self.buf[..len].to_vec());
 
-                    self.new_connection.start_send((stream, addr, StreamType::Accept));
+                    self.new_connection
+                        .start_send((stream, addr, StreamType::Accept));
                     self.new_connection.poll_complete();
                 }
             };

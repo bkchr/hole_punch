@@ -25,14 +25,20 @@ pub trait Service {
     fn connect_to(&self) -> SocketAddr;
 }
 
+enum ClientState<P> {
+    None,
+    EstablishConnection(ConnectionHandler<P>),
+    Handshaking(ConnectionHandler<P>, Connect<P>),
+    Connected(strategies::Connection<P>, bool, SocketAddr),
+}
+
 pub struct Client<S, P>
 where
     S: Service<Message = P>,
 {
     service: S,
     handle: Handle,
-    connect: Connect<P>,
-    last_connected_address: Option<SocketAddr>,
+    state: ClientState<P>,
 }
 
 impl<S, P> Client<S, P>
@@ -41,24 +47,55 @@ where
     P: Serialize + for<'de> Deserialize<'de>,
 {
     pub fn new(service: S, handle: Handle) -> Client<S, P> {
-        let connect = Connect::new(service.connect_to(), &handle);
-
         Client {
             service,
             handle,
-            connect,
-            last_connected_address: None,
+            state: ClientState::None,
         }
     }
 
-    fn send_message(&mut self, msg: protocol::Protocol<P>) -> Result<()> {
-        self.connect
-            .start_send(msg)
-            .chain_err(|| "error sending message")?;
-        self.connect
-            .poll_complete()
+    fn send_message(
+        &mut self,
+        msg: protocol::Protocol<P>,
+        con: &mut strategies::Connection<P>,
+    ) -> Result<()> {
+        con.start_send(msg).chain_err(|| "error sending message")?;
+        con.poll_complete()
             .chain_err(|| "error sending message")
             .map(|_| ())
+    }
+
+    fn handle_connection(
+        &mut self,
+        con: &mut strategies::Connection<P>,
+        mut new_con: bool,
+        addr: SocketAddr,
+    ) -> Poll<strategies::Connection<P>, Error> {
+        loop {
+            let answer = if new_con {
+                new_con = false;
+                self.service
+                    .new_connection(addr)
+                    .map(|v| protocol::Protocol::Embedded(v))
+            } else {
+                let msg = match con.poll()? {
+                    Ready(Some(msg)) => msg,
+                    Ready(None) => bail!("connect returned None!"),
+                    NotReady => return Ok(NotReady),
+                };
+
+                match msg {
+                    protocol::Protocol::Embedded(msg) => self.service
+                        .on_message(&msg)?
+                        .map(|v| protocol::Protocol::Embedded(v)),
+                    _ => None,
+                }
+            };
+
+            if let Some(msg) = answer {
+                self.send_message(msg, con)?;
+            }
+        }
     }
 }
 
@@ -71,142 +108,38 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if self.connect.get_addr() != self.service.connect_to() {
-            self.connect = Connect::new(self.service.connect_to(), &self.handle);
-        }
-
-        let msg = match self.connect.poll()? {
-            Ready(Some(msg)) => msg,
-            Ready(None) => bail!("connect returned None!"),
-            NotReady => return Ok(NotReady),
-        };
-
-        let answer = if self.connect.is_connected()
-            && Some(self.connect.get_addr()) != self.last_connected_address
-        {
-            self.last_connected_address = Some(self.connect.get_addr());
-            self.service
-                .new_connection(self.connect.get_addr())
-                .map(|v| protocol::Protocol::Embedded(v))
-        } else {
-            match msg {
-                protocol::Protocol::Embedded(msg) => self.service
-                    .on_message(&msg)?
-                    .map(|v| protocol::Protocol::Embedded(v)),
-                _ => None,
-            }
-        };
-
-        if let Some(msg) = answer {
-            self.send_message(msg)?;
-        }
-
-        Ok(NotReady)
-    }
-}
-
-enum ConnectState<P> {
-    None,
-    Initiating(strategies::Strategy<P>),
-    Connecting((strategies::Connection<P>, strategies::Strategy<P>)),
-    Connected((strategies::Connection<P>, strategies::Strategy<P>)),
-}
-
-struct Connect<P> {
-    strategies: Vec<strategies::Strategy<P>>,
-    state: ConnectState<P>,
-    addr: SocketAddr,
-    address_infos: protocol::AddressInformation,
-}
-
-impl<P> Connect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn new(addr: SocketAddr, handle: &Handle) -> Connect<P> {
-        let strategies = strategies::connect(handle);
-        let addresses = interfaces()
-            .iter()
-            .map(|v| v.ips.clone())
-            .concat()
-            .iter()
-            .map(|v| v.ip())
-            .filter(|ip| !ip.is_loopback())
-            .collect_vec();
-
-        Connect {
-            strategies: strategies,
-            addr,
-            state: ConnectState::None,
-            address_infos: protocol::AddressInformation { port: 0, addresses },
-        }
-    }
-
-    fn get_addr(&self) -> SocketAddr {
-        self.addr
-    }
-
-    fn is_connected(&self) -> bool {
-        match self.state {
-            ConnectState::Connected(_) => true,
-            _ => false,
-        }
-    }
-}
-
-impl<P> Stream for Connect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    type Item = protocol::Protocol<P>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         loop {
-            let (state, result) = match mem::replace(&mut self.state, ConnectState::None) {
-                ConnectState::None => {
-                    let mut initial = self.strategies.pop().unwrap();
-                    initial.connect(self.addr);
-                    (ConnectState::Initiating(initial), None)
-                }
-                ConnectState::Initiating(mut server) => match server.poll() {
-                    Ok(Ready(Some((mut con, _, cty)))) => {
-                        if let strategies::ConnectionType::Outgoing = cty {
-                            self.address_infos.port = server.local_addr().unwrap().port();
-                            // TODO: do not use expect
-                            con.start_send(protocol::Protocol::Register {
-                                private: self.address_infos.clone(),
-                            }).expect("");
-                            con.poll_complete().expect("");
-
-                            (ConnectState::Connecting((con, server)), None)
-                        } else {
-                            (ConnectState::Initiating(server), Some(Ok(NotReady)))
-                        }
-                    }
-                    Err(_) | Ok(Ready(None)) => (ConnectState::None, None),
-                    Ok(NotReady) => (ConnectState::Initiating(server), Some(Ok(NotReady))),
-                },
-                ConnectState::Connecting((mut con, mut server)) => {
-                    server.poll()?;
-                    match con.poll() {
-                        Ok(Ready(Some(msg))) => if let protocol::Protocol::KeepAlive = msg {
-                            (
-                                ConnectState::Connected((con, server)),
-                                Some(Ok(Ready(Some(msg)))),
-                            )
-                        } else {
-                            (ConnectState::Connecting((con, server)), Some(Ok(NotReady)))
-                        },
-                        Ok(NotReady) => {
-                            (ConnectState::Connecting((con, server)), Some(Ok(NotReady)))
-                        }
-                        Err(_) | Ok(Ready(None)) => (ConnectState::None, None),
+            let (state, result) = match mem::replace(&mut self.state, ClientState::None) {
+                ClientState::None => (
+                    ClientState::EstablishConnection(ConnectionHandler::new(
+                        self.service.connect_to(),
+                        &self.handle,
+                    )),
+                    None,
+                ),
+                ClientState::EstablishConnection(mut handler) => {
+                    if let Ok(Ready(Some(con))) = handler.poll() {
+                        (ClientState::Handshaking(handler, Connect::new(con.0)), None)
+                    } else {
+                        (
+                            ClientState::EstablishConnection(handler),
+                            Some(Ok(NotReady)),
+                        )
                     }
                 }
-                ConnectState::Connected((mut con, server)) => {
-                    let result = con.poll();
-                    (ConnectState::Connected((con, server)), Some(result))
+                ClientState::Handshaking(mut handler, mut connect) => {
+                    if let Ok(Ready(con)) = connect.poll() {
+                        (ClientState::Connected(con, true, handler.get_addr()), None)
+                    } else {
+                        (
+                            ClientState::Handshaking(handler, connect),
+                            Some(Ok(NotReady)),
+                        )
+                    }
+                }
+                ClientState::Connected(mut con, new_con, addr) => {
+                    let result = self.handle_connection(&mut con, new_con, addr);
+                    (ClientState::Connected(con, false, addr), Some(result))
                 }
             };
 
@@ -219,24 +152,59 @@ where
     }
 }
 
-impl<P> Sink for Connect<P>
+enum ConnectState<P> {
+    None,
+    Init(strategies::Connection<P>),
+    Connecting(strategies::Connection<P>),
+}
+
+struct Connect<P> {
+    state: ConnectState<P>,
+}
+
+impl<P> Connect<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type SinkItem = protocol::Protocol<P>;
-    type SinkError = Error;
-
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        match self.state {
-            ConnectState::Connected((ref mut con, _)) => con.start_send(item),
-            _ => bail!("Not connected!"),
+    fn new(con: strategies::Connection<P>) -> Connect<P> {
+        Connect {
+            state: ConnectState::Init(con),
         }
     }
+}
 
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        match self.state {
-            ConnectState::Connected((ref mut con, _)) => con.poll_complete(),
-            _ => bail!("Not connected!"),
+impl<P> Future for Connect<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = strategies::Connection<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            let (state, result) = match mem::replace(&mut self.state, ConnectState::None) {
+                ConnectState::Init(mut con) => {
+                    // TODO: do not use expect
+                    con.start_send(protocol::Protocol::Register).expect("");
+                    con.poll_complete().expect("");
+
+                    (ConnectState::Connecting(con), None)
+                }
+                ConnectState::Connecting(mut con) => {
+                    if let Ok(Ready(Some(protocol::Protocol::KeepAlive))) = con.poll() {
+                        return Ok(Ready(con));
+                    } else {
+                        (ConnectState::Connecting(con), Some(Ok(NotReady)))
+                    }
+                }
+                ConnectState::None => bail!("polled after connection established!"),
+            };
+
+            self.state = state;
+
+            if let Some(result) = result {
+                return result;
+            }
         }
     }
 }
@@ -261,16 +229,17 @@ where
             active_strat: None,
         }
     }
+
+    fn get_addr(&self) -> SocketAddr {
+        self.dest_addr
+    }
 }
 
 impl<P> Stream for ConnectionHandler<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = (
-        strategies::Strategy<P>,
-        <strategies::Strategy<P> as Stream>::Item,
-    );
+    type Item = <strategies::Strategy<P> as Stream>::Item;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -281,19 +250,17 @@ where
             });
         }
 
-        if let Some(mut strat) = self.active_strat.take() {
-            let (strat, result) = match strat.poll() {
-                Err(_) | Ok(Ready(None)) => (None, Ok(NotReady)),
-                Ok(NotReady) => (Some(strat), Ok(NotReady)),
-                Ok(Ready(Some(con))) => if let strategies::ConnectionType::Outgoing = con.2 {
-                    (None, Ok(Ready(Some((strat, con)))))
-                } else {
-                    (Some(strat), Ok(NotReady))
-                },
+        if let Some(ref mut strat) = self.active_strat {
+            match strat.poll() {
+                Err(_) | Ok(Ready(None)) | Ok(NotReady) => return Ok(NotReady),
+                Ok(Ready(Some(con))) => {
+                    return if let strategies::ConnectionType::Outgoing = con.2 {
+                        Ok(Ready(Some(con)))
+                    } else {
+                        Ok(NotReady)
+                    }
+                }
             };
-
-            self.active_strat = strat;
-            return result;
         }
 
         bail!("No more strategies left!")

@@ -55,26 +55,28 @@ where
     }
 
     fn poll_impl(&mut self) -> Poll<(), Error> {
-        let msg = match self.connection.poll()? {
-            Ready(Some(msg)) => msg,
-            Ready(None) => return Ok(Ready(())),
-            NotReady => return Ok(NotReady),
-        };
+        loop {
+            let msg = match self.connection.poll()? {
+                Ready(Some(msg)) => msg,
+                Ready(None) => return Ok(Ready(())),
+                NotReady => return Ok(NotReady),
+            };
 
-        let answer = match msg {
-            Protocol::Embedded(v) => self.service.on_message(&v)?.map(|v| Protocol::Embedded(v)),
-            Protocol::Register { private } => {
-                println!("REGISTER: {:?}", private);
-                Some(Protocol::KeepAlive)
+            let answer = match msg {
+                Protocol::Embedded(v) => {
+                    self.service.on_message(&v)?.map(|v| Protocol::Embedded(v))
+                }
+                Protocol::Register => {
+                    println!("REGISTER");
+                    Some(Protocol::KeepAlive)
+                }
+                _ => None,
+            };
+
+            if let Some(answer) = answer {
+                self.send_message(answer)?;
             }
-            _ => None,
-        };
-
-        if let Some(answer) = answer {
-            self.send_message(answer)?;
         }
-
-        Ok(NotReady)
     }
 }
 
