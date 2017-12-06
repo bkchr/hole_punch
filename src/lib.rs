@@ -20,3 +20,4 @@ pub mod dev_client;
 mod udp;
 pub mod errors;
 mod strategies;
+mod connect;

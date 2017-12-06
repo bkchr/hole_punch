@@ -2,6 +2,8 @@ extern crate hole_punch;
 #[macro_use]
 extern crate serde_derive;
 extern crate tokio_core;
+#[macro_use]
+extern crate error_chain;
 
 use hole_punch::dev_client::{Client, Service};
 use hole_punch::errors::*;
@@ -14,6 +16,8 @@ use std::net::SocketAddr;
 enum CarrierProtocol {
     Register { name: String },
     Registered,
+    RequestDevice { name: String },
+    DeviceNotFound,
 }
 
 struct CarrierService {
@@ -25,7 +29,7 @@ impl Service for CarrierService {
 
     fn new_connection(&mut self, addr: SocketAddr) -> Option<Self::Message> {
         println!("Yeah, new connection, {:?}", addr);
-        Some(CarrierProtocol::Register { name: "nice".to_string() })
+        Some(CarrierProtocol::RequestDevice { name: "nice".to_string() })
     }
 
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>> {
@@ -33,6 +37,10 @@ impl Service for CarrierService {
             &CarrierProtocol::Registered => {
                 println!("REGISTERED");
                 Ok(None)
+            },
+            &CarrierProtocol::DeviceNotFound => {
+                println!("DEVICENOTFOUND");
+                bail!("NOT FOUND");
             },
             _ => {
                 Ok(None)

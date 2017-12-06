@@ -1,10 +1,11 @@
 use errors::*;
 use udp;
-use protocol::Protocol;
+use protocol::{AddressInformation, Protocol};
 use strategies::{self, Connection, Strategy};
 
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 use tokio_core::reactor::{Core, Handle};
 
@@ -14,10 +15,15 @@ use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 
 use serde::{Deserialize, Serialize};
 
+pub enum ServiceControlMessage {
+    CreateConnectionTo(ServiceId),
+}
+
 pub trait Service {
     type Message;
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>>;
     fn close(&self);
+    fn request_control_message(&mut self) -> Option<ServiceControlMessage>;
 }
 
 pub type ServiceId = u64;
@@ -37,6 +43,7 @@ where
     receiver: UnboundedReceiver<Protocol<P>>,
     id: ServiceId,
     state: Arc<Mutex<State<P>>>,
+    address: SocketAddr,
 }
 
 impl<T, P> ServiceHandler<T, P>
@@ -59,7 +66,7 @@ where
             let msg = match self.connection.poll()? {
                 Ready(Some(msg)) => msg,
                 Ready(None) => return Ok(Ready(())),
-                NotReady => return Ok(NotReady),
+                NotReady => break,
             };
 
             let answer = match msg {
@@ -68,7 +75,23 @@ where
                 }
                 Protocol::Register => {
                     println!("REGISTER");
-                    Some(Protocol::KeepAlive)
+                    Some(Protocol::Acknowledge)
+                }
+                Protocol::KeepAlive => Some(Protocol::KeepAlive),
+                Protocol::PrivateAdressInformation(id, private) => {
+                    let public = AddressInformation {
+                        port: self.address.port(),
+                        addresses: vec![self.address.ip()],
+                    };
+                    let connect = Protocol::Connect {
+                        private,
+                        public,
+                        connection_id: 0,
+                    };
+
+                    self.state.send_message(id, connect)?;
+
+                    None
                 }
                 _ => None,
             };
@@ -76,7 +99,26 @@ where
             if let Some(answer) = answer {
                 self.send_message(answer)?;
             }
+
+            if let Some(msg) = self.service.request_control_message() {
+                match msg {
+                    ServiceControlMessage::CreateConnectionTo(id) => {
+                        self.state
+                            .send_message(id, Protocol::RequestPrivateAdressInformation(self.id))?;
+                        self.send_message(Protocol::RequestPrivateAdressInformation(id))?;
+                    }
+                }
+            }
         }
+
+        loop {
+            match self.receiver.poll() {
+                Ok(Ready(Some(msg))) => self.send_message(msg)?,
+                _ => break,
+            }
+        }
+
+        Ok(NotReady)
     }
 }
 
@@ -143,13 +185,27 @@ where
     type Item = ();
     type Error = Error;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let new_connections = self.sockets
-            .iter_mut()
-            .map(|s| s.poll())
-            .collect::<Vec<_>>();
+        loop {
+            let con = self.sockets.iter_mut().fold(None, |p, v| {
+                if p.is_none() {
+                    let v = v.poll();
+                    if let Ok(NotReady) = v {
+                        None
+                    } else {
+                        Some(v)
+                    }
+                } else {
+                    p
+                }
+            });
 
-        for con_poll in new_connections {
-            match con_poll? {
+            let con = if let Some(con) = con {
+                con
+            } else {
+                return Ok(NotReady);
+            };
+
+            match con? {
                 Ready(Some(con)) => {
                     self.state.new_service(|id| {
                         let service = self.new_service.new_service(id);
@@ -158,6 +214,7 @@ where
 
                         let handler = ServiceHandler {
                             connection: con.0,
+                            address: con.1,
                             service,
                             receiver,
                             id,
@@ -178,8 +235,6 @@ where
                 _ => {}
             }
         }
-
-        Ok(NotReady)
     }
 }
 
@@ -203,6 +258,8 @@ trait ServerState<P> {
         F: FnOnce(ServiceId) -> UnboundedSender<Protocol<P>>;
 
     fn free_service(&self, id: ServiceId);
+
+    fn send_message(&self, id: ServiceId, msg: Protocol<P>) -> Result<()>;
 }
 
 impl<P> ServerState<P> for Arc<Mutex<State<P>>> {
@@ -227,6 +284,18 @@ impl<P> ServerState<P> for Arc<Mutex<State<P>>> {
 
         if state.services.remove(&id).is_some() {
             state.unused_ids.push(id);
+        }
+    }
+
+    fn send_message(&self, id: ServiceId, msg: Protocol<P>) -> Result<()> {
+        let state = self.lock().unwrap();
+
+        if let Some(sender) = state.services.get(&id) {
+            sender
+                .unbounded_send(msg)
+                .map_err(|_| "error sending message".into())
+        } else {
+            bail!("could not find requested instance for sending message")
         }
     }
 }

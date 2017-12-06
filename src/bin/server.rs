@@ -3,7 +3,7 @@ extern crate hole_punch;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::server::{NewService, Server, Service, ServiceId};
+use hole_punch::server::{NewService, Server, Service, ServiceId, ServiceControlMessage};
 use hole_punch::errors::*;
 
 use tokio_core::reactor::Core;
@@ -15,6 +15,8 @@ use std::sync::{Arc, Mutex};
 enum CarrierProtocol {
     Register { name: String },
     Registered,
+    RequestDevice { name: String },
+    DeviceNotFound,
 }
 
 struct Carrier {
@@ -25,6 +27,7 @@ struct CarrierService {
     id: ServiceId,
     carrier: Arc<Mutex<Carrier>>,
     name: String,
+    control_message: Option<ServiceControlMessage>,
 }
 
 impl Service for CarrierService {
@@ -37,7 +40,19 @@ impl Service for CarrierService {
                 println!("New device: {}", name);
                 self.carrier.lock().unwrap().devices.insert(name.clone(), self.id);
                 Ok(Some(CarrierProtocol::Registered))
-            }
+            },
+            &CarrierProtocol::RequestDevice { ref name } => {
+                println!("REQUEST: {}", name);
+                let carrier = self.carrier.lock().unwrap();
+                let other = carrier.devices.get(name);
+
+                if let Some(id) = other {
+                    self.control_message = Some(ServiceControlMessage::CreateConnectionTo(*id));
+                    Ok(None)
+                } else {
+                    Ok(Some(CarrierProtocol::DeviceNotFound))
+                }
+            },
             _ => Ok(None),
         }
     }
@@ -45,6 +60,10 @@ impl Service for CarrierService {
     fn close(&self) {
         self.carrier.lock().unwrap().devices.remove(&self.name);
         println!("device gone {}", self.name);
+    }
+
+    fn request_control_message(&mut self) -> Option<ServiceControlMessage> {
+        self.control_message.take()
     }
 }
 
@@ -60,6 +79,7 @@ impl NewService for CarrierServiceCreator {
             carrier: self.carrier.clone(),
             id: id,
             name: String::new(),
+            control_message: None,
         }
     }
 }

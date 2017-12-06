@@ -1,23 +1,22 @@
 use errors::*;
-use udp;
 use protocol;
-use strategies::{self, ConnectTo};
+use strategies;
+use connect::Connect;
 
 use std::net::SocketAddr;
 use std::mem;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use tokio_core::reactor::{Handle, Timeout};
-use tokio_timer;
 
-use futures::{self, Future, Poll, Sink, StartSend, Stream};
+use futures::{Future, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
+
+use serde::{Deserialize, Serialize};
 
 use pnet_datalink::interfaces;
 
 use itertools::Itertools;
-
-use serde::{Deserialize, Serialize};
 
 pub trait Service {
     type Message;
@@ -36,6 +35,7 @@ where
         strategies::Strategy<P>,
         strategies::Connection<P>,
         SocketAddr,
+        Timeout,
     ),
 }
 
@@ -47,6 +47,8 @@ where
     service: S,
     handle: Handle,
     state: ClientState<P>,
+    received_keepalive: bool,
+    strat_port: u16,
 }
 
 impl<S, P> Client<S, P>
@@ -59,6 +61,8 @@ where
             service,
             handle,
             state: ClientState::None,
+            received_keepalive: true,
+            strat_port: 0,
         }
     }
 
@@ -76,7 +80,21 @@ where
     fn handle_connection(
         &mut self,
         con: &mut strategies::Connection<P>,
+        timeout: &mut Timeout,
     ) -> Poll<strategies::Connection<P>, Error> {
+        if let Ok(Ready(())) = timeout.poll() {
+            if self.received_keepalive {
+                self.received_keepalive = false;
+                self.send_message(protocol::Protocol::KeepAlive, con)?;
+                timeout.reset(Instant::now() + Duration::new(30, 0));
+                let _ = timeout.poll();
+                println!("NO TIMEOUT");
+            } else {
+                println!("TIMEOUT");
+                bail!("TIMEOUT");
+            }
+        }
+
         loop {
             let msg = match con.poll()? {
                 Ready(Some(msg)) => msg,
@@ -88,6 +106,33 @@ where
                 protocol::Protocol::Embedded(msg) => self.service
                     .on_message(&msg)?
                     .map(|v| protocol::Protocol::Embedded(v)),
+                protocol::Protocol::KeepAlive => {
+                    println!("KEEPALIVE");
+                    self.received_keepalive = true;
+                    None
+                }
+                protocol::Protocol::RequestPrivateAdressInformation(id) => {
+                    let addresses = interfaces()
+                        .iter()
+                        .map(|v| v.ips.clone())
+                        .concat()
+                        .iter()
+                        .map(|v| v.ip())
+                        .filter(|ip| !ip.is_loopback())
+                        .collect_vec();
+
+                    Some(protocol::Protocol::PrivateAdressInformation(
+                        id,
+                        protocol::AddressInformation {
+                            port: self.strat_port,
+                            addresses,
+                        },
+                    ))
+                }
+                protocol::Protocol::Connect { public, private, .. } => {
+                    println!("CONNECT: {:?}, {:?}", public, private);
+                    None
+                }
                 _ => None,
             };
 
@@ -101,7 +146,9 @@ where
         &mut self,
         con: &mut strategies::Connection<P>,
         addr: SocketAddr,
+        strat_port: u16,
     ) -> Result<()> {
+        self.strat_port = strat_port;
         if let Some(answer) = self.service.new_connection(addr) {
             self.send_message(protocol::Protocol::Embedded(answer), con)
         } else {
@@ -127,14 +174,29 @@ where
                 ),
                 ClientState::Connecting(mut con) => match con.poll()? {
                     Ready((strat, mut con, addr)) => {
-                        self.handle_new_connection(&mut con, addr)?;
-                        (ClientState::Connected(strat, con, addr), None)
+                        self.handle_new_connection(
+                            &mut con,
+                            addr,
+                            strat.local_addr().unwrap().port(),
+                        )?;
+                        (
+                            ClientState::Connected(
+                                strat,
+                                con,
+                                addr,
+                                Timeout::new(Duration::new(30, 0), &self.handle)?,
+                            ),
+                            None,
+                        )
                     }
                     _ => (ClientState::Connecting(con), Some(Ok(NotReady))),
                 },
-                ClientState::Connected(strat, mut con, addr) => {
-                    let result = self.handle_connection(&mut con);
-                    (ClientState::Connected(strat, con, addr), Some(result))
+                ClientState::Connected(strat, mut con, addr, mut timeout) => {
+                    let result = self.handle_connection(&mut con, &mut timeout);
+                    (
+                        ClientState::Connected(strat, con, addr, timeout),
+                        Some(result),
+                    )
                 }
             };
 
@@ -144,146 +206,5 @@ where
                 return result;
             }
         }
-    }
-}
-
-enum ConnectState<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    None,
-    Init,
-    Connecting(<ConnectionHandler<P> as Stream>::Item, Timeout),
-}
-
-struct Connect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    state: ConnectState<P>,
-    connection_handler: ConnectionHandler<P>,
-    handle: Handle,
-}
-
-impl<P> Connect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn new(addr: SocketAddr, handle: &Handle) -> Connect<P> {
-        let chandler = ConnectionHandler::new(addr, handle);
-
-        Connect {
-            state: ConnectState::Init,
-            connection_handler: chandler,
-            handle: handle.clone(),
-        }
-    }
-}
-
-impl<P> Future for Connect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    type Item = <ConnectionHandler<P> as Stream>::Item;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let (state, result) = match mem::replace(&mut self.state, ConnectState::None) {
-                ConnectState::Init => {
-                    match self.connection_handler.poll()? {
-                        Ready(Some(mut con)) => {
-                            // TODO: do not use expect
-                            con.1.start_send(protocol::Protocol::Register).expect("");
-                            con.1.poll_complete().expect("");
-
-                            let timeout = Timeout::new(Duration::new(1, 0), &self.handle)
-                                .chain_err(|| "error creating timeout")?;
-
-                            (ConnectState::Connecting(con, timeout), None)
-                        }
-                        _ => (ConnectState::Init, Some(Ok(NotReady))),
-                    }
-                }
-                ConnectState::Connecting(mut con, mut timeout) => {
-                    if let Ok(Ready(())) = timeout.poll() {
-                        (ConnectState::Init, None)
-                    } else {
-                        if let Ok(Ready(Some(protocol::Protocol::KeepAlive))) = con.1.poll() {
-                            return Ok(Ready(con));
-                        } else {
-                            (ConnectState::Connecting(con, timeout), Some(Ok(NotReady)))
-                        }
-                    }
-                }
-                ConnectState::None => bail!("polled after connection established!"),
-            };
-
-            self.state = state;
-
-            if let Some(result) = result {
-                return result;
-            }
-        }
-    }
-}
-
-struct ConnectionHandler<P> {
-    // this should be ordered!
-    strategies: Vec<strategies::Strategy<P>>,
-    dest_addr: SocketAddr,
-    active_strat: Option<strategies::Strategy<P>>,
-}
-
-impl<P> ConnectionHandler<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn new(dest_addr: SocketAddr, handle: &Handle) -> ConnectionHandler<P> {
-        let strategies = strategies::connect(handle);
-
-        ConnectionHandler {
-            strategies,
-            dest_addr,
-            active_strat: None,
-        }
-    }
-}
-
-impl<P> Stream for ConnectionHandler<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    type Item = (
-        strategies::Strategy<P>,
-        strategies::Connection<P>,
-        SocketAddr,
-    );
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.active_strat.is_none() {
-            self.active_strat = self.strategies.pop().map(|mut s| {
-                s.connect(self.dest_addr);
-                s
-            });
-        }
-
-        if let Some(mut strat) = self.active_strat.take() {
-            let (strat, result) = match strat.poll() {
-                Err(_) | Ok(Ready(None)) => (None, Ok(NotReady)),
-                Ok(NotReady) => (Some(strat), Ok(NotReady)),
-                Ok(Ready(Some(con))) => if let strategies::ConnectionType::Outgoing = con.2 {
-                    (None, Ok(Ready(Some((strat, con.0, con.1)))))
-                } else {
-                    (Some(strat), Ok(NotReady))
-                },
-            };
-
-            self.active_strat = strat;
-            return result;
-        }
-
-        bail!("No more strategies left!")
     }
 }

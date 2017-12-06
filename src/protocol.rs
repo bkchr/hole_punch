@@ -16,4 +16,7 @@ pub enum Protocol<P> {
     },
     KeepAlive,
     Embedded(P),
+    Acknowledge,
+    RequestPrivateAdressInformation(u64),
+    PrivateAdressInformation(u64, AddressInformation),
 }
