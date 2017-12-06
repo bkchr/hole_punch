@@ -4,7 +4,8 @@ use strategies::{self, ConnectTo};
 
 use std::net::SocketAddr;
 use std::mem;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use std::collections::HashMap;
 
 use tokio_core::reactor::{Handle, Timeout};
 
@@ -151,5 +152,88 @@ where
         }
 
         bail!("No more strategies left!")
+    }
+}
+
+pub struct DeviceToDeviceConnection<P> {
+    strat: strategies::Strategy<P>,
+    connections: HashMap<SocketAddr, strategies::Connection<P>>,
+    timeout: Timeout,
+}
+
+impl<P> DeviceToDeviceConnection<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    pub fn new(
+        mut strat: strategies::Strategy<P>,
+        addresses: &[SocketAddr],
+        handle: &Handle,
+    ) -> DeviceToDeviceConnection<P> {
+        for addr in addresses {
+            strat.connect(*addr);
+        }
+
+        DeviceToDeviceConnection {
+            strat,
+            connections: HashMap::new(),
+            timeout: Timeout::new(Duration::from_millis(500), handle).unwrap(),
+        }
+    }
+}
+
+impl<P> Future for DeviceToDeviceConnection<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = (strategies::Connection<P>, SocketAddr);
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if let Ok(Ready(())) = self.timeout.poll() {
+            self.timeout
+                .reset(Instant::now() + Duration::from_millis(500));
+            let _ = self.timeout.poll();
+
+            for con in self.connections.values_mut() {
+                con.start_send(protocol::Protocol::Hello)?;
+                con.poll_complete()?;
+            }
+        }
+
+        loop {
+            match self.strat.poll() {
+                Ok(Ready(Some(mut con))) => if let strategies::ConnectionType::Outgoing = con.2 {
+                    con.0.start_send(protocol::Protocol::Hello)?;
+                    con.0.poll_complete()?;
+                    self.connections.insert(con.1, con.0);
+                },
+                _ => break,
+            }
+        }
+
+        let mut address = None;
+        {
+            for (addr, con) in self.connections.iter_mut() {
+                match con.poll() {
+                    Ok(Ready(Some(val))) => if let protocol::Protocol::Hello = val {
+                        address = Some(addr.clone());
+                        break;
+                    },
+                    _ => {}
+                }
+            }
+        }
+
+        if let Some(address) = address {
+            Ok(Ready(
+                self.connections
+                    .remove(&address)
+                    .map(|v| (v, address))
+                    .unwrap(),
+            ))
+        } else {
+            Ok(NotReady)
+        }
     }
 }

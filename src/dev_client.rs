@@ -1,7 +1,7 @@
 use errors::*;
 use protocol;
 use strategies;
-use connect::Connect;
+use connect::{Connect, DeviceToDeviceConnection};
 
 use std::net::SocketAddr;
 use std::mem;
@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use pnet_datalink::interfaces;
 
 use itertools::Itertools;
+
+use either::{Either, Left, Right};
 
 pub trait Service {
     type Message;
@@ -37,6 +39,7 @@ where
         SocketAddr,
         Timeout,
     ),
+    DeviceToDevice(DeviceToDeviceConnection<P>),
 }
 
 pub struct Client<S, P>
@@ -81,7 +84,12 @@ where
         &mut self,
         con: &mut strategies::Connection<P>,
         timeout: &mut Timeout,
-    ) -> Poll<strategies::Connection<P>, Error> {
+    ) -> Result<
+        Either<
+            Poll<strategies::Connection<P>, Error>,
+            (protocol::AddressInformation, protocol::AddressInformation),
+        >,
+    > {
         if let Ok(Ready(())) = timeout.poll() {
             if self.received_keepalive {
                 self.received_keepalive = false;
@@ -99,7 +107,7 @@ where
             let msg = match con.poll()? {
                 Ready(Some(msg)) => msg,
                 Ready(None) => bail!("connect returned None!"),
-                NotReady => return Ok(NotReady),
+                NotReady => return Ok(Left(Ok(NotReady))),
             };
 
             let answer = match msg {
@@ -129,9 +137,11 @@ where
                         },
                     ))
                 }
-                protocol::Protocol::Connect { public, private, .. } => {
+                protocol::Protocol::Connect {
+                    public, private, ..
+                } => {
                     println!("CONNECT: {:?}, {:?}", public, private);
-                    None
+                    return Ok(Right((public, private)));
                 }
                 _ => None,
             };
@@ -192,12 +202,42 @@ where
                     _ => (ClientState::Connecting(con), Some(Ok(NotReady))),
                 },
                 ClientState::Connected(strat, mut con, addr, mut timeout) => {
-                    let result = self.handle_connection(&mut con, &mut timeout);
-                    (
-                        ClientState::Connected(strat, con, addr, timeout),
-                        Some(result),
-                    )
+                    let result = self.handle_connection(&mut con, &mut timeout)?;
+
+                    match result {
+                        Left(result) => (
+                            ClientState::Connected(strat, con, addr, timeout),
+                            Some(result),
+                        ),
+                        Right((public, private)) => {
+                            let mut addresses = public
+                                .addresses.iter()
+                                .map(|a| SocketAddr::new(*a, public.port))
+                                .collect::<Vec<_>>();
+                            addresses.extend(
+                                private
+                                    .addresses.iter()
+                                    .map(|a| SocketAddr::new(*a, private.port))
+                            );
+
+                            (
+                                ClientState::DeviceToDevice(DeviceToDeviceConnection::new(
+                                    strat,
+                                    addresses.as_slice(),
+                                    &self.handle,
+                                )),
+                                None,
+                            )
+                        }
+                    }
                 }
+                ClientState::DeviceToDevice(mut con) => match con.poll()? {
+                    Ready((con, addr)) => {
+                        println!("YEAH, connected to: {}", addr);
+                        return Ok(Ready(con));
+                    }
+                    _ => (ClientState::DeviceToDevice(con), Some(Ok(NotReady))),
+                },
             };
 
             self.state = state;

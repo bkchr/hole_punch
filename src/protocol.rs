@@ -19,4 +19,5 @@ pub enum Protocol<P> {
     Acknowledge,
     RequestPrivateAdressInformation(u64),
     PrivateAdressInformation(u64, AddressInformation),
+    Hello,
 }

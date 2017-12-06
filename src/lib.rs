@@ -12,6 +12,7 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_bincode;
 extern crate tokio_timer;
+extern crate either;
 
 mod protocol;
 pub mod server;
