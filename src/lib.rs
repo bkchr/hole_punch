@@ -1,3 +1,4 @@
+extern crate either;
 #[macro_use]
 extern crate error_chain;
 extern crate futures;
@@ -12,7 +13,6 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_bincode;
 extern crate tokio_timer;
-extern crate either;
 
 mod protocol;
 pub mod server;
@@ -22,3 +22,5 @@ mod udp;
 pub mod errors;
 mod strategies;
 mod connect;
+
+pub use strategies::PureConnection;

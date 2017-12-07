@@ -3,7 +3,7 @@ extern crate hole_punch;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::server::{NewService, Server, Service, ServiceId, ServiceControlMessage};
+use hole_punch::server::{NewService, Server, Service, ServiceControlMessage, ServiceId};
 use hole_punch::errors::*;
 
 use tokio_core::reactor::Core;
@@ -38,9 +38,13 @@ impl Service for CarrierService {
             &CarrierProtocol::Register { ref name } => {
                 self.name = name.clone();
                 println!("New device: {}", name);
-                self.carrier.lock().unwrap().devices.insert(name.clone(), self.id);
+                self.carrier
+                    .lock()
+                    .unwrap()
+                    .devices
+                    .insert(name.clone(), self.id);
                 Ok(Some(CarrierProtocol::Registered))
-            },
+            }
             &CarrierProtocol::RequestDevice { ref name } => {
                 println!("REQUEST: {}", name);
                 let carrier = self.carrier.lock().unwrap();
@@ -52,7 +56,7 @@ impl Service for CarrierService {
                 } else {
                     Ok(Some(CarrierProtocol::DeviceNotFound))
                 }
-            },
+            }
             _ => Ok(None),
         }
     }

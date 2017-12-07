@@ -2,11 +2,14 @@ use errors::*;
 use protocol::Protocol;
 
 use std::net::SocketAddr;
+use std::io::{self, Read, Write};
 
 use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Sink, StartSend, Stream};
 
 use tokio_core::reactor::Handle;
+
+use tokio_io::{AsyncRead, AsyncWrite};
 
 use serde::{Deserialize, Serialize};
 
@@ -66,7 +69,7 @@ where
 }
 
 impl<P> Strategy<P>
-    where
+where
     P: Serialize + for<'de> Deserialize<'de>,
 {
     pub fn local_addr(&self) -> Result<SocketAddr> {
@@ -114,6 +117,16 @@ where
         match self {
             &mut Connection::Udp(ref mut sink) => sink.poll_complete()
                 .map_err(|_| "error at poll_complete on udp connection".into()),
+        }
+    }
+}
+
+impl<P> Connection<P> {
+    pub fn into_pure(self) -> PureConnection {
+        match self {
+            Connection::Udp(mut stream) => {
+                PureConnection::Udp(stream.into_inner().into_inner().into_inner())
+            }
         }
     }
 }
@@ -201,4 +214,40 @@ pub fn connect<P>(handle: &Handle) -> Vec<Strategy<P>> {
 
 pub trait ConnectTo {
     fn connect(&mut self, addr: SocketAddr);
+}
+
+pub enum PureConnection {
+    Udp(udp_strat::PureConnection),
+}
+
+impl Read for PureConnection {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self {
+            &mut PureConnection::Udp(ref mut con) => con.read(buf),
+        }
+    }
+}
+
+impl Write for PureConnection {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            &mut PureConnection::Udp(ref mut con) => con.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            &mut PureConnection::Udp(ref mut con) => Write::flush(con),
+        }
+    }
+}
+
+impl AsyncRead for PureConnection {}
+
+impl AsyncWrite for PureConnection {
+    fn shutdown(&mut self) -> Poll<(), io::Error> {
+        match self {
+            &mut PureConnection::Udp(ref mut con) => con.shutdown(),
+        }
+    }
 }

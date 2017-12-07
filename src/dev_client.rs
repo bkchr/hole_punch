@@ -86,7 +86,7 @@ where
         timeout: &mut Timeout,
     ) -> Result<
         Either<
-            Poll<strategies::Connection<P>, Error>,
+            Poll<strategies::PureConnection, Error>,
             (protocol::AddressInformation, protocol::AddressInformation),
         >,
     > {
@@ -172,7 +172,7 @@ where
     S: Service<Message = P>,
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = strategies::Connection<P>;
+    type Item = strategies::PureConnection;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -211,13 +211,15 @@ where
                         ),
                         Right((public, private)) => {
                             let mut addresses = public
-                                .addresses.iter()
+                                .addresses
+                                .iter()
                                 .map(|a| SocketAddr::new(*a, public.port))
                                 .collect::<Vec<_>>();
                             addresses.extend(
                                 private
-                                    .addresses.iter()
-                                    .map(|a| SocketAddr::new(*a, private.port))
+                                    .addresses
+                                    .iter()
+                                    .map(|a| SocketAddr::new(*a, private.port)),
                             );
 
                             (
@@ -234,7 +236,7 @@ where
                 ClientState::DeviceToDevice(mut con) => match con.poll()? {
                     Ready((con, addr)) => {
                         println!("YEAH, connected to: {}", addr);
-                        return Ok(Ready(con));
+                        return Ok(Ready(con.into_pure()));
                     }
                     _ => (ClientState::DeviceToDevice(con), Some(Ok(NotReady))),
                 },

@@ -16,3 +16,4 @@ tokio-timer = { "git" = "https://github.com/bkchr/tokio-timer.git", "branch" = "
 tokio-serde-bincode = { git = "https://github.com/alexcrichton/tokio-serde-bincode" }
 itertools = "0.7.1"
 either = "1.3.0"
+hyper = "0.11"

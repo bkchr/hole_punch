@@ -17,6 +17,4 @@ use pnet_datalink::interfaces;
 
 use itertools::Itertools;
 
-pub fn peer_client_main(server_addr: SocketAddr) {
-   
-}
+pub fn peer_client_main(server_addr: SocketAddr) {}

@@ -23,6 +23,8 @@ pub type Connection<P> = WriteBincode<
     Protocol<P>,
 >;
 
+pub type PureConnection = udp::UdpServerStream;
+
 impl<P> From<Connection<P>> for strategies::Connection<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
@@ -56,7 +58,7 @@ impl From<udp::StreamType> for strategies::ConnectionType {
 }
 
 impl<P> Server<P>
-    where
+where
     P: Serialize + for<'de> Deserialize<'de>,
 {
     pub fn local_addr(&self) -> Result<SocketAddr> {
