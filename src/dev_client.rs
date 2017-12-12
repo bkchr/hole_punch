@@ -1,7 +1,7 @@
 use errors::*;
 use protocol;
 use strategies;
-use connect::{Connect, DeviceToDeviceConnection};
+use connect::{Connector, DeviceToDeviceConnection};
 
 use std::net::SocketAddr;
 use std::mem;
@@ -11,6 +11,7 @@ use tokio_core::reactor::{Handle, Timeout};
 
 use futures::{Future, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
+use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 use serde::{Deserialize, Serialize};
 
@@ -20,11 +21,28 @@ use itertools::Itertools;
 
 use either::{Either, Left, Right};
 
+pub trait NewService {
+    type Service;
+    fn new_service(control: ClientControl, addr: SocketAddr) -> Self::Service;
+}
+
 pub trait Service {
     type Message;
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>>;
-    fn new_connection(&mut self, addr: SocketAddr) -> Option<Self::Message>;
-    fn connect_to(&self) -> SocketAddr;
+}
+
+enum ClientProtocol {
+
+}
+
+pub struct ClientControl {
+    sender: UnboundedSender<ClientProtocol>,
+}
+
+impl ClientControl {
+    fn new(sender: UnboundedSender<ClientProtocol>) -> ClientControl {
+        ClientControl { sender }
+    }
 }
 
 enum ClientState<P>
@@ -96,9 +114,7 @@ where
                 self.send_message(protocol::Protocol::KeepAlive, con)?;
                 timeout.reset(Instant::now() + Duration::new(30, 0));
                 let _ = timeout.poll();
-                println!("NO TIMEOUT");
             } else {
-                println!("TIMEOUT");
                 bail!("TIMEOUT");
             }
         }

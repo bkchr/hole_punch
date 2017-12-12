@@ -17,6 +17,7 @@ use futures::future::FutureResult;
 use futures::{AsyncSink, StartSend};
 use futures::sync::mpsc::{channel, unbounded, Receiver, SendError, Sender, UnboundedReceiver,
                           UnboundedSender};
+use futures::sync::oneshot;
 use futures::{self, Future, IntoFuture, Poll, Sink, Stream};
 use futures::stream::Fuse;
 use futures::task;
@@ -114,7 +115,7 @@ impl UdpConnection {
 }
 
 pub struct UdpServer {
-    new_connection: Receiver<(UdpServerStream, SocketAddr, StreamType)>,
+    new_connection: Receiver<(UdpServerStream, SocketAddr)>,
     addr: SocketAddr,
 }
 
@@ -140,13 +141,13 @@ impl UdpServer {
 }
 
 impl Stream for UdpServer {
-    type Item = (UdpServerStream, SocketAddr, StreamType);
+    type Item = (UdpServerStream, SocketAddr);
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.new_connection.poll().map_err(|_| {
-            io::Error::new(io::ErrorKind::Other, "UdpServer Stream poll failed")
-        })
+        self.new_connection
+            .poll()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "UdpServer Stream poll failed"))
     }
 }
 
@@ -163,8 +164,8 @@ struct UdpServerInner {
     buffer_size: usize,
     /// Overflow element when the Socket currently is not able to send data
     send_overflow: Option<(Vec<u8>, SocketAddr)>,
-    new_connection: Sender<(UdpServerStream, SocketAddr, StreamType)>,
-    connect_to: Fuse<UnboundedReceiver<SocketAddr>>,
+    new_connection: Sender<(UdpServerStream, SocketAddr)>,
+    connect_to: Fuse<UnboundedReceiver<(SocketAddr, oneshot::Sender<UdpServerStream>)>>,
 }
 
 impl UdpServerInner {
@@ -179,7 +180,7 @@ impl UdpServerInner {
         channel_buffer: usize,
     ) -> (
         UdpServerInner,
-        Receiver<(UdpServerStream, SocketAddr, StreamType)>,
+        Receiver<(UdpServerStream, SocketAddr)>,
         Connect,
     ) {
         let (ncsender, ncreceiver) = channel(channel_buffer);
@@ -213,23 +214,21 @@ impl UdpServerInner {
             socket: &mut UdpSocket,
         ) -> Option<(Vec<u8>, SocketAddr)> {
             let mut overflow = None;
-            connections.retain(|addr, c| {
-                loop {
-                    if overflow.is_some() {
-                        return true;
-                    }
-
-                    let _ = match c.send() {
-                        Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
-                            socket.send_to(&data, &addr)
-                        } else {
-                            overflow = Some((data, addr.clone()));
-                            return true;
-                        },
-                        Ok(None) => return true,
-                        _ => return false,
-                    };
+            connections.retain(|addr, c| loop {
+                if overflow.is_some() {
+                    return true;
                 }
+
+                let _ = match c.send() {
+                    Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
+                        socket.send_to(&data, &addr)
+                    } else {
+                        overflow = Some((data, addr.clone()));
+                        return true;
+                    },
+                    Ok(None) => return true,
+                    _ => return false,
+                };
             });
 
             overflow
@@ -277,11 +276,9 @@ impl Future for UdpServerInner {
 
         loop {
             match self.connect_to.poll() {
-                Ok(Ready(Some(addr))) => {
+                Ok(Ready(Some((addr, mut sender)))) => {
                     let stream = self.connect(addr);
-                    self.new_connection
-                        .start_send((stream, addr, StreamType::Connect));
-                    self.new_connection.poll_complete();
+                    let _ = sender.send(stream);
                 }
                 _ => break,
             }
@@ -297,8 +294,7 @@ impl Future for UdpServerInner {
                     let (mut con, stream) = Self::create_connection_and_stream(self.buffer_size);
                     entry.insert(con).recv(self.buf[..len].to_vec());
 
-                    self.new_connection
-                        .start_send((stream, addr, StreamType::Accept));
+                    self.new_connection.start_send((stream, addr));
                     self.new_connection.poll_complete();
                 }
             };
@@ -419,12 +415,30 @@ pub fn accept_async(
 */
 #[derive(Clone)]
 pub struct Connect {
-    connect_sender: UnboundedSender<SocketAddr>,
+    connect_sender: UnboundedSender<(SocketAddr, oneshot::Sender<UdpServerStream>)>,
 }
 
 impl Connect {
-    pub fn connect(&self, addr: SocketAddr) -> result::Result<(), SendError<SocketAddr>> {
-        self.connect_sender.unbounded_send(addr)
+    pub fn connect(
+        &mut self,
+        addr: SocketAddr,
+    ) -> result::Result<WaitForConnect, SendError<SocketAddr>> {
+        let (sender, recv) = oneshot::channel();
+
+        self.connect_sender
+            .unbounded_send((addr, sender))
+            .map(|_| WaitForConnect(recv))
+    }
+}
+
+pub struct WaitForConnect(oneshot::Receiver<UdpServerStream>);
+
+impl Future for WaitForConnect {
+    type Item = UdpServerStream;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.0.poll().chain_err(|| "error waiting for connect")
     }
 }
 /*
@@ -485,9 +499,8 @@ pub fn connect_and_accept_async(
     listen_addr: SocketAddr,
     handle: &Handle,
     channel_buffer: usize,
-) -> FutureResult<(UdpServer, Connect), Error> {
+) -> Result<(UdpServer, Connect)> {
     UdpSocket::bind(&listen_addr, handle)
         .chain_err(|| "error binding to socket")
         .and_then(|socket| Ok(UdpServer::new(socket, channel_buffer, handle)))
-        .into_future()
 }

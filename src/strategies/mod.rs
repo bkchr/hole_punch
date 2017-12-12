@@ -22,6 +22,37 @@ pub enum ConnectionType {
     Outgoing,
 }
 
+#[derive(Clone)]
+pub enum Connect {
+    Udp(udp_strat::Connect),
+}
+
+impl Connect {
+    pub fn connect<P>(&mut self, addr: SocketAddr) -> WaitForConnect<P>
+    where
+        P: Serialize + for<'de> Deserialize<'de>,
+    {
+        match self {
+            &Connect::Udp(ref mut connect) => connect.connect(addr),
+        }
+    }
+}
+
+pub enum WaitForConnect<P> {
+    Udp(udp_strat::WaitForConnect<P>),
+}
+
+impl<P> Future for WaitForConnect<P> {
+    type Item = Connection<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self {
+            &mut WaitForConnect::Udp(ref mut wait) => wait.poll(),
+        }
+    }
+}
+
 pub enum Strategy<P> {
     Udp(udp_strat::Server<P>),
 }
@@ -30,40 +61,12 @@ impl<P> Stream for Strategy<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = (Connection<P>, SocketAddr, ConnectionType);
+    type Item = (Connection<P>, SocketAddr);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        //syntactic sugar
-        struct Result<P>(Poll<Option<(Connection<P>, SocketAddr, ConnectionType)>, Error>);
-
-        impl<P, C> From<Poll<Option<(C, SocketAddr, ConnectionType)>, Error>> for Result<P>
-        where
-            Connection<P>: From<C>,
-        {
-            fn from(value: Poll<Option<(C, SocketAddr, ConnectionType)>, Error>) -> Result<P> {
-                match value {
-                    Ok(Ready(Some(v))) => Result(Ok(Ready(Some((v.0.into(), v.1, v.2))))),
-                    e @ _ => Result(e.map(|r| r.map(|_| None))),
-                }
-            }
-        }
-
-        let result: Result<P> = match self {
-            &mut Strategy::Udp(ref mut server) => server.poll().into(),
-        };
-
-        result.0
-    }
-}
-
-impl<P> ConnectTo for Strategy<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn connect(&mut self, addr: SocketAddr) {
         match self {
-            &mut Strategy::Udp(ref mut server) => server.connect(addr),
+            &mut Strategy::Udp(ref mut server) => server.poll(),
         }
     }
 }
@@ -74,7 +77,7 @@ where
 {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         match self {
-            &Strategy::Udp(ref server) => server.local_addr(),
+            &mut Strategy::Udp(ref server) => server.local_addr(),
         }
     }
 }
@@ -131,89 +134,16 @@ impl<P> Connection<P> {
     }
 }
 
-enum FuturePollerState<F>
-where
-    F: Future,
-    <F as Future>::Item: Stream,
-    Error: From<<<F as Future>::Item as Stream>::Error>,
-{
-    Waiting(F),
-    Finished(<F as Future>::Item),
+pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> {
+    let udp = udp_strat::accept_async(handle).chain_err(|| "error creating udp strategy")?;
+
+    Ok(vec![udp])
 }
 
-pub struct FuturePoller<F>
-where
-    F: Future,
-    <F as Future>::Item: Stream,
-    Error: From<<<F as Future>::Item as Stream>::Error>,
-{
-    state: FuturePollerState<F>,
-}
+pub fn connect<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> {
+    let udp = udp_strat::connect_async(handle).chain_err(|| "error creating udp strategy")?;
 
-impl<F> FuturePoller<F>
-where
-    F: Future,
-    <F as Future>::Item: Stream,
-    Error: From<<<F as Future>::Item as Stream>::Error>,
-{
-    fn new(future: F) -> FuturePoller<F> {
-        FuturePoller {
-            state: FuturePollerState::Waiting(future),
-        }
-    }
-}
-
-impl<T, F> Stream for FuturePoller<F>
-where
-    T: Stream,
-    Error: From<<T as Stream>::Error>,
-    F: Future<Item = T>,
-    Error: From<<F as Future>::Error>,
-{
-    type Error = Error;
-    type Item = T::Item;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        loop {
-            let new_state = match self.state {
-                FuturePollerState::Waiting(ref mut w) => match w.poll() {
-                    Ok(Ready(v)) => FuturePollerState::Finished(v),
-                    Ok(NotReady) => return Ok(NotReady),
-                    Err(e) => return Err(e.into()),
-                },
-                FuturePollerState::Finished(ref mut v) => return v.poll().map_err(|e| e.into()),
-            };
-
-            self.state = new_state;
-        }
-    }
-}
-
-impl<F> From<F> for FuturePoller<F>
-where
-    F: Future,
-    <F as Future>::Item: Stream,
-    Error: From<<<F as Future>::Item as Stream>::Error>,
-{
-    fn from(val: F) -> FuturePoller<F> {
-        FuturePoller::new(val)
-    }
-}
-
-pub fn accept<P>(handle: &Handle) -> Vec<Strategy<P>> {
-    let udp = udp_strat::accept_async(handle);
-
-    vec![udp]
-}
-
-pub fn connect<P>(handle: &Handle) -> Vec<Strategy<P>> {
-    let udp = udp_strat::connect_async(handle);
-
-    vec![udp]
-}
-
-pub trait ConnectTo {
-    fn connect(&mut self, addr: SocketAddr);
+    Ok(vec![udp])
 }
 
 pub enum PureConnection {

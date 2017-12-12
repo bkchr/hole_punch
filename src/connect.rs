@@ -1,163 +1,200 @@
 use errors::*;
-use protocol;
-use strategies::{self, ConnectTo};
+use protocol::Protocol;
+use strategies::{self, Connection, Strategy, Connect, WaitForConnect};
 
 use std::net::SocketAddr;
-use std::mem;
 use std::time::{Duration, Instant};
-use std::collections::HashMap;
+use std::collections::{HashMap, LinkedList};
 
-use tokio_core::reactor::{Handle, Timeout};
+use tokio_core::reactor::{Handle, self};
 
 use futures::{Future, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
 
 use serde::{Deserialize, Serialize};
 
-enum ConnectState<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    None,
-    Init,
-    Connecting(<ConnectionHandler<P> as Stream>::Item, Timeout),
+use state_machine_future::RentToOwn;
+
+struct Timeout(reactor::Timeout, Duration);
+
+impl Timeout {
+    fn new(dur: Duration,handle: &Handle) -> Timeout {
+        Timeout(reactor::Timeout::new(dur, handle).expect("no timeout!!"), dur)
+    }
+
+    fn reset(self) -> Self {
+        self.0.reset(Instant::now() + self.1);
+        self
+    }
 }
 
-pub struct Connect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    state: ConnectState<P>,
-    connection_handler: ConnectionHandler<P>,
-    handle: Handle,
+impl Future for Timeout {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        try_ready!(self.0.poll());
+
+        // if we come to this point, the timer finished, aka timeout!
+        bail!("Timeout")
+    }
 }
 
-impl<P> Connect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    pub fn new(addr: SocketAddr, handle: &Handle) -> Connect<P> {
-        let chandler = ConnectionHandler::new(addr, handle);
+#[derive(StateMachineFuture)]
+enum ConnectStateMachine<P: 'static + Serialize + for<'de> Deserialize<'de>> {
+    #[state_machine_future(start, transitions(WaitingForConnect))]
+    Init {
+        connect: Connect,
+        addr: SocketAddr,
+        handle: Handle,
+    },
+    #[state_machine_future(transitions(WaitingForRegisterResponse))]
+    WaitingForConnect {
+        connect: WaitForConnect<P>,
+        timeout: Timeout,
+    },
+    #[state_machine_future(transitions(Connected))]
+    WaitingForRegisterResponse {
+        connection: Connection<P>,
+        timeout: Timeout,
+    },
+    #[state_machine_future(ready)] Connected(Connection<P>),
+    #[state_machine_future(error)] ErrorState(Error),
+}
 
-        Connect {
-            state: ConnectState::Init,
-            connection_handler: chandler,
-            handle: handle.clone(),
+impl<P> PollConnectStateMachine<P>
+    for ConnectStateMachine<P> where P: 'static + Serialize + for<'de> Deserialize<'de>{
+        fn poll_init<'a>(
+            init: &'a mut RentToOwn<'a, Init>,
+        ) -> Poll<AfterInit<P>, Error> {
+            let init = init.take();
+
+            let connect = init.connect.connect(init.addr);
+
+            Ok(Ready(
+                WaitingForConnect {
+                    connect,
+                    timeout: Timeout::new(init.handle, Duration::from_millis(500)),
+                }.into(),
+            ))
+        }
+    fn poll_waiting_for_connect<'a>(
+        wait: &'a mut RentToOwn<'a, WaitingForConnect<P>>,
+    ) -> Poll<AfterWaitingForConnect<P>, Error> {
+try_ready!(wait.timeout.poll().chain_err(|| "wait for connect"));
+        let connection = try_ready!(wait.connect.poll());
+
+        let wait = wait.take();
+
+        Ok(Ready(
+            WaitingForRegisterReponse {
+                connection,
+                timeout: wait.timeout.reset(),
+            }.into(),
+        ))
+    }
+
+    fn poll_waiting_for_register_response<'a>(
+        wait: &'a mut RentToOwn<'a, WaitingForRegisterResponse<P>>,
+    ) -> Poll<AfterWaitingForRegisterResponse<P>, Error> {
+        try_ready!(init.timeout.poll().chain_err(|| "wait for register response"));
+
+        let resp = try_ready!(wait.connection.poll());
+
+        match resp {
+            Some(Protocol::Acknowledge) => {
+                let wait = wait.take();
+
+                Ok(Ready(Connected(wait.connection).into()))
+            }
+            None => bail!("connection returned None"),
+            _ => Ok(NotReady),
         }
     }
 }
 
-impl<P> Future for Connect<P>
+struct ConnectWithStrategies<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = <ConnectionHandler<P> as Stream>::Item;
+    strategies: Vec<Connect>,
+    connect: ConnectStateMachineFuture<P>,
+    addr: SocketAddr,
+    handle: Handle,
+}
+
+impl<'connect, P> ConnectWithStrategies<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    fn new(
+        mut strategies: Vec<Connect>,
+        handle: Handle,
+        addr: SocketAddr,
+    ) -> ConnectWithStrategies<P> {
+        let strategy = strategies
+            .pop()
+            .expect("At least one strategy should be given!");
+
+        ConnectWithStrategies {
+            strategies,
+            addr,
+            connect: ConnectStateMachine::start(strategy, addr, handle.clone()),
+            handle,
+        }
+    }
+}
+
+impl<P> Future for ConnectWithStrategies<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = Connection<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let (state, result) = match mem::replace(&mut self.state, ConnectState::None) {
-                ConnectState::Init => {
-                    match self.connection_handler.poll()? {
-                        Ready(Some(mut con)) => {
-                            // TODO: do not use expect
-                            con.1.start_send(protocol::Protocol::Register).expect("");
-                            con.1.poll_complete().expect("");
+        match self.connect.poll() {
+            Ok(Ready(con)) => Ok(Ready(con)),
+            Ok(NotReady) => Ok(NotReady),
+            Err(e) => {
+                println!("error: {:?}", e);
 
-                            let timeout = Timeout::new(Duration::new(1, 0), &self.handle)
-                                .chain_err(|| "error creating timeout")?;
-
-                            (ConnectState::Connecting(con, timeout), None)
-                        }
-                        _ => (ConnectState::Init, Some(Ok(NotReady))),
+                match self.strategies.pop() {
+                    Some(mut strat) => {
+                        self.connect = ConnectStateMachine::start(strat, self.addr, self.handle.clone());
+                        let _ = self.connect.poll()?;
+                        Ok(NotReady)
                     }
+                    None => bail!("No strategies left for connecting to: {}", self.addr),
                 }
-                ConnectState::Connecting(mut con, mut timeout) => {
-                    if let Ok(Ready(())) = timeout.poll() {
-                        (ConnectState::Init, None)
-                    } else {
-                        if let Ok(Ready(Some(protocol::Protocol::Acknowledge))) = con.1.poll() {
-                            return Ok(Ready(con));
-                        } else {
-                            (ConnectState::Connecting(con, timeout), Some(Ok(NotReady)))
-                        }
-                    }
-                }
-                ConnectState::None => bail!("polled after connection established!"),
-            };
-
-            self.state = state;
-
-            if let Some(result) = result {
-                return result;
             }
         }
     }
 }
 
-pub struct ConnectionHandler<P> {
-    // this should be ordered!
-    strategies: Vec<strategies::Strategy<P>>,
-    dest_addr: SocketAddr,
-    active_strat: Option<strategies::Strategy<P>>,
+pub struct Connector {
+    handle: Handle,
+    strategies: Vec<Connect>,
 }
 
-impl<P> ConnectionHandler<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn new(dest_addr: SocketAddr, handle: &Handle) -> ConnectionHandler<P> {
-        let strategies = strategies::connect(handle);
-
-        ConnectionHandler {
+impl Connector {
+    pub fn new(handle: Handle, strategies: Vec<Connect>) -> Connector {
+        Connector {
+            handle,
             strategies,
-            dest_addr,
-            active_strat: None,
         }
     }
-}
 
-impl<P> Stream for ConnectionHandler<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    type Item = (
-        strategies::Strategy<P>,
-        strategies::Connection<P>,
-        SocketAddr,
-    );
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if self.active_strat.is_none() {
-            self.active_strat = self.strategies.pop().map(|mut s| {
-                s.connect(self.dest_addr);
-                s
-            });
-        }
-
-        if let Some(mut strat) = self.active_strat.take() {
-            let (strat, result) = match strat.poll() {
-                Err(_) | Ok(Ready(None)) => (None, Ok(NotReady)),
-                Ok(NotReady) => (Some(strat), Ok(NotReady)),
-                Ok(Ready(Some(con))) => if let strategies::ConnectionType::Outgoing = con.2 {
-                    (None, Ok(Ready(Some((strat, con.0, con.1)))))
-                } else {
-                    (Some(strat), Ok(NotReady))
-                },
-            };
-
-            self.active_strat = strat;
-            return result;
-        }
-
-        bail!("No more strategies left!")
+    pub fn connect<P>(&self, addr: SocketAddr) -> ConnectWithStrategies<P>
+        P: Serialize + for<'de> Deserialize<'de>
+    {
+        ConnectWithStrategies::new(self.strategies.clone(), self.handle.clone(), addr)
     }
 }
 
 pub struct DeviceToDeviceConnection<P> {
-    strat: strategies::Strategy<P>,
-    connections: HashMap<SocketAddr, strategies::Connection<P>>,
+    strat: Strategy<P>,
+    connections: HashMap<SocketAddr, Connection<P>>,
     timeout: Timeout,
 }
 
@@ -166,7 +203,7 @@ where
     P: Serialize + for<'de> Deserialize<'de>,
 {
     pub fn new(
-        mut strat: strategies::Strategy<P>,
+        mut strat: Strategy<P>,
         addresses: &[SocketAddr],
         handle: &Handle,
     ) -> DeviceToDeviceConnection<P> {
@@ -186,17 +223,16 @@ impl<P> Future for DeviceToDeviceConnection<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = (strategies::Connection<P>, SocketAddr);
+    type Item = (Connection<P>, SocketAddr);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Ok(Ready(())) = self.timeout.poll() {
-            self.timeout
-                .reset(Instant::now() + Duration::from_millis(500));
+        if self.timeout.poll().is_err() {
+            self.timeout = self.timeout.reset();
             let _ = self.timeout.poll();
 
             for con in self.connections.values_mut() {
-                con.start_send(protocol::Protocol::Hello)?;
+                con.start_send(Protocol::Hello)?;
                 con.poll_complete()?;
             }
         }
@@ -204,7 +240,7 @@ where
         loop {
             match self.strat.poll() {
                 Ok(Ready(Some(mut con))) => if let strategies::ConnectionType::Outgoing = con.2 {
-                    con.0.start_send(protocol::Protocol::Hello)?;
+                    con.0.start_send(Protocol::Hello)?;
                     con.0.poll_complete()?;
                     self.connections.insert(con.1, con.0);
                 },
@@ -216,7 +252,7 @@ where
         {
             for (addr, con) in self.connections.iter_mut() {
                 match con.poll() {
-                    Ok(Ready(Some(val))) => if let protocol::Protocol::Hello = val {
+                    Ok(Ready(Some(val))) => if let Protocol::Hello = val {
                         address = Some(addr.clone());
                         break;
                     },
