@@ -1,15 +1,17 @@
 use errors::*;
 use protocol;
-use strategies;
+use strategies::{self, Connect, Strategy};
 use connect::{Connector, DeviceToDeviceConnection};
 
-use std::net::SocketAddr;
+use std::net::{SocketAddr, ToSocketAddrs};
 use std::mem;
 use std::time::{Duration, Instant};
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use tokio_core::reactor::{Handle, Timeout};
 
-use futures::{Future, Poll, Sink, Stream};
+use futures::{Future, IntoFuture, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -18,8 +20,6 @@ use serde::{Deserialize, Serialize};
 use pnet_datalink::interfaces;
 
 use itertools::Itertools;
-
-use either::{Either, Left, Right};
 /*
 pub trait NewService {
     type Service;
@@ -267,3 +267,48 @@ where
     }
 }
 */
+
+pub struct Client<P> {
+    handle: Handle,
+    strategies: Vec<Strategy<P>>,
+    connector: Connector,
+    state: Arc<Mutex<State>>
+}
+
+impl<P> Client<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    fn new(handle: Handle) -> Result<Client<P>> {
+        let (strategies, connects) =
+            strategies::connect(&handle).chain_err(|| "error creating strategy sockets")?;
+
+        let connector = Connector::new(handle.clone(), connects);
+
+        Ok(Client {
+            handle,
+            strategies,
+            connector,
+        })
+    }
+
+    fn connect_to<A: ToSocketAddrs>(&self, addrs: A) -> Result<()> {
+        let addrs = addrs
+            .to_socket_addrs()
+            .chain_err(|| "error getting socket addresses")?
+            .map(|s| s.clone())
+            .collect::<Vec<_>>();
+
+        let handle = self.handle.clone();
+        let connector = self.connector.clone();
+        self.handle.spawn_fn(move || {
+            for addr in addrs {
+                handle.spawn(connector.connect::<P>(addr).map(|_| ()).map_err(|_| ()));
+            }
+
+            Ok(())
+        });
+
+        Ok(())
+    }
+}

@@ -1,4 +1,3 @@
-extern crate either;
 #[macro_use]
 extern crate error_chain;
 #[macro_use]

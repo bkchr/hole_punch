@@ -152,10 +152,10 @@ pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> {
     Ok(vec![udp])
 }
 
-pub fn connect<P>(handle: &Handle) -> Result<Vec<(Strategy<P>, Connect)>> {
+pub fn connect<P>(handle: &Handle) -> Result<(Vec<Strategy<P>>, Vec<Connect>)> {
     let udp = udp_strat::connect_async(handle).chain_err(|| "error creating udp strategy")?;
 
-    Ok(vec![udp])
+    Ok((vec![udp.0], vec![udp.1]))
 }
 
 pub enum PureConnection {

@@ -187,6 +187,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct Connector {
     handle: Handle,
     strategies: Vec<Connect>,
