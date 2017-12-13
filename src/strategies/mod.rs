@@ -46,7 +46,7 @@ impl<P> Future for WaitForConnect<P>
     where
         P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = Connection<P>;
+    type Item = (Connection<P>, u16);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -133,7 +133,7 @@ impl<P> Connection<P>
 {
     pub fn into_pure(self) -> PureConnection {
         match self {
-            Connection::Udp(mut stream) => {
+            Connection::Udp(stream) => {
                 PureConnection::Udp(stream.into_inner().into_inner().into_inner())
             }
         }

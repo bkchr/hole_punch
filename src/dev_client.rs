@@ -1,6 +1,6 @@
 use errors::*;
-use protocol;
-use strategies::{self, Connect, Strategy};
+use protocol::{AddressInformation, Protocol};
+use strategies::{self, Connection, PureConnection, Strategy};
 use connect::{Connector, DeviceToDeviceConnection};
 
 use std::net::{SocketAddr, ToSocketAddrs};
@@ -14,23 +14,26 @@ use tokio_core::reactor::{Handle, Timeout};
 use futures::{Future, IntoFuture, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
 use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::sync::oneshot;
 
 use serde::{Deserialize, Serialize};
 
 use pnet_datalink::interfaces;
 
 use itertools::Itertools;
-/*
+
+use state_machine_future::RentToOwn;
+
 pub trait NewService {
     type Service;
-    fn new_service(control: ClientControl, addr: SocketAddr) -> Self::Service;
+    fn new_service(addr: SocketAddr) -> Self::Service;
 }
 
 pub trait Service {
     type Message;
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>>;
 }
-
+/*
 enum ClientProtocol {
 
 }
@@ -272,7 +275,8 @@ pub struct Client<P> {
     handle: Handle,
     strategies: Vec<Strategy<P>>,
     connector: Connector,
-    state: Arc<Mutex<State>>
+    result_recv: oneshot::Receiver<Result<PureConnection>>,
+    result_sender: oneshot::Sender<Result<PureConnection>>,
 }
 
 impl<P> Client<P>
@@ -284,11 +288,14 @@ where
             strategies::connect(&handle).chain_err(|| "error creating strategy sockets")?;
 
         let connector = Connector::new(handle.clone(), connects);
+        let (result_sender, result_recv) = oneshot::channel();
 
         Ok(Client {
             handle,
             strategies,
             connector,
+            result_sender,
+            result_recv,
         })
     }
 
@@ -310,5 +317,100 @@ where
         });
 
         Ok(())
+    }
+}
+
+#[derive(StateMachineFuture)]
+enum ServiceHandler<P: 'static + Serialize + for<'de> Deserialize<'de>, S: Service<Message = P>> {
+    #[state_machine_future(start, transitions(Finished, SendClientResult))]
+    HandleMessages {
+        result_sender: oneshot::Sender<Result<PureConnection>>,
+        connection: Connection<P>,
+        remote_addr: SocketAddr,
+        local_port: u16,
+        service: S,
+    },
+    #[state_machine_future(transitions(Finished))]
+    SendClientResult {
+        result_sender: oneshot::Sender<Result<PureConnection>>,
+        connection: Connection<P>,
+    },
+    #[state_machine_future(ready)] Finished(()),
+    #[state_machine_future(error)] ErrorState(Error),
+}
+
+impl<P, S> ServiceHandler<P, S>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+    S: Service<Message = P>,
+{
+    fn handle_message<'a>(
+        msg: Protocol<P>,
+        handler: &'a mut RentToOwn<'a, HandleMessages<P, S>>,
+    ) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl<P, S> PollServiceHandler<P, S> for ServiceHandler<P, S>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+    S: Service<Message = P>,
+{
+    fn poll_handle_messages<'a>(
+        handler: &'a mut RentToOwn<'a, HandleMessages<P, S>>,
+    ) -> Poll<AfterHandleMessages<P>, Error> {
+        loop {
+            let message = try_ready!(handler.connection.poll());
+
+            let message = match message {
+                Some(message) => message,
+                None => bail!("connection({}) closed", handler.remote_addr),
+            };
+
+            let answer = match message {
+                Protocol::Embedded(msg) => handler
+                    .service
+                    .on_message(&msg)?
+                    .map(|v| Protocol::Embedded(v)),
+                Protocol::KeepAlive => None,
+                Protocol::RequestPrivateAdressInformation(id) => {
+                    let addresses = interfaces()
+                        .iter()
+                        .map(|v| v.ips.clone())
+                        .concat()
+                        .iter()
+                        .map(|v| v.ip())
+                        .filter(|ip| !ip.is_loopback())
+                        .collect_vec();
+
+                    Some(Protocol::PrivateAdressInformation(
+                        id,
+                        AddressInformation {
+                            port: handler.local_port,
+                            addresses,
+                        },
+                    ))
+                }
+                Protocol::Connect {
+                    public, private, ..
+                } => {
+                    println!("CONNECT: {:?}, {:?}", public, private);
+                    None
+                }
+                _ => None,
+            };
+
+            handler.connection.send(answer.unwrap());
+        }
+    }
+
+    fn poll_send_client_result<'a>(
+        send: &'a mut RentToOwn<'a, SendClientResult<P>>,
+    ) -> Poll<AfterSendClientResult, Error> {
+        let send = send.take();
+        let _ = send.result_sender.send(Ok(send.connection.into_pure()));
+
+        Ok(Ready(Finished(()).into()))
     }
 }

@@ -63,10 +63,11 @@ enum ConnectStateMachine<P: 'static + Serialize + for<'de> Deserialize<'de>> {
     },
     #[state_machine_future(transitions(Connected))]
     WaitingForRegisterResponse {
-        connection: Connection<P>,
+        wait_for_message: WaitForMessage<P>,
+        port: u16,
         timeout: Timeout,
     },
-    #[state_machine_future(ready)] Connected(Connection<P>),
+    #[state_machine_future(ready)] Connected((Connection<P>, u16)),
     #[state_machine_future(error)] ErrorState(Error),
 }
 
@@ -88,6 +89,7 @@ where
             }.into(),
         ))
     }
+
     fn poll_waiting_for_connect<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForConnect<P>>,
     ) -> Poll<AfterWaitingForConnect<P>, Error> {
@@ -98,7 +100,8 @@ where
 
         Ok(Ready(
             WaitingForRegisterResponse {
-                connection,
+                wait_for_message: WaitForMessage::new(connection.0, Protocol::Acknowledge),
+                port: connection.1,
                 timeout: wait.timeout.new_reset(),
             }.into(),
         ))
@@ -113,17 +116,9 @@ where
                 .chain_err(|| "wait for register response")
         );
 
-        let resp = try_ready!(wait.connection.poll());
+        let connection = try_ready!(wait.wait_for_message.poll());
 
-        match resp {
-            Some(Protocol::Acknowledge) => {
-                let wait = wait.take();
-
-                Ok(Ready(Connected(wait.connection).into()))
-            }
-            None => bail!("connection returned None"),
-            _ => Ok(NotReady),
-        }
+        Ok(Ready(Connected((connection, wait.port)).into()))
     }
 }
 
@@ -163,7 +158,7 @@ impl<P> Future for ConnectWithStrategies<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = Connection<P>;
+    type Item = (Connection<P>, u16);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -206,12 +201,13 @@ impl Connector {
     }
 }
 
-struct WaitForMessage<P>(Option<Connection<P>>, Protocol<P>);
+pub struct WaitForMessage<P>(Option<Connection<P>>, Protocol<P>);
 
 impl<P> WaitForMessage<P> {
-    fn new(con: Connection<P>, msg: Protocol<P>) ->WaitForMessage<P> {
+    fn new(con: Connection<P>, msg: Protocol<P>) -> WaitForMessage<P> {
         WaitForMessage(Some(con), msg)
-    }}
+    }
+}
 
 impl<P> Future for WaitForMessage<P>
 where
@@ -222,7 +218,8 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let message = match try_ready!(
-            self.0.as_mut()
+            self.0
+                .as_mut()
                 .expect("can not be polled when message was already received")
                 .poll()
         ) {
@@ -241,13 +238,16 @@ where
 struct PeriodicSend<P>(WaitForMessage<P>, Timeout, Box<Fn() -> Protocol<P>>);
 
 impl<P> PeriodicSend<P> {
-    fn new<F>(wait: WaitForMessage<P>, dur: Duration, send: F, handle: &Handle) -> PeriodicSend<P>  where F: Fn() -> Protocol<P> + 'static {
+    fn new<F>(wait: WaitForMessage<P>, dur: Duration, send: F, handle: &Handle) -> PeriodicSend<P>
+    where
+        F: Fn() -> Protocol<P> + 'static,
+    {
         PeriodicSend(wait, Timeout::new(dur, handle), Box::new(send))
     }
 }
 
 impl<P> Future for PeriodicSend<P>
-    where
+where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     type Item = Connection<P>;
@@ -307,13 +307,18 @@ where
 
             match connection {
                 Ready(Some(con)) => {
-                    let wait = WaitForMessage::new(con, Protocol::Hello);
-                    let resend = PeriodicSend::new(wait, Duration::from_millis(100), || Protocol::Hello, &self.handle);
+                    let wait = WaitForMessage::new(con.0, Protocol::Hello);
+                    let resend = PeriodicSend::new(
+                        wait,
+                        Duration::from_millis(100),
+                        || Protocol::Hello,
+                        &self.handle,
+                    );
                     self.wait_for_hello.push(resend);
-                },
+                }
                 _ => break,
             }
-        };
+        }
 
         match try_ready!(self.wait_for_hello.poll()) {
             Some(con) => Ok(Ready(con)),

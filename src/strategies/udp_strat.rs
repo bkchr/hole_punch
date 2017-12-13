@@ -96,7 +96,10 @@ impl Connect {
     where
         P: Serialize + for<'de> Deserialize<'de>,
     {
-        Ok(strategies::WaitForConnect::Udp(WaitForConnect(self.0.connect(addr)?, Default::default())))
+        Ok(strategies::WaitForConnect::Udp(WaitForConnect(
+            self.0.connect(addr)?,
+            Default::default(),
+        )))
     }
 }
 
@@ -106,11 +109,16 @@ impl<P> Future for WaitForConnect<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = strategies::Connection<P>;
+    type Item = (strategies::Connection<P>, u16);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0.poll().map(|v| v.map(|v| v.into()))
+        self.0.poll().map(|v| {
+            v.map(|v| {
+                let port = v.get_local_addr().port();
+                (v.into(), port)
+            })
+        })
     }
 }
 

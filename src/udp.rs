@@ -214,21 +214,23 @@ impl UdpServerInner {
             socket: &mut UdpSocket,
         ) -> Option<(Vec<u8>, SocketAddr)> {
             let mut overflow = None;
-            connections.retain(|addr, c| loop {
-                if overflow.is_some() {
-                    return true;
-                }
-
-                let _ = match c.send() {
-                    Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
-                        socket.send_to(&data, &addr)
-                    } else {
-                        overflow = Some((data, addr.clone()));
+            connections.retain(|addr, c| {
+                loop {
+                    if overflow.is_some() {
                         return true;
-                    },
-                    Ok(None) => return true,
-                    _ => return false,
-                };
+                    }
+
+                    let _ = match c.send() {
+                        Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
+                            socket.send_to(&data, &addr)
+                        } else {
+                            overflow = Some((data, addr.clone()));
+                            return true;
+                        },
+                        Ok(None) => return true,
+                        _ => return false,
+                    };
+                }
             });
 
             overflow
@@ -246,18 +248,22 @@ impl UdpServerInner {
     }
 
     /// Creates a new `UdpConnection` and the connected `UdpServerStream`
-    fn create_connection_and_stream(buffer_size: usize) -> (UdpConnection, UdpServerStream) {
+    fn create_connection_and_stream(
+        buffer_size: usize,
+        addr: SocketAddr,
+    ) -> (UdpConnection, UdpServerStream) {
         let (con_sender, con_receiver) = channel(buffer_size);
         let (stream_sender, stream_receiver) = channel(buffer_size);
 
         (
             UdpConnection::new(stream_receiver, con_sender),
-            UdpServerStream::new(con_receiver, stream_sender),
+            UdpServerStream::new(con_receiver, stream_sender, addr),
         )
     }
 
     fn connect(&mut self, addr: SocketAddr) -> UdpServerStream {
-        let (mut con, stream) = Self::create_connection_and_stream(self.buffer_size);
+        let (mut con, stream) =
+            Self::create_connection_and_stream(self.buffer_size, self.socket.local_addr().unwrap());
         self.connections.insert(addr, con);
         stream
     }
@@ -291,7 +297,10 @@ impl Future for UdpServerInner {
             match self.connections.entry(addr) {
                 Occupied(mut entry) => entry.get_mut().recv(self.buf[..len].to_vec()),
                 Vacant(entry) => {
-                    let (mut con, stream) = Self::create_connection_and_stream(self.buffer_size);
+                    let (mut con, stream) = Self::create_connection_and_stream(
+                        self.buffer_size,
+                        self.socket.local_addr().unwrap(),
+                    );
                     entry.insert(con).recv(self.buf[..len].to_vec());
 
                     self.new_connection.start_send((stream, addr));
@@ -308,12 +317,25 @@ pub struct UdpServerStream {
     sender: Sender<Vec<u8>>,
     /// The receiver to recv data from the connected `UdpConnection`
     receiver: Receiver<Vec<u8>>,
+    addr: SocketAddr,
 }
 
 impl UdpServerStream {
     /// Creates a new UdpServerStream
-    fn new(receiver: Receiver<Vec<u8>>, sender: Sender<Vec<u8>>) -> UdpServerStream {
-        UdpServerStream { receiver, sender }
+    fn new(
+        receiver: Receiver<Vec<u8>>,
+        sender: Sender<Vec<u8>>,
+        addr: SocketAddr,
+    ) -> UdpServerStream {
+        UdpServerStream {
+            receiver,
+            sender,
+            addr,
+        }
+    }
+
+    pub fn get_local_addr(&self) -> SocketAddr {
+        self.addr
     }
 }
 
@@ -419,10 +441,7 @@ pub struct Connect {
 }
 
 impl Connect {
-    pub fn connect(
-        &mut self,
-        addr: SocketAddr,
-    ) -> Result<WaitForConnect> {
+    pub fn connect(&mut self, addr: SocketAddr) -> Result<WaitForConnect> {
         let (sender, recv) = oneshot::channel();
 
         self.connect_sender
