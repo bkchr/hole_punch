@@ -20,7 +20,7 @@ use pnet_datalink::interfaces;
 use itertools::Itertools;
 
 use either::{Either, Left, Right};
-
+/*
 pub trait NewService {
     type Service;
     fn new_service(control: ClientControl, addr: SocketAddr) -> Self::Service;
@@ -266,3 +266,4 @@ where
         }
     }
 }
+*/

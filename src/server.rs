@@ -1,5 +1,4 @@
 use errors::*;
-use udp;
 use protocol::{AddressInformation, Protocol};
 use strategies::{self, Connection, Strategy};
 
@@ -159,16 +158,16 @@ where
     <N as NewService>::Service: Service<Message = P> + 'static,
     P: Serialize + for<'de> Deserialize<'de> + 'static,
 {
-    pub fn new(new_service: N, handle: Handle) -> Server<N, P> {
+    pub fn new(new_service: N, handle: Handle) -> Result<Server<N, P>> {
         let state = Arc::new(Mutex::new(State::new()));
-        let sockets = strategies::accept(&handle);
+        let sockets = strategies::accept(&handle).chain_err(|| "failed to create sockets")?;
 
-        Server {
+        Ok(Server {
             sockets,
             new_service,
             state,
             handle,
-        }
+        })
     }
 
     pub fn run(self, evt_loop: &mut Core) -> Result<()> {

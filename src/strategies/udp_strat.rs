@@ -88,14 +88,15 @@ pub fn accept_async<P>(handle: &Handle) -> Result<strategies::Strategy<P>> {
     Ok(strategies::Strategy::Udp(server))
 }
 
+#[derive(Clone)]
 pub struct Connect(udp::Connect);
 
 impl Connect {
-    fn connect<P>(&mut self, addr: SocketAddr) -> strategies::WaitForConnect<P>
+    pub fn connect<P>(&mut self, addr: SocketAddr) -> Result<strategies::WaitForConnect<P>>
     where
         P: Serialize + for<'de> Deserialize<'de>,
     {
-        strategies::WaitForConnect::Udp(WaitForConnect(self.0.connect(addr), Default::default()))
+        Ok(strategies::WaitForConnect::Udp(WaitForConnect(self.0.connect(addr)?, Default::default())))
     }
 }
 

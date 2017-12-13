@@ -422,12 +422,13 @@ impl Connect {
     pub fn connect(
         &mut self,
         addr: SocketAddr,
-    ) -> result::Result<WaitForConnect, SendError<SocketAddr>> {
+    ) -> Result<WaitForConnect> {
         let (sender, recv) = oneshot::channel();
 
         self.connect_sender
             .unbounded_send((addr, sender))
             .map(|_| WaitForConnect(recv))
+            .map_err(|_| "error sending udp connect request".into())
     }
 }
 

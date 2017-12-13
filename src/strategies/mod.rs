@@ -28,12 +28,12 @@ pub enum Connect {
 }
 
 impl Connect {
-    pub fn connect<P>(&mut self, addr: SocketAddr) -> WaitForConnect<P>
+    pub fn connect<P>(&mut self, addr: SocketAddr) -> Result<WaitForConnect<P>>
     where
         P: Serialize + for<'de> Deserialize<'de>,
     {
         match self {
-            &Connect::Udp(ref mut connect) => connect.connect(addr),
+            &mut Connect::Udp(ref mut connect) => connect.connect(addr),
         }
     }
 }
@@ -42,7 +42,10 @@ pub enum WaitForConnect<P> {
     Udp(udp_strat::WaitForConnect<P>),
 }
 
-impl<P> Future for WaitForConnect<P> {
+impl<P> Future for WaitForConnect<P> 
+    where
+        P: Serialize + for<'de> Deserialize<'de>,
+{
     type Item = Connection<P>;
     type Error = Error;
 
@@ -77,7 +80,7 @@ where
 {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         match self {
-            &mut Strategy::Udp(ref server) => server.local_addr(),
+            &Strategy::Udp(ref server) => server.local_addr(),
         }
     }
 }
@@ -124,12 +127,21 @@ where
     }
 }
 
-impl<P> Connection<P> {
+impl<P> Connection<P>
+    where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
     pub fn into_pure(self) -> PureConnection {
         match self {
             Connection::Udp(mut stream) => {
                 PureConnection::Udp(stream.into_inner().into_inner().into_inner())
             }
+        }
+    }
+
+    pub fn send(&mut self, msg: Protocol<P>) {
+        if self.start_send(msg).is_ok() {
+            let _ = self.poll_complete();
         }
     }
 }
@@ -140,7 +152,7 @@ pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> {
     Ok(vec![udp])
 }
 
-pub fn connect<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> {
+pub fn connect<P>(handle: &Handle) -> Result<Vec<(Strategy<P>, Connect)>> {
     let udp = udp_strat::connect_async(handle).chain_err(|| "error creating udp strategy")?;
 
     Ok(vec![udp])
