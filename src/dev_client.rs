@@ -32,10 +32,30 @@ pub trait NewService {
 pub trait Service {
     type Message;
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>>;
+    fn inform(&mut self, event: ServiceInformEvent);
 }
 
-pub struct ServiceControl {
-    
+pub enum ServiceInformEvent {
+    Connecting,
+}
+
+enum ServiceControlEvent<P> {
+    CloseConnection,
+    SendMessage(P),
+}
+
+pub struct ServiceControl<P> {
+   sender: UnboundedSender<ServiceControlEvent<P>> 
+}
+
+impl<P> ServiceControl<P> {
+    pub fn close(&mut self) {
+        let _ = self.sender.unbounded_send(ServiceControlEvent::CloseConnection);
+    }
+
+    pub fn send_message(&mut self, msg: P) {
+        let _ = self.sender.unbounded_send(ServiceControlEvent::SendMessage(msg));
+    }
 }
 
 /*
@@ -377,6 +397,7 @@ where
                 }
                 Protocol::Connect(addresses, _) => {
                     println!("CONNECT: {:?}", addresses);
+                    handler.service.inform(ServiceInformEvent::Connecting);
                     None
                 }
                 _ => None,
