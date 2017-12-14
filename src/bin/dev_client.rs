@@ -7,7 +7,7 @@ extern crate hyper;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::dev_client::{Client, Service};
+use hole_punch::dev_client::{Client, NewService, Service, ServiceControl, ServiceInformEvent};
 use hole_punch::errors::*;
 
 use tokio_core::reactor::Core;
@@ -24,19 +24,15 @@ enum CarrierProtocol {
     Registered,
     RequestDevice { name: String },
     DeviceNotFound,
+    AlreadyConnected,
 }
 
-struct CarrierService {}
+struct CarrierService {
+    control: ServiceControl<CarrierProtocol>,
+}
 
 impl Service for CarrierService {
     type Message = CarrierProtocol;
-
-    fn new_connection(&mut self, addr: SocketAddr) -> Option<Self::Message> {
-        println!("Yeah, new connection, {:?}", addr);
-        Some(CarrierProtocol::RequestDevice {
-            name: "nice".to_string(),
-        })
-    }
 
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>> {
         match msg {
@@ -47,13 +43,39 @@ impl Service for CarrierService {
             &CarrierProtocol::DeviceNotFound => {
                 println!("DEVICENOTFOUND");
                 bail!("NOT FOUND");
+            },
+            &CarrierProtocol::AlreadyConnected => {
+                println!("ALREADY");
+                self.control.use_as_result();
+                Ok(None)
             }
             _ => Ok(None),
         }
     }
 
-    fn connect_to(&self) -> SocketAddr {
-        ([176, 9, 73, 99], 22222).into()
+    fn inform(&mut self, evt: ServiceInformEvent) {
+        match evt {
+            ServiceInformEvent::Connecting => println!("CONNECTING"),
+        }
+    }
+}
+
+struct NewCarrierService {}
+
+impl NewService<CarrierProtocol> for NewCarrierService {
+    type Service = CarrierService;
+
+    fn new_service(
+        &mut self,
+        mut control: ServiceControl<CarrierProtocol>,
+        addr: SocketAddr,
+    ) -> Self::Service {
+        println!("new connection to: {}", addr);
+
+        control.send_message(CarrierProtocol::RequestDevice {
+            name: "nice".to_owned(),
+        });
+        CarrierService { control }
     }
 }
 
@@ -73,13 +95,20 @@ impl hyper::server::Service for HttpConnector {
 }
 
 fn main() {
+    //([176, 9, 73, 99], 22222).into()
     let mut evt_loop = Core::new().unwrap();
 
-    let service = CarrierService {};
+    let new_service = NewCarrierService {};
 
-    let mut client = Client::new(service, evt_loop.handle());
+    let mut client = Client::new(evt_loop.handle(), new_service).expect("client");
+    let addr: SocketAddr = ([127, 0, 0, 1], 22222).into();
+    client.connect_to(&addr).expect("connect");
 
-    let con = evt_loop.run(client).unwrap();
+    let con = evt_loop
+        .run(client.into_future().map_err(|_| ()))
+        .unwrap()
+        .0
+        .unwrap();
 
     let client = hyper::Client::configure()
         .connector(HttpConnector {

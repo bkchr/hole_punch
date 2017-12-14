@@ -282,7 +282,7 @@ impl Future for UdpServerInner {
 
         loop {
             match self.connect_to.poll() {
-                Ok(Ready(Some((addr, mut sender)))) => {
+                Ok(Ready(Some((addr, sender)))) => {
                     let stream = self.connect(addr);
                     let _ = sender.send(stream);
                 }

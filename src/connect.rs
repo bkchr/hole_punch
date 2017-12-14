@@ -85,7 +85,7 @@ where
         Ok(Ready(
             WaitingForConnect {
                 connect,
-                timeout: Timeout::new(Duration::from_millis(500), &init.handle),
+                timeout: Timeout::new(Duration::from_millis(1000), &init.handle),
             }.into(),
         ))
     }
@@ -93,10 +93,11 @@ where
     fn poll_waiting_for_connect<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForConnect<P>>,
     ) -> Poll<AfterWaitingForConnect<P>, Error> {
-        try_ready!(wait.timeout.poll().chain_err(|| "wait for connect"));
-        let connection = try_ready!(wait.connect.poll());
+        if wait.timeout.poll().is_err() { bail!("wait for connect timeout") };
+        let mut connection = try_ready!(wait.connect.poll());
 
         let wait = wait.take();
+        connection.0.send_and_poll(Protocol::Register);
 
         Ok(Ready(
             WaitingForRegisterResponse {
@@ -110,11 +111,7 @@ where
     fn poll_waiting_for_register_response<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForRegisterResponse<P>>,
     ) -> Poll<AfterWaitingForRegisterResponse<P>, Error> {
-        try_ready!(
-            wait.timeout
-                .poll()
-                .chain_err(|| "wait for register response")
-        );
+        if wait.timeout.poll().is_err() { bail!("wait for register response") };
 
         let connection = try_ready!(wait.wait_for_message.poll());
 
@@ -199,6 +196,11 @@ impl Connector {
     {
         ConnectWithStrategies::new(self.strategies.clone(), self.handle.clone(), addr)
     }
+
+    fn get_connect(&self) -> Connect {
+        //HACK!!
+        self.strategies.first().unwrap().clone()
+    }
 }
 
 pub struct WaitForMessage<P>(Option<Connection<P>>, Protocol<P>);
@@ -265,9 +267,89 @@ where
     }
 }
 
-pub struct DeviceToDeviceConnection<P> {
-    wait_for_connect: FuturesUnordered<WaitForConnect<P>>,
-    wait_for_hello: FuturesUnordered<PeriodicSend<P>>,
+struct DeviceToDeviceConnectionDataWrapper<P, F>
+where
+    F: Future<Item = Connection<P>, Error = Error>,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    future: F,
+    port: u16,
+    addr: SocketAddr,
+}
+
+impl<P, F> Future for DeviceToDeviceConnectionDataWrapper<P, F>
+where
+    F: Future<Item = Connection<P>, Error = Error>,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = (Connection<P>, SocketAddr, u16);
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let con = try_ready!(self.future.poll());
+
+        Ok(Ready((con, self.addr, self.port)))
+    }
+}
+
+impl<P, F> From<(F, SocketAddr, u16)> for DeviceToDeviceConnectionDataWrapper<P, F>
+where
+    F: Future<Item = Connection<P>, Error = Error>,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(val: (F, SocketAddr, u16)) -> DeviceToDeviceConnectionDataWrapper<P, F> {
+        DeviceToDeviceConnectionDataWrapper {
+            future: val.0,
+            port: val.2,
+            addr: val.1,
+        }
+    }
+}
+
+struct DeviceToDeviceConnectionDataWrapperFirst<P, F>
+where
+    F: Future<Item = (Connection<P>, u16), Error = Error>,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    future: F,
+    addr: SocketAddr,
+}
+
+impl<P, F> Future for DeviceToDeviceConnectionDataWrapperFirst<P, F>
+where
+    F: Future<Item = (Connection<P>, u16), Error = Error>,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = (Connection<P>, SocketAddr, u16);
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let con = try_ready!(self.future.poll());
+
+        Ok(Ready((con.0, self.addr, con.1)))
+    }
+}
+
+impl<P, F> DeviceToDeviceConnectionDataWrapperFirst<P, F>
+where
+    F: Future<Item = (Connection<P>, u16), Error = Error>,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    fn new(f: F, addr: SocketAddr) -> DeviceToDeviceConnectionDataWrapperFirst<P, F> {
+        DeviceToDeviceConnectionDataWrapperFirst {
+            future: f,
+            addr,
+        }
+    }
+}
+
+pub struct DeviceToDeviceConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    wait_for_connect:
+        FuturesUnordered<DeviceToDeviceConnectionDataWrapperFirst<P, WaitForConnect<P>>>,
+    wait_for_hello: FuturesUnordered<DeviceToDeviceConnectionDataWrapper<P, PeriodicSend<P>>>,
     handle: Handle,
 }
 
@@ -276,17 +358,16 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     pub fn new(
-        mut strat: Connect,
+        strat: Connector,
         addresses: &[SocketAddr],
         handle: &Handle,
     ) -> DeviceToDeviceConnection<P> {
-        for addr in addresses {
-            strat.connect::<P>(*addr);
-        }
-
+        let mut strat = strat.get_connect();
         DeviceToDeviceConnection {
             wait_for_connect: futures_unordered(
-                addresses.iter().map(|a| strat.connect(*a).unwrap()),
+                addresses
+                    .iter()
+                    .map(|a| DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a)),
             ),
             wait_for_hello: FuturesUnordered::new(),
             handle: handle.clone(),
@@ -298,7 +379,7 @@ impl<P> Future for DeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    type Item = Connection<P>;
+    type Item = (Connection<P>, SocketAddr, u16);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -314,7 +395,7 @@ where
                         || Protocol::Hello,
                         &self.handle,
                     );
-                    self.wait_for_hello.push(resend);
+                    self.wait_for_hello.push((resend, con.1, con.2).into());
                 }
                 _ => break,
             }

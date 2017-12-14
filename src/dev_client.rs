@@ -13,8 +13,9 @@ use tokio_core::reactor::{Handle, Timeout};
 
 use futures::{Future, IntoFuture, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
-use futures::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::sync::oneshot;
+use futures::stream::{FuturesUnordered, StreamFuture};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,9 +25,12 @@ use itertools::Itertools;
 
 use state_machine_future::RentToOwn;
 
-pub trait NewService {
+pub trait NewService<P>
+where
+    Self::Service: Service<Message = P>,
+{
     type Service;
-    fn new_service(addr: SocketAddr) -> Self::Service;
+    fn new_service(&mut self, control: ServiceControl<P>, addr: SocketAddr) -> Self::Service;
 }
 
 pub trait Service {
@@ -39,303 +43,104 @@ pub enum ServiceInformEvent {
     Connecting,
 }
 
-enum ServiceControlEvent<P> {
+pub enum ServiceControlEvent<P> {
     CloseConnection,
     SendMessage(P),
+    UseAsResult,
 }
 
 pub struct ServiceControl<P> {
-   sender: UnboundedSender<ServiceControlEvent<P>> 
+    sender: UnboundedSender<ServiceControlEvent<P>>,
 }
 
 impl<P> ServiceControl<P> {
+    fn new() -> (ServiceControl<P>, UnboundedReceiver<ServiceControlEvent<P>>) {
+        let (sender, receiver) = unbounded();
+
+        (ServiceControl { sender }, receiver)
+    }
+
     pub fn close(&mut self) {
-        let _ = self.sender.unbounded_send(ServiceControlEvent::CloseConnection);
+        let _ = self.sender
+            .unbounded_send(ServiceControlEvent::CloseConnection);
     }
 
     pub fn send_message(&mut self, msg: P) {
-        let _ = self.sender.unbounded_send(ServiceControlEvent::SendMessage(msg));
+        let _ = self.sender
+            .unbounded_send(ServiceControlEvent::SendMessage(msg));
+    }
+
+    pub fn use_as_result(&mut self) {
+        let _ = self.sender.unbounded_send(ServiceControlEvent::UseAsResult);
     }
 }
 
-/*
-enum ClientProtocol {
-
-}
-
-pub struct ClientControl {
-    sender: UnboundedSender<ClientProtocol>,
-}
-
-impl ClientControl {
-    fn new(sender: UnboundedSender<ClientProtocol>) -> ClientControl {
-        ClientControl { sender }
-    }
-}
-
-enum ClientState<P>
+pub struct ClientInner<P, N>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    N: NewService<P>,
 {
-    None,
-    Connecting(Connect<P>),
-    Connected(
-        strategies::Strategy<P>,
-        strategies::Connection<P>,
-        SocketAddr,
-        Timeout,
-    ),
-    DeviceToDevice(DeviceToDeviceConnection<P>),
-}
-
-pub struct Client<S, P>
-where
-    S: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    service: S,
-    handle: Handle,
-    state: ClientState<P>,
-    received_keepalive: bool,
-    strat_port: u16,
-}
-
-impl<S, P> Client<S, P>
-where
-    S: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    pub fn new(service: S, handle: Handle) -> Client<S, P> {
-        Client {
-            service,
-            handle,
-            state: ClientState::None,
-            received_keepalive: true,
-            strat_port: 0,
-        }
-    }
-
-    fn send_message(
-        &mut self,
-        msg: protocol::Protocol<P>,
-        con: &mut strategies::Connection<P>,
-    ) -> Result<()> {
-        con.start_send(msg).chain_err(|| "error sending message")?;
-        con.poll_complete()
-            .chain_err(|| "error sending message")
-            .map(|_| ())
-    }
-
-    fn handle_connection(
-        &mut self,
-        con: &mut strategies::Connection<P>,
-        timeout: &mut Timeout,
-    ) -> Result<
-        Either<
-            Poll<strategies::PureConnection, Error>,
-            (protocol::AddressInformation, protocol::AddressInformation),
-        >,
-    > {
-        if let Ok(Ready(())) = timeout.poll() {
-            if self.received_keepalive {
-                self.received_keepalive = false;
-                self.send_message(protocol::Protocol::KeepAlive, con)?;
-                timeout.reset(Instant::now() + Duration::new(30, 0));
-                let _ = timeout.poll();
-            } else {
-                bail!("TIMEOUT");
-            }
-        }
-
-        loop {
-            let msg = match con.poll()? {
-                Ready(Some(msg)) => msg,
-                Ready(None) => bail!("connect returned None!"),
-                NotReady => return Ok(Left(Ok(NotReady))),
-            };
-
-            let answer = match msg {
-                protocol::Protocol::Embedded(msg) => self.service
-                    .on_message(&msg)?
-                    .map(|v| protocol::Protocol::Embedded(v)),
-                protocol::Protocol::KeepAlive => {
-                    println!("KEEPALIVE");
-                    self.received_keepalive = true;
-                    None
-                }
-                protocol::Protocol::RequestPrivateAdressInformation(id) => {
-                    let addresses = interfaces()
-                        .iter()
-                        .map(|v| v.ips.clone())
-                        .concat()
-                        .iter()
-                        .map(|v| v.ip())
-                        .filter(|ip| !ip.is_loopback())
-                        .collect_vec();
-
-                    Some(protocol::Protocol::PrivateAdressInformation(
-                        id,
-                        protocol::AddressInformation {
-                            port: self.strat_port,
-                            addresses,
-                        },
-                    ))
-                }
-                protocol::Protocol::Connect {
-                    public, private, ..
-                } => {
-                    println!("CONNECT: {:?}, {:?}", public, private);
-                    return Ok(Right((public, private)));
-                }
-                _ => None,
-            };
-
-            if let Some(msg) = answer {
-                self.send_message(msg, con)?;
-            }
-        }
-    }
-
-    fn handle_new_connection(
-        &mut self,
-        con: &mut strategies::Connection<P>,
-        addr: SocketAddr,
-        strat_port: u16,
-    ) -> Result<()> {
-        self.strat_port = strat_port;
-        if let Some(answer) = self.service.new_connection(addr) {
-            self.send_message(protocol::Protocol::Embedded(answer), con)
-        } else {
-            Ok(())
-        }
-    }
-}
-
-impl<S, P> Future for Client<S, P>
-where
-    S: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    type Item = strategies::PureConnection;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let (state, result) = match mem::replace(&mut self.state, ClientState::None) {
-                ClientState::None => (
-                    ClientState::Connecting(Connect::new(self.service.connect_to(), &self.handle)),
-                    None,
-                ),
-                ClientState::Connecting(mut con) => match con.poll()? {
-                    Ready((strat, mut con, addr)) => {
-                        self.handle_new_connection(
-                            &mut con,
-                            addr,
-                            strat.local_addr().unwrap().port(),
-                        )?;
-                        (
-                            ClientState::Connected(
-                                strat,
-                                con,
-                                addr,
-                                Timeout::new(Duration::new(30, 0), &self.handle)?,
-                            ),
-                            None,
-                        )
-                    }
-                    _ => (ClientState::Connecting(con), Some(Ok(NotReady))),
-                },
-                ClientState::Connected(strat, mut con, addr, mut timeout) => {
-                    let result = self.handle_connection(&mut con, &mut timeout)?;
-
-                    match result {
-                        Left(result) => (
-                            ClientState::Connected(strat, con, addr, timeout),
-                            Some(result),
-                        ),
-                        Right((public, private)) => {
-                            let mut addresses = public
-                                .addresses
-                                .iter()
-                                .map(|a| SocketAddr::new(*a, public.port))
-                                .collect::<Vec<_>>();
-                            addresses.extend(
-                                private
-                                    .addresses
-                                    .iter()
-                                    .map(|a| SocketAddr::new(*a, private.port)),
-                            );
-
-                            (
-                                ClientState::DeviceToDevice(DeviceToDeviceConnection::new(
-                                    strat,
-                                    addresses.as_slice(),
-                                    &self.handle,
-                                )),
-                                None,
-                            )
-                        }
-                    }
-                }
-                ClientState::DeviceToDevice(mut con) => match con.poll()? {
-                    Ready((con, addr)) => {
-                        println!("YEAH, connected to: {}", addr);
-                        return Ok(Ready(con.into_pure()));
-                    }
-                    _ => (ClientState::DeviceToDevice(con), Some(Ok(NotReady))),
-                },
-            };
-
-            self.state = state;
-
-            if let Some(result) = result {
-                return result;
-            }
-        }
-    }
-}
-*/
-
-pub struct Client<P> {
-    handle: Handle,
     strategies: Vec<Strategy<P>>,
     connector: Connector,
-    result_recv: oneshot::Receiver<Result<PureConnection>>,
-    result_sender: oneshot::Sender<Result<PureConnection>>,
+    new_service: N,
 }
 
-impl<P> Client<P>
+type ClientInnerSync<P, N> = Arc<Mutex<ClientInner<P, N>>>;
+
+pub struct Client<P, N>
+where
+    N: NewService<P>,
+{
+    inner: ClientInnerSync<P, N>,
+    handle: Handle,
+    result_recvs: FuturesUnordered<StreamFuture<UnboundedReceiver<Result<PureConnection>>>>,
+}
+
+impl<P, N> Client<P, N>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
+    N: NewService<P> + 'static,
 {
-    fn new(handle: Handle) -> Result<Client<P>> {
+    pub fn new(handle: Handle, new_service: N) -> Result<Client<P, N>> {
         let (strategies, connects) =
             strategies::connect(&handle).chain_err(|| "error creating strategy sockets")?;
 
         let connector = Connector::new(handle.clone(), connects);
-        let (result_sender, result_recv) = oneshot::channel();
 
         Ok(Client {
+            inner: Arc::new(Mutex::new(ClientInner {
+                strategies,
+                connector,
+                new_service,
+            })),
             handle,
-            strategies,
-            connector,
-            result_sender,
-            result_recv,
+            result_recvs: FuturesUnordered::new(),
         })
     }
 
-    fn connect_to<A: ToSocketAddrs>(&self, addrs: A) -> Result<()> {
-        let addrs = addrs
+    pub fn connect_to<A: ToSocketAddrs>(&mut self, addrs: A) -> Result<()> {
+        let addr_and_sender = addrs
             .to_socket_addrs()
             .chain_err(|| "error getting socket addresses")?
-            .map(|s| s.clone())
+            .map(|s| {
+                let (sender, receiver) = unbounded();
+                self.result_recvs.push(receiver.into_future());
+                (s.clone(), sender)
+            })
             .collect::<Vec<_>>();
 
         let handle = self.handle.clone();
-        let connector = self.connector.clone();
+        let inner = self.inner.clone();
         self.handle.spawn_fn(move || {
-            for addr in addrs {
-                handle.spawn(connector.connect::<P>(addr).map(|_| ()).map_err(|_| ()));
+            for (addr, sender) in addr_and_sender {
+                let wait = inner.lock().unwrap().connector.connect(addr);
+                handle.spawn(
+                    ServiceHandler::start(
+                        inner.clone(),
+                        wait.map(move |(con, port)| (con, addr, port)),
+                        handle.clone(),
+                        sender,
+                    ).map_err(|e| println!("{:?}", e)),
+                );
             }
 
             Ok(())
@@ -345,31 +150,102 @@ where
     }
 }
 
+impl<P, N> Stream for Client<P, N>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+    N: NewService<P> + 'static,
+{
+    type Item = PureConnection;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        let result = match self.result_recvs.poll() {
+            Ok(Ready(Some(val))) => val,
+            _ => return Ok(NotReady),
+        };
+
+        match result {
+            (Some(con), receiver) => {
+                self.result_recvs.push(receiver.into_future());
+
+                Ok(Ready(Some(con.unwrap())))
+            }
+            _ => Ok(NotReady),
+        }
+    }
+}
+
 #[derive(StateMachineFuture)]
-enum ServiceHandler<P: 'static + Serialize + for<'de> Deserialize<'de>, S: Service<Message = P>> {
-    #[state_machine_future(start, transitions(Finished))]
+enum ServiceHandler<
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+    N: NewService<P> + 'static,
+    F: Future<Item = (Connection<P>, SocketAddr, u16), Error = Error>,
+> {
+    #[state_machine_future(start, transitions(HandleMessages))]
+    WaitForConnection {
+        client: ClientInnerSync<P, N>,
+        wait: F,
+        handle: Handle,
+        result_sender: UnboundedSender<Result<PureConnection>>,
+    },
+    #[state_machine_future(transitions(Finished))]
     HandleMessages {
-        result_sender: oneshot::Sender<Result<PureConnection>>,
+        client: ClientInnerSync<P, N>,
+        result_sender: UnboundedSender<Result<PureConnection>>,
         handle: Handle,
         connection: Connection<P>,
         remote_addr: SocketAddr,
         local_port: u16,
-        service: S,
+        service: <N as NewService<P>>::Service,
+        service_control_receiver: UnboundedReceiver<ServiceControlEvent<P>>,
     },
     #[state_machine_future(ready)] Finished(()),
     #[state_machine_future(error)] ErrorState(Error),
 }
 
-impl<P, S> PollServiceHandler<P, S> for ServiceHandler<P, S>
+impl<P, N, F> PollServiceHandler<P, N, F> for ServiceHandler<P, N, F>
 where
     P: Serialize + for<'de> Deserialize<'de>,
-    S: Service<Message = P>,
+    N: NewService<P> + 'static,
+    F: Future<Item = (Connection<P>, SocketAddr, u16), Error = Error>,
 {
+    fn poll_wait_for_connection<'a>(
+        wait: &'a mut RentToOwn<'a, WaitForConnection<P, N, F>>,
+    ) -> Poll<AfterWaitForConnection<P, N>, Error> {
+        let (connection, remote_addr, local_port) = try_ready!(wait.wait.poll());
+
+        let wait = wait.take();
+        let (servicec, service_control_receiver) = ServiceControl::new();
+
+        let service = wait.client
+            .lock()
+            .unwrap()
+            .new_service
+            .new_service(servicec, remote_addr);
+
+        Ok(Ready(
+            HandleMessages {
+                client: wait.client,
+                connection,
+                remote_addr,
+                local_port,
+                handle: wait.handle,
+                result_sender: wait.result_sender,
+                service,
+                service_control_receiver,
+            }.into(),
+        ))
+    }
+
     fn poll_handle_messages<'a>(
-        handler: &'a mut RentToOwn<'a, HandleMessages<P, S>>,
+        handler: &'a mut RentToOwn<'a, HandleMessages<P, N>>,
     ) -> Poll<AfterHandleMessages, Error> {
         loop {
-            let message = try_ready!(handler.connection.poll());
+            let message = match handler.connection.poll() {
+                Ok(Ready(message)) => message,
+                Ok(NotReady) => break,
+                Err(e) => return Err(e),
+            };
 
             let message = match message {
                 Some(message) => message,
@@ -398,14 +274,44 @@ where
                 Protocol::Connect(addresses, _) => {
                     println!("CONNECT: {:?}", addresses);
                     handler.service.inform(ServiceInformEvent::Connecting);
+                    let connector = handler.client.lock().unwrap().connector.clone();
+                    let wait =
+                        DeviceToDeviceConnection::new(connector, &addresses, &handler.handle);
+
+                    handler.handle.spawn(
+                        ServiceHandler::start(
+                            handler.client.clone(),
+                            wait,
+                            handler.handle.clone(),
+                            handler.result_sender.clone(),
+                        ).map_err(|e| println!("{:?}", e)),
+                    );
                     None
-                }
+                },
+                Protocol::Hello => { println!("HELLO"); Some(Protocol::Hello) },
                 _ => None,
             };
 
             if let Some(answer) = answer {
                 handler.connection.send_and_poll(answer);
             }
+        };
+
+        loop {
+            let msg = match handler.service_control_receiver.poll() { Ok(Ready(Some(msg))) => msg, _ => return Ok(NotReady) };
+
+            match msg {
+                ServiceControlEvent::UseAsResult => {
+                    let handler = handler.take();
+                    println!("USE");
+                    handler.result_sender.unbounded_send(Ok(handler.connection.into_pure()));
+                    return Ok(Ready(Finished(()).into()));
+                },
+                ServiceControlEvent::SendMessage(msg) => {
+                    handler.connection.send_and_poll(Protocol::Embedded(msg));
+                }
+                _ => {}
+            };
         }
     }
 }

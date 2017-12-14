@@ -1,5 +1,5 @@
 use errors::*;
-use protocol::{AddressInformation, Protocol};
+use protocol::{Protocol};
 use strategies::{self, Connection, Strategy};
 
 use std::sync::{Arc, Mutex};
@@ -77,17 +77,9 @@ where
                     Some(Protocol::Acknowledge)
                 }
                 Protocol::KeepAlive => Some(Protocol::KeepAlive),
-                Protocol::PrivateAdressInformation(id, private) => {
-                    let public = AddressInformation {
-                        port: self.address.port(),
-                        addresses: vec![self.address.ip()],
-                    };
-                    let connect = Protocol::Connect {
-                        private,
-                        public,
-                        connection_id: 0,
-                    };
-
+                Protocol::PrivateAdressInformation(id, mut addresses) => {
+                    addresses.push(self.address);
+                    let connect = Protocol::Connect(addresses, 0);
                     self.state.send_message(id, connect)?;
 
                     None

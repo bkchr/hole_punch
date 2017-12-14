@@ -5,7 +5,7 @@ extern crate hyper;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::dev_client::{Client, Service};
+use hole_punch::dev_client::{Client, NewService, Service, ServiceControl, ServiceInformEvent};
 use hole_punch::errors::*;
 
 use tokio_core::reactor::Core;
@@ -16,7 +16,7 @@ use hyper::{Request, Response};
 use hyper::header::ContentLength;
 use hyper::server::Http;
 
-use futures::Future;
+use futures::{Future, Stream};
 
 #[derive(Deserialize, Serialize)]
 enum CarrierProtocol {
@@ -24,6 +24,7 @@ enum CarrierProtocol {
     Registered,
     RequestDevice { name: String },
     DeviceNotFound,
+    AlreadyConnected,
 }
 
 struct CarrierService {}
@@ -31,25 +32,47 @@ struct CarrierService {}
 impl Service for CarrierService {
     type Message = CarrierProtocol;
 
-    fn new_connection(&mut self, addr: SocketAddr) -> Option<Self::Message> {
-        println!("Yeah, new connection, {:?}", addr);
-        Some(CarrierProtocol::Register {
-            name: "nice".to_string(),
-        })
-    }
-
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>> {
         match msg {
             &CarrierProtocol::Registered => {
                 println!("REGISTERED");
                 Ok(None)
+            },
+            &CarrierProtocol::RequestDevice { ref name } => {
+                println!("REQUEST: {}", name);
+                if name == "nice" {
+                    Ok(Some(CarrierProtocol::AlreadyConnected))
+                } else {
+                    Ok(None)
+                }
             }
             _ => Ok(None),
         }
     }
 
-    fn connect_to(&self) -> SocketAddr {
-        ([176, 9, 73, 99], 22222).into()
+    fn inform(&mut self, evt: ServiceInformEvent) {
+        match evt {
+            ServiceInformEvent::Connecting => println!("CONNECTING"),
+        }
+    }
+}
+
+struct NewCarrierService {}
+
+impl NewService<CarrierProtocol> for NewCarrierService {
+    type Service = CarrierService;
+
+    fn new_service(
+        &mut self,
+        mut control: ServiceControl<CarrierProtocol>,
+        addr: SocketAddr,
+    ) -> Self::Service {
+        println!("new connection to: {}", addr);
+
+        control.send_message(CarrierProtocol::Register {
+            name: "nice".to_owned(),
+        });
+        CarrierService {}
     }
 }
 
@@ -82,11 +105,17 @@ fn main() {
     let mut evt_loop = Core::new().unwrap();
 
     loop {
-        let service = CarrierService {};
+        let new_service = NewCarrierService {};
 
-        let client = Client::new(service, evt_loop.handle());
+        let mut client = Client::new(evt_loop.handle().clone(), new_service).expect("client");
+        let addr: SocketAddr = ([127, 0, 0, 1], 22222).into();
+        client.connect_to(&addr).expect("connect");
 
-        let con = evt_loop.run(client).unwrap();
+        let con = evt_loop
+            .run(client.into_future().map_err(|_| ()))
+            .unwrap()
+            .0
+            .unwrap();
 
         let http: Http<hyper::Chunk> = Http::new();
         evt_loop.handle().spawn(

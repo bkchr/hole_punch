@@ -17,6 +17,7 @@ enum CarrierProtocol {
     Registered,
     RequestDevice { name: String },
     DeviceNotFound,
+    AlreadyConnected,
 }
 
 struct Carrier {
@@ -96,6 +97,6 @@ fn main() {
     }));
     let new_service = CarrierServiceCreator { carrier };
 
-    let server = Server::new(new_service, evt_loop.handle());
+    let server = Server::new(new_service, evt_loop.handle()).expect("server");
     server.run(&mut evt_loop).expect("server running");
 }
