@@ -339,19 +339,6 @@ enum ServiceHandler<P: 'static + Serialize + for<'de> Deserialize<'de>, S: Servi
     #[state_machine_future(error)] ErrorState(Error),
 }
 
-impl<P, S> ServiceHandler<P, S>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-    S: Service<Message = P>,
-{
-    fn handle_message<'a>(
-        msg: Protocol<P>,
-        handler: &'a mut RentToOwn<'a, HandleMessages<P, S>>,
-    ) -> Result<()> {
-        Ok(())
-    }
-}
-
 impl<P, S> PollServiceHandler<P, S> for ServiceHandler<P, S>
 where
     P: Serialize + for<'de> Deserialize<'de>,
@@ -401,7 +388,7 @@ where
                 _ => None,
             };
 
-            handler.connection.send(answer.unwrap());
+            handler.connection.send_and_poll(answer.unwrap());
         }
     }
 

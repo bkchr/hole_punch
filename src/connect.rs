@@ -258,7 +258,7 @@ where
             self.1.reset();
 
             let con = (self.0).0.as_mut().expect("can not be polled after ready");
-            con.send(self.2());
+            con.send_and_poll(self.2());
         }
 
         self.0.poll()

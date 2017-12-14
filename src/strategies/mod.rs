@@ -129,7 +129,7 @@ where
 
 impl<P> Connection<P>
     where
-    P: 'static + Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de>,
 {
     pub fn into_pure(self) -> PureConnection {
         match self {
@@ -139,7 +139,7 @@ impl<P> Connection<P>
         }
     }
 
-    pub fn send(&mut self, msg: Protocol<P>) {
+    pub fn send_and_poll(&mut self, msg: Protocol<P>) {
         if self.start_send(msg).is_ok() {
             let _ = self.poll_complete();
         }
