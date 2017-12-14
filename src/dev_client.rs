@@ -1,5 +1,5 @@
 use errors::*;
-use protocol::{AddressInformation, Protocol};
+use protocol::Protocol;
 use strategies::{self, Connection, PureConnection, Strategy};
 use connect::{Connector, DeviceToDeviceConnection};
 
@@ -33,6 +33,11 @@ pub trait Service {
     type Message;
     fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>>;
 }
+
+pub struct ServiceControl {
+    
+}
+
 /*
 enum ClientProtocol {
 
@@ -322,18 +327,14 @@ where
 
 #[derive(StateMachineFuture)]
 enum ServiceHandler<P: 'static + Serialize + for<'de> Deserialize<'de>, S: Service<Message = P>> {
-    #[state_machine_future(start, transitions(Finished, SendClientResult))]
+    #[state_machine_future(start, transitions(Finished))]
     HandleMessages {
         result_sender: oneshot::Sender<Result<PureConnection>>,
+        handle: Handle,
         connection: Connection<P>,
         remote_addr: SocketAddr,
         local_port: u16,
         service: S,
-    },
-    #[state_machine_future(transitions(Finished))]
-    SendClientResult {
-        result_sender: oneshot::Sender<Result<PureConnection>>,
-        connection: Connection<P>,
     },
     #[state_machine_future(ready)] Finished(()),
     #[state_machine_future(error)] ErrorState(Error),
@@ -346,7 +347,7 @@ where
 {
     fn poll_handle_messages<'a>(
         handler: &'a mut RentToOwn<'a, HandleMessages<P, S>>,
-    ) -> Poll<AfterHandleMessages<P>, Error> {
+    ) -> Poll<AfterHandleMessages, Error> {
         loop {
             let message = try_ready!(handler.connection.poll());
 
@@ -369,35 +370,21 @@ where
                         .iter()
                         .map(|v| v.ip())
                         .filter(|ip| !ip.is_loopback())
+                        .map(|ip| (ip, handler.local_port).into())
                         .collect_vec();
 
-                    Some(Protocol::PrivateAdressInformation(
-                        id,
-                        AddressInformation {
-                            port: handler.local_port,
-                            addresses,
-                        },
-                    ))
+                    Some(Protocol::PrivateAdressInformation(id, addresses))
                 }
-                Protocol::Connect {
-                    public, private, ..
-                } => {
-                    println!("CONNECT: {:?}, {:?}", public, private);
+                Protocol::Connect(addresses, _) => {
+                    println!("CONNECT: {:?}", addresses);
                     None
                 }
                 _ => None,
             };
 
-            handler.connection.send_and_poll(answer.unwrap());
+            if let Some(answer) = answer {
+                handler.connection.send_and_poll(answer);
+            }
         }
-    }
-
-    fn poll_send_client_result<'a>(
-        send: &'a mut RentToOwn<'a, SendClientResult<P>>,
-    ) -> Poll<AfterSendClientResult, Error> {
-        let send = send.take();
-        let _ = send.result_sender.send(Ok(send.connection.into_pure()));
-
-        Ok(Ready(Finished(()).into()))
     }
 }

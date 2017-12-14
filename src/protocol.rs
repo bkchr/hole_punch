@@ -1,23 +1,13 @@
-use std::net::IpAddr;
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct AddressInformation {
-    pub addresses: Vec<IpAddr>,
-    pub port: u16,
-}
+use std::net::SocketAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Protocol<P> {
     Register,
-    Connect {
-        public: AddressInformation,
-        private: AddressInformation,
-        connection_id: u32,
-    },
+    Connect(Vec<SocketAddr>, u32),
     KeepAlive,
     Embedded(P),
     Acknowledge,
     RequestPrivateAdressInformation(u64),
-    PrivateAdressInformation(u64, AddressInformation),
+    PrivateAdressInformation(u64, Vec<SocketAddr>),
     Hello,
 }
