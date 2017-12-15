@@ -10,4 +10,6 @@ pub enum Protocol<P> {
     RequestPrivateAdressInformation(u64),
     PrivateAdressInformation(u64, Vec<SocketAddr>),
     Hello,
+    ReUseConnection,
+    AckReUseConnection,
 }

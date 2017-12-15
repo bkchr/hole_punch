@@ -27,7 +27,9 @@ enum CarrierProtocol {
     AlreadyConnected,
 }
 
-struct CarrierService {}
+struct CarrierService {
+    control: ServiceControl<CarrierProtocol>,
+}
 
 impl Service for CarrierService {
     type Message = CarrierProtocol;
@@ -72,7 +74,7 @@ impl NewService<CarrierProtocol> for NewCarrierService {
         control.send_message(CarrierProtocol::Register {
             name: "nice".to_owned(),
         });
-        CarrierService {}
+        CarrierService { control }
     }
 }
 

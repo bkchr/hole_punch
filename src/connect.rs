@@ -206,7 +206,7 @@ impl Connector {
 pub struct WaitForMessage<P>(Option<Connection<P>>, Protocol<P>);
 
 impl<P> WaitForMessage<P> {
-    fn new(con: Connection<P>, msg: Protocol<P>) -> WaitForMessage<P> {
+    pub fn new(con: Connection<P>, msg: Protocol<P>) -> WaitForMessage<P> {
         WaitForMessage(Some(con), msg)
     }
 }
@@ -363,11 +363,14 @@ where
         handle: &Handle,
     ) -> DeviceToDeviceConnection<P> {
         let mut strat = strat.get_connect();
+        let address: SocketAddr = ([127,0,0,1], addresses.get(0).unwrap().port()).into();
         DeviceToDeviceConnection {
             wait_for_connect: futures_unordered(
+                ::std::iter::once(DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(address).unwrap(), address))
+                    /*
                 addresses
-                    .iter()
-                    .map(|a| DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a)),
+                    .iter().take(1)
+                    .map(|a| DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a))*/,
             ),
             wait_for_hello: FuturesUnordered::new(),
             handle: handle.clone(),

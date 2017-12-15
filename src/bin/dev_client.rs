@@ -40,6 +40,10 @@ impl Service for CarrierService {
                 println!("REGISTERED");
                 Ok(None)
             }
+            &CarrierProtocol::Register { ref name } => {
+                println!("REGISTER: {}", name);
+                Ok(None)
+            }
             &CarrierProtocol::DeviceNotFound => {
                 println!("DEVICENOTFOUND");
                 bail!("NOT FOUND");

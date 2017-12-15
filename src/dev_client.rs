@@ -1,7 +1,7 @@
 use errors::*;
 use protocol::Protocol;
 use strategies::{self, Connection, PureConnection, Strategy};
-use connect::{Connector, DeviceToDeviceConnection};
+use connect::{Connector, DeviceToDeviceConnection, WaitForMessage};
 
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::mem;
@@ -188,7 +188,7 @@ enum ServiceHandler<
         handle: Handle,
         result_sender: UnboundedSender<Result<PureConnection>>,
     },
-    #[state_machine_future(transitions(Finished))]
+    #[state_machine_future(transitions(WaitForAckReUseConnection, Finished))]
     HandleMessages {
         client: ClientInnerSync<P, N>,
         result_sender: UnboundedSender<Result<PureConnection>>,
@@ -198,6 +198,11 @@ enum ServiceHandler<
         local_port: u16,
         service: <N as NewService<P>>::Service,
         service_control_receiver: UnboundedReceiver<ServiceControlEvent<P>>,
+    },
+    #[state_machine_future(transitions(Finished))]
+    WaitForAckReUseConnection {
+        result_sender: UnboundedSender<Result<PureConnection>>,
+        wait: WaitForMessage<P>,
     },
     #[state_machine_future(ready)] Finished(()),
     #[state_machine_future(error)] ErrorState(Error),
@@ -223,6 +228,7 @@ where
             .new_service
             .new_service(servicec, remote_addr);
 
+        println!("CONNECTION NEW");
         Ok(Ready(
             HandleMessages {
                 client: wait.client,
@@ -239,7 +245,7 @@ where
 
     fn poll_handle_messages<'a>(
         handler: &'a mut RentToOwn<'a, HandleMessages<P, N>>,
-    ) -> Poll<AfterHandleMessages, Error> {
+    ) -> Poll<AfterHandleMessages<P>, Error> {
         loop {
             let message = match handler.connection.poll() {
                 Ok(Ready(message)) => message,
@@ -287,31 +293,66 @@ where
                         ).map_err(|e| println!("{:?}", e)),
                     );
                     None
-                },
-                Protocol::Hello => { println!("HELLO"); Some(Protocol::Hello) },
+                }
+                Protocol::ReUseConnection => {
+                    handler.connection.send_and_poll(Protocol::AckReUseConnection);
+                    let handler = handler.take();
+                    println!("REUSE");
+                    handler
+                        .result_sender
+                        .unbounded_send(Ok(handler.connection.into_pure()));
+                    return Ok(Ready(Finished(()).into()));
+                }
+                Protocol::Hello => {
+                    println!("HELLO");
+                    None
+                }
                 _ => None,
             };
 
             if let Some(answer) = answer {
                 handler.connection.send_and_poll(answer);
             }
-        };
+        }
 
         loop {
-            let msg = match handler.service_control_receiver.poll() { Ok(Ready(Some(msg))) => msg, _ => return Ok(NotReady) };
+            let msg = match handler.service_control_receiver.poll() {
+                Ok(Ready(Some(msg))) => msg,
+                _ => return Ok(NotReady),
+            };
 
             match msg {
                 ServiceControlEvent::UseAsResult => {
+                    handler.connection.send_and_poll(Protocol::ReUseConnection);
                     let handler = handler.take();
-                    println!("USE");
-                    handler.result_sender.unbounded_send(Ok(handler.connection.into_pure()));
-                    return Ok(Ready(Finished(()).into()));
-                },
+                    println!("USEASRESULT");
+                    return Ok(Ready(
+                        WaitForAckReUseConnection {
+                            result_sender: handler.result_sender,
+                            wait: WaitForMessage::new(
+                                handler.connection,
+                                Protocol::AckReUseConnection,
+                            ),
+                        }.into(),
+                    ));
+                }
                 ServiceControlEvent::SendMessage(msg) => {
+                    println!("Send");
                     handler.connection.send_and_poll(Protocol::Embedded(msg));
                 }
                 _ => {}
             };
         }
+    }
+
+
+    fn poll_wait_for_ack_re_use_connection<'a>(
+        wait: &'a mut RentToOwn<'a, WaitForAckReUseConnection<P>>,
+    ) -> Poll<AfterWaitForAckReUseConnection, Error> {
+        let con = try_ready!(wait.wait.poll());
+
+        println!("REUSE ACK");
+        wait.result_sender.unbounded_send(Ok(con.into_pure()));
+        Ok(Ready(Finished(()).into()))
     }
 }
