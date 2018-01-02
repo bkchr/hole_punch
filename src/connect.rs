@@ -93,7 +93,9 @@ where
     fn poll_waiting_for_connect<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForConnect<P>>,
     ) -> Poll<AfterWaitingForConnect<P>, Error> {
-        if wait.timeout.poll().is_err() { bail!("wait for connect timeout") };
+        if wait.timeout.poll().is_err() {
+            bail!("wait for connect timeout")
+        };
         let mut connection = try_ready!(wait.connect.poll());
 
         let wait = wait.take();
@@ -111,7 +113,9 @@ where
     fn poll_waiting_for_register_response<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForRegisterResponse<P>>,
     ) -> Poll<AfterWaitingForRegisterResponse<P>, Error> {
-        if wait.timeout.poll().is_err() { bail!("wait for register response") };
+        if wait.timeout.poll().is_err() {
+            bail!("wait for register response")
+        };
 
         let connection = try_ready!(wait.wait_for_message.poll());
 
@@ -336,10 +340,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     fn new(f: F, addr: SocketAddr) -> DeviceToDeviceConnectionDataWrapperFirst<P, F> {
-        DeviceToDeviceConnectionDataWrapperFirst {
-            future: f,
-            addr,
-        }
+        DeviceToDeviceConnectionDataWrapperFirst { future: f, addr }
     }
 }
 
@@ -363,14 +364,16 @@ where
         handle: &Handle,
     ) -> DeviceToDeviceConnection<P> {
         let mut strat = strat.get_connect();
-        let address: SocketAddr = ([127,0,0,1], addresses.get(0).unwrap().port()).into();
+        let address: SocketAddr = ([127, 0, 0, 1], addresses.get(0).unwrap().port()).into();
         DeviceToDeviceConnection {
             wait_for_connect: futures_unordered(
-                ::std::iter::once(DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(address).unwrap(), address))
-                    /*
+                ::std::iter::once(DeviceToDeviceConnectionDataWrapperFirst::new(
+                    strat.connect(address).unwrap(),
+                    address,
+                )), /*
                 addresses
                     .iter().take(1)
-                    .map(|a| DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a))*/,
+                    .map(|a| DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a))*/
             ),
             wait_for_hello: FuturesUnordered::new(),
             handle: handle.clone(),

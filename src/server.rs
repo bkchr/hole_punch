@@ -1,5 +1,5 @@
 use errors::*;
-use protocol::{Protocol};
+use protocol::Protocol;
 use strategies::{self, Connection, Strategy};
 
 use std::sync::{Arc, Mutex};

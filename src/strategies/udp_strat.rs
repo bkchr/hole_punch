@@ -5,6 +5,9 @@ use strategies;
 
 use std::marker::PhantomData;
 use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::io;
+use std::cmp::Ordering;
 
 use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Stream};
@@ -134,4 +137,67 @@ pub fn connect_async<P>(handle: &Handle) -> Result<(strategies::Strategy<P>, str
         strategies::Strategy::Udp(server),
         strategies::Connect::Udp(Connect(connect)),
     ))
+}
+
+enum ReliableMsg<P> {
+    Ack,
+    Msg(Protocol<P>),
+}
+
+struct ReliableConnection<P> {
+    inner: WriteBincode<
+        ReadBincode<length_delimited::Framed<udp::UdpServerStream>, (u64, ReliableMsg<P>)>,
+        (u64, ReliableMsg<P>),
+    >,
+    send_msgs_without_ack: HashMap<u64, Protocol<P>>,
+}
+
+impl<P> ReliableConnection<P> {
+    fn send_ack(id: u64) {}
+}
+
+impl<P> Stream for ReliableConnection<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type Item = Protocol<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        loop {
+            let msg = match self.inner.poll() {
+                Err(err) if err.get_ref().is::<length_delimited::FrameTooBig>() => {}
+                Err(e) => return Err(e),
+                Ok(Ready(Some(msg))) => msg,
+                Ok(NotReady) => return Ok(NotReady),
+                Ok(Ready(None)) => return Ok(Ready(None)),
+            };
+
+            match msg {
+                (id, Ack) => {
+                    self.send_msgs_without_ack.remove(id);
+                }
+                (id, Msg(msg)) => {
+                    self.send_ack(id);
+                    return Ok(Some(Ready(msg)));
+                }
+            };
+        }
+    }
+}
+
+impl<P> Sink for ReliableConnection<P>
+    where
+    P: Serialize + for<'de> Deserialize<'de>,
+{
+    type SinkItem = Protocol<P>;
+    type SinkError = Error;
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        self.inner.start_send()
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        self.inner.poll_complete()
+    }
 }

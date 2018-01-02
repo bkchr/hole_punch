@@ -295,7 +295,9 @@ where
                     None
                 }
                 Protocol::ReUseConnection => {
-                    handler.connection.send_and_poll(Protocol::AckReUseConnection);
+                    handler
+                        .connection
+                        .send_and_poll(Protocol::AckReUseConnection);
                     let handler = handler.take();
                     println!("REUSE");
                     handler
@@ -344,7 +346,6 @@ where
             };
         }
     }
-
 
     fn poll_wait_for_ack_re_use_connection<'a>(
         wait: &'a mut RentToOwn<'a, WaitForAckReUseConnection<P>>,

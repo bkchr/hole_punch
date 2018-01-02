@@ -214,23 +214,21 @@ impl UdpServerInner {
             socket: &mut UdpSocket,
         ) -> Option<(Vec<u8>, SocketAddr)> {
             let mut overflow = None;
-            connections.retain(|addr, c| {
-                loop {
-                    if overflow.is_some() {
-                        return true;
-                    }
-
-                    let _ = match c.send() {
-                        Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
-                            socket.send_to(&data, &addr)
-                        } else {
-                            overflow = Some((data, addr.clone()));
-                            return true;
-                        },
-                        Ok(None) => return true,
-                        _ => return false,
-                    };
+            connections.retain(|addr, c| loop {
+                if overflow.is_some() {
+                    return true;
                 }
+
+                let _ = match c.send() {
+                    Ok(Some(data)) => if let Ready(()) = socket.poll_write() {
+                        socket.send_to(&data, &addr)
+                    } else {
+                        overflow = Some((data, addr.clone()));
+                        return true;
+                    },
+                    Ok(None) => return true,
+                    _ => return false,
+                };
             });
 
             overflow

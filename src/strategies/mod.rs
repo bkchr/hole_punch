@@ -42,9 +42,9 @@ pub enum WaitForConnect<P> {
     Udp(udp_strat::WaitForConnect<P>),
 }
 
-impl<P> Future for WaitForConnect<P> 
-    where
-        P: Serialize + for<'de> Deserialize<'de>,
+impl<P> Future for WaitForConnect<P>
+where
+    P: Serialize + for<'de> Deserialize<'de>,
 {
     type Item = (Connection<P>, u16);
     type Error = Error;
@@ -128,7 +128,7 @@ where
 }
 
 impl<P> Connection<P>
-    where
+where
     P: Serialize + for<'de> Deserialize<'de>,
 {
     pub fn into_pure(self) -> PureConnection {
