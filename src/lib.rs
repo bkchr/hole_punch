@@ -15,6 +15,7 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_bincode;
 extern crate tokio_timer;
+extern crate bincode;
 
 mod protocol;
 pub mod server;
@@ -24,5 +25,6 @@ mod udp;
 pub mod errors;
 mod strategies;
 mod connect;
+mod timeout;
 
 pub use strategies::PureConnection;

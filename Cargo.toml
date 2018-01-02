@@ -17,3 +17,4 @@ tokio-serde-bincode = { git = "https://github.com/alexcrichton/tokio-serde-binco
 itertools = "0.7.1"
 hyper = "0.11"
 state_machine_future = { git = "https://github.com/bkchr/state_machine_future.git", "branch" = "complex_type_parsing" }
+bincode = "0.8"

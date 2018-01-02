@@ -1,6 +1,7 @@
 use errors::*;
 use protocol::Protocol;
 use strategies::{Connect, Connection, WaitForConnect};
+use timeout::Timeout;
 
 use std::net::SocketAddr;
 use std::time::{Duration, Instant};
@@ -15,38 +16,6 @@ use futures::stream::{futures_unordered, FuturesUnordered};
 use serde::{Deserialize, Serialize};
 
 use state_machine_future::RentToOwn;
-
-pub struct Timeout(reactor::Timeout, Duration);
-
-impl Timeout {
-    fn new(dur: Duration, handle: &Handle) -> Timeout {
-        Timeout(
-            reactor::Timeout::new(dur, handle).expect("no timeout!!"),
-            dur,
-        )
-    }
-
-    fn reset(&mut self) {
-        self.0.reset(Instant::now() + self.1);
-    }
-
-    fn new_reset(mut self) -> Self {
-        self.reset();
-        self
-    }
-}
-
-impl Future for Timeout {
-    type Item = ();
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        try_ready!(self.0.poll());
-
-        // if we come to this point, the timer finished, aka timeout!
-        bail!("Timeout")
-    }
-}
 
 #[derive(StateMachineFuture)]
 enum ConnectStateMachine<P: 'static + Serialize + for<'de> Deserialize<'de>> {
