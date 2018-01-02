@@ -11,6 +11,8 @@ use hole_punch::errors::*;
 use tokio_core::reactor::Core;
 
 use std::net::SocketAddr;
+use std::thread;
+use std::time::Duration;
 
 use hyper::{Request, Response};
 use hyper::header::ContentLength;
@@ -18,7 +20,7 @@ use hyper::server::Http;
 
 use futures::{Future, Stream};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
     Register { name: String },
     Registered,
@@ -92,6 +94,7 @@ impl hyper::server::Service for HelloWorld {
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, _req: Request) -> Self::Future {
+        println!("REQUEST");
         // We're currently ignoring the Request
         // And returning an 'ok' Future, which means it's ready
         // immediately, and build a Response with the 'PHRASE' body.
@@ -119,8 +122,10 @@ fn main() {
             .0
             .unwrap();
 
+        thread::sleep(Duration::from_millis(500));
+        println!("AFTER SLEEP");
         let http: Http<hyper::Chunk> = Http::new();
-        evt_loop.handle().spawn(
+        evt_loop.run(
             http.serve_connection(con, HelloWorld)
                 .map_err(|_| ())
                 .map(|_| ()),

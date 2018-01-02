@@ -18,7 +18,7 @@ use std::cell::RefCell;
 
 use futures::{Future, Stream};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
     Register { name: String },
     Registered,
@@ -114,6 +114,7 @@ fn main() {
         .0
         .unwrap();
 
+    println!("DOING HTTP");
     let client = hyper::Client::configure()
         .connector(HttpConnector {
             con: RefCell::new(Some(con)),

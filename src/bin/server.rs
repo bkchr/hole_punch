@@ -11,7 +11,7 @@ use tokio_core::reactor::Core;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
     Register { name: String },
     Registered,

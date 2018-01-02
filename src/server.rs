@@ -35,7 +35,7 @@ pub trait NewService {
 struct ServiceHandler<T, P>
 where
     T: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     connection: Connection<P>,
     service: T,
@@ -48,7 +48,7 @@ where
 impl<T, P> ServiceHandler<T, P>
 where
     T: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     fn send_message(&mut self, msg: Protocol<P>) -> Result<()> {
         self.connection
@@ -116,7 +116,7 @@ where
 impl<T, P> Future for ServiceHandler<T, P>
 where
     T: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     type Item = ();
     type Error = Error;
@@ -148,7 +148,7 @@ impl<N, P> Server<N, P>
 where
     N: NewService,
     <N as NewService>::Service: Service<Message = P> + 'static,
-    P: Serialize + for<'de> Deserialize<'de> + 'static,
+    P: Serialize + for<'de> Deserialize<'de> + 'static + Clone,
 {
     pub fn new(new_service: N, handle: Handle) -> Result<Server<N, P>> {
         let state = Arc::new(Mutex::new(State::new()));
@@ -171,7 +171,7 @@ impl<N, P> Future for Server<N, P>
 where
     N: NewService,
     <N as NewService>::Service: Service<Message = P> + 'static,
-    P: Serialize + for<'de> Deserialize<'de> + 'static,
+    P: Serialize + for<'de> Deserialize<'de> + 'static + Clone,
 {
     type Item = ();
     type Error = Error;

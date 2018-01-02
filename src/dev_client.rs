@@ -97,7 +97,7 @@ where
 
 impl<P, N> Client<P, N>
 where
-    P: 'static + Serialize + for<'de> Deserialize<'de>,
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
 {
     pub fn new(handle: Handle, new_service: N) -> Result<Client<P, N>> {
@@ -152,7 +152,7 @@ where
 
 impl<P, N> Stream for Client<P, N>
 where
-    P: 'static + Serialize + for<'de> Deserialize<'de>,
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
 {
     type Item = PureConnection;
@@ -177,7 +177,7 @@ where
 
 #[derive(StateMachineFuture)]
 enum ServiceHandler<
-    P: 'static + Serialize + for<'de> Deserialize<'de>,
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
     F: Future<Item = (Connection<P>, SocketAddr, u16), Error = Error>,
 > {
@@ -210,7 +210,7 @@ enum ServiceHandler<
 
 impl<P, N, F> PollServiceHandler<P, N, F> for ServiceHandler<P, N, F>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
     F: Future<Item = (Connection<P>, SocketAddr, u16), Error = Error>,
 {
@@ -306,7 +306,8 @@ where
                     return Ok(Ready(Finished(()).into()));
                 }
                 Protocol::Hello => {
-                    println!("HELLO");
+                    //println!("HELLO");
+                    //Some(Protocol::HelloAck)
                     None
                 }
                 _ => None,
@@ -339,7 +340,6 @@ where
                     ));
                 }
                 ServiceControlEvent::SendMessage(msg) => {
-                    println!("Send");
                     handler.connection.send_and_poll(Protocol::Embedded(msg));
                 }
                 _ => {}

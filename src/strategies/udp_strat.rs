@@ -17,29 +17,18 @@ use tokio_io::codec::length_delimited;
 
 use tokio_core::reactor::Handle;
 
-use tokio_serde_bincode::{ReadBincode, WriteBincode};
+use tokio_serde_json::{ReadJson, WriteJson};
 
 use serde::{Deserialize, Serialize};
 
-pub type Connection<P> = WriteBincode<
-    ReadBincode<length_delimited::Framed<udp::UdpServerStream>, Protocol<P>>,
-    Protocol<P>,
->;
+pub type Connection<P> = ReliableConnection<P>;
 
 pub type PureConnection = udp::UdpServerStream;
-
-impl<P> From<Connection<P>> for strategies::Connection<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn from(value: Connection<P>) -> strategies::Connection<P> {
-        strategies::Connection::Udp(value)
-    }
-}
 
 pub struct Server<P> {
     server: udp::UdpServer,
     marker: PhantomData<P>,
+    handle: Handle,
 }
 
 impl<P> Server<P>
@@ -51,27 +40,21 @@ where
     }
 }
 
-impl<P> From<udp::UdpServerStream> for strategies::Connection<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn from(val: udp::UdpServerStream) -> strategies::Connection<P> {
-        strategies::Connection::Udp(WriteBincode::new(ReadBincode::new(
-            length_delimited::Framed::new(val),
-        )))
-    }
-}
-
 impl<P> Stream for Server<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     type Item = (strategies::Connection<P>, SocketAddr);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         match self.server.poll() {
-            Ok(Ready(Some(con))) => return Ok(Ready(Some((con.0.into(), con.1)))),
+            Ok(Ready(Some(con))) => {
+                return Ok(Ready(Some((
+                    strategies::Connection::Udp(ReliableConnection::new(con.0, &self.handle)),
+                    con.1,
+                ))))
+            }
             r @ _ => {
                 return r.map(|r| r.map(|_| None))
                     .chain_err(|| "error polling UdpServer")
@@ -86,13 +69,14 @@ pub fn accept_async<P>(handle: &Handle) -> Result<strategies::Strategy<P>> {
     let server = Server {
         server: server,
         marker: Default::default(),
+        handle: handle.clone(),
     };
 
     Ok(strategies::Strategy::Udp(server))
 }
 
 #[derive(Clone)]
-pub struct Connect(udp::Connect);
+pub struct Connect(udp::Connect, Handle);
 
 impl Connect {
     pub fn connect<P>(&mut self, addr: SocketAddr) -> Result<strategies::WaitForConnect<P>>
@@ -101,16 +85,17 @@ impl Connect {
     {
         Ok(strategies::WaitForConnect::Udp(WaitForConnect(
             self.0.connect(addr)?,
+            self.1.clone(),
             Default::default(),
         )))
     }
 }
 
-pub struct WaitForConnect<P>(udp::WaitForConnect, PhantomData<P>);
+pub struct WaitForConnect<P>(udp::WaitForConnect, Handle, PhantomData<P>);
 
 impl<P> Future for WaitForConnect<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     type Item = (strategies::Connection<P>, u16);
     type Error = Error;
@@ -119,7 +104,7 @@ where
         self.0.poll().map(|v| {
             v.map(|v| {
                 let port = v.get_local_addr().port();
-                (v.into(), port)
+                (strategies::Connection::Udp(ReliableConnection::new(v, &self.1)), port)
             })
         })
     }
@@ -131,11 +116,12 @@ pub fn connect_async<P>(handle: &Handle) -> Result<(strategies::Strategy<P>, str
     let server = Server {
         server: server,
         marker: Default::default(),
+        handle: handle.clone(),
     };
 
     Ok((
         strategies::Strategy::Udp(server),
-        strategies::Connect::Udp(Connect(connect)),
+        strategies::Connect::Udp(Connect(connect, handle.clone())),
     ))
 }
 
@@ -207,12 +193,9 @@ impl<P> Ord for SortedRecv<P> {
     }
 }
 
-struct ReliableConnection<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    inner: WriteBincode<
-        ReadBincode<LengthDelimitedWrapper, (u64, ReliableMsg<P>)>,
+pub struct ReliableConnection<P> {
+    inner: WriteJson<
+        ReadJson<LengthDelimitedWrapper, (u64, ReliableMsg<P>)>,
         (u64, ReliableMsg<P>),
     >,
     send_msgs_without_ack: HashMap<u64, (Protocol<P>, Timeout)>,
@@ -227,9 +210,29 @@ impl<P> ReliableConnection<P>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
+    fn new(
+        con: udp::UdpServerStream,
+        handle: &Handle,
+    ) -> ReliableConnection<P> {
+        let inner = WriteJson::new(ReadJson::new(LengthDelimitedWrapper(length_delimited::Framed::new(con))));
+
+        ReliableConnection {
+            inner,
+            send_msgs_without_ack: HashMap::new(),
+            next_id: 1,
+            last_propagated_id: 0,
+            received_heap: BinaryHeap::new(),
+            handle: handle.clone(),
+        }
+    }
+
     fn send_ack(&mut self, id: u64) {
         self.inner.start_send((id, ReliableMsg::Ack));
         self.inner.poll_complete();
+    }
+
+    pub fn into_pure(self) -> PureConnection {
+        self.inner.into_inner().into_inner().0.into_inner()
     }
 }
 
@@ -242,8 +245,8 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         fn check_resend<P>(
-            inner: &mut WriteBincode<
-                ReadBincode<LengthDelimitedWrapper, (u64, ReliableMsg<P>)>,
+            inner: &mut WriteJson<
+                ReadJson<LengthDelimitedWrapper, (u64, ReliableMsg<P>)>,
                 (u64, ReliableMsg<P>),
             >,
             sends: &mut HashMap<u64, (Protocol<P>, Timeout)>,
@@ -254,6 +257,7 @@ where
                 .iter_mut()
                 .for_each(|(id, &mut (ref msg, ref mut timeout))| {
                     if timeout.poll().is_err() {
+                        println!("RESEND");
                         inner.start_send((*id, ReliableMsg::Msg(msg.clone())));
                         timeout.reset();
                     }
@@ -276,15 +280,18 @@ where
 
             match msg {
                 Some((id, ReliableMsg::Ack)) => {
+                    println!("ACK({})", id);
                     self.send_msgs_without_ack.remove(&id);
                 }
                 Some((id, ReliableMsg::Msg(msg))) => {
+                    println!("SENDACK({})", id);
                     self.send_ack(id);
 
                     // if we already propagated the msg, we don't need to do anything, it just means
                     // that the other end does not received the ack.
                     if id > self.last_propagated_id {
                         if self.last_propagated_id + 1 == id {
+                            println!("PROPAGATE");
                             self.last_propagated_id = id;
                             return Ok(Ready(Some(msg)));
                         } else {

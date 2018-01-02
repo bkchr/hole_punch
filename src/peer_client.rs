@@ -8,7 +8,6 @@ use std::io;
 
 use tokio_core::reactor::Core;
 use tokio_io::codec::length_delimited;
-use tokio_serde_bincode::{ReadBincode, WriteBincode};
 use tokio_timer;
 
 use futures::{self, Future, Sink, Stream};

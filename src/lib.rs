@@ -13,9 +13,8 @@ extern crate state_machine_future;
 extern crate tokio_core;
 #[macro_use]
 extern crate tokio_io;
-extern crate tokio_serde_bincode;
+extern crate tokio_serde_json;
 extern crate tokio_timer;
-extern crate bincode;
 
 mod protocol;
 pub mod server;

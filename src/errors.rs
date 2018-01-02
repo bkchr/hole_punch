@@ -1,9 +1,9 @@
 use std::io;
-use bincode;
+use tokio_serde_json;
 
 error_chain! {
     foreign_links {
         Io(io::Error);
-        Bincode(bincode::Error);
+        TJson(tokio_serde_json::Error);
     }
 }

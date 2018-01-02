@@ -30,7 +30,7 @@ pub enum Connect {
 impl Connect {
     pub fn connect<P>(&mut self, addr: SocketAddr) -> Result<WaitForConnect<P>>
     where
-        P: Serialize + for<'de> Deserialize<'de>,
+        P: Serialize + for<'de> Deserialize<'de> + Clone,
     {
         match self {
             &mut Connect::Udp(ref mut connect) => connect.connect(addr),
@@ -44,7 +44,7 @@ pub enum WaitForConnect<P> {
 
 impl<P> Future for WaitForConnect<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     type Item = (Connection<P>, u16);
     type Error = Error;
@@ -62,7 +62,7 @@ pub enum Strategy<P> {
 
 impl<P> Stream for Strategy<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     type Item = (Connection<P>, SocketAddr);
     type Error = Error;
@@ -76,7 +76,7 @@ where
 
 impl<P> Strategy<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn local_addr(&self) -> Result<SocketAddr> {
         match self {
@@ -91,7 +91,7 @@ pub enum Connection<P> {
 
 impl<P> Stream for Connection<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     type Item = Protocol<P>;
     type Error = Error;
@@ -107,7 +107,7 @@ where
 
 impl<P> Sink for Connection<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     type SinkItem = Protocol<P>;
     type SinkError = Error;
@@ -129,12 +129,12 @@ where
 
 impl<P> Connection<P>
 where
-    P: Serialize + for<'de> Deserialize<'de>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn into_pure(self) -> PureConnection {
         match self {
             Connection::Udp(stream) => {
-                PureConnection::Udp(stream.into_inner().into_inner().into_inner())
+                PureConnection::Udp(stream.into_pure())
             }
         }
     }
