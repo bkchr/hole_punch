@@ -133,9 +133,7 @@ where
 {
     pub fn into_pure(self) -> PureConnection {
         match self {
-            Connection::Udp(stream) => {
-                PureConnection::Udp(stream.into_pure())
-            }
+            Connection::Udp(stream) => PureConnection::Udp(stream.into_pure()),
         }
     }
 

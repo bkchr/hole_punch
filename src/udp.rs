@@ -342,7 +342,6 @@ impl Stream for UdpServerStream {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        println!("UDPSERVERSTREAM POLL");
         self.receiver.poll()
     }
 }
@@ -391,6 +390,9 @@ impl io::Read for UdpServerStream {
                 // TODO: maybe integrate tmp buffer for 'lost' elements.
                 let len = min(buf.len(), data.len());
                 &buf[..len].copy_from_slice(&data.as_slice()[..len]);
+                if buf.len() < data.len() {
+                    println!("DATALOSS!!");
+                }
                 Ok(len)
             }
             Ready(None) => Ok(0),

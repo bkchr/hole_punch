@@ -91,10 +91,10 @@ impl hyper::server::Service for HttpConnector {
     type Request = hyper::Uri;
     type Response = hole_punch::PureConnection;
     type Error = io::Error;
-    type Future = Box<futures::Future<Item = Self::Response, Error = io::Error>>;
+    type Future = futures::future::FutureResult<Self::Response, io::Error>;
 
     fn call(&self, _: hyper::Uri) -> Self::Future {
-        futures::future::ok(self.con.borrow_mut().take().unwrap()).boxed()
+        futures::future::ok(self.con.borrow_mut().take().unwrap())
     }
 }
 

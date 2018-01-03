@@ -94,7 +94,6 @@ impl hyper::server::Service for HelloWorld {
     type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
 
     fn call(&self, _req: Request) -> Self::Future {
-        println!("REQUEST");
         // We're currently ignoring the Request
         // And returning an 'ok' Future, which means it's ready
         // immediately, and build a Response with the 'PHRASE' body.
@@ -122,12 +121,11 @@ fn main() {
             .0
             .unwrap();
 
-        thread::sleep(Duration::from_millis(500));
         println!("AFTER SLEEP");
         let http: Http<hyper::Chunk> = Http::new();
-        evt_loop.run(
+        evt_loop.handle().spawn(
             http.serve_connection(con, HelloWorld)
-                .map_err(|_| ())
+                .map_err(|e| println!("\n\n\nERROR: {:?}\n\n\n", e))
                 .map(|_| ()),
         );
     }

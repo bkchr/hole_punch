@@ -192,49 +192,27 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let message = match try_ready!(
-            self.0
-                .as_mut()
-                .expect("can not be polled when message was already received")
-                .poll()
-        ) {
-            Some(message) => message,
-            None => bail!("connection closed while waiting for Message"),
-        };
+        loop {
+            println!("POLL WAIT");
+            let message = match try_ready!(
+                self.0
+                    .as_mut()
+                    .expect("can not be polled when message was already received")
+                    .poll()
+            ) {
+                Some(message) => message,
+                None => bail!("connection closed while waiting for Message"),
+            };
 
-        println!("WAIT: {:?} == {:?}", discriminant(&self.1), discriminant(&message));
-        if discriminant(&self.1) == discriminant(&message) {
-            Ok(Ready(self.0.take().unwrap()))
-        } else {
-            Ok(NotReady)
+            println!(
+                "WAIT: {:?} == {:?}",
+                discriminant(&self.1),
+                discriminant(&message)
+            );
+            if discriminant(&self.1) == discriminant(&message) {
+                return Ok(Ready(self.0.take().unwrap()));
+            }
         }
-    }
-}
-
-struct PeriodicSend<P>(WaitForMessage<P>, Timeout, Protocol<P>);
-
-impl<P> PeriodicSend<P> {
-    fn new(wait: WaitForMessage<P>, dur: Duration, send: Protocol<P>, handle: &Handle) -> PeriodicSend<P> {
-        PeriodicSend(wait, Timeout::new(dur, handle), send)
-    }
-}
-
-impl<P> Future for PeriodicSend<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Connection<P>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if self.1.poll().is_err() {
-            self.1.reset();
-
-            let con = (self.0).0.as_mut().expect("can not be polled after ready");
-            con.send_and_poll(self.2.clone());
-        }
-
-        self.0.poll()
     }
 }
 
@@ -377,7 +355,10 @@ where
         }
 
         match try_ready!(self.wait_for_hello.poll()) {
-            Some(con) => { println!("DEVICETODEVICE: {} {}", con.1, con.2); Ok(Ready(con))},
+            Some(con) => {
+                println!("DEVICETODEVICE: {} {}", con.1, con.2);
+                Ok(Ready(con))
+            }
             None => Ok(NotReady),
         }
     }
