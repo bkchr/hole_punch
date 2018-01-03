@@ -211,7 +211,7 @@ impl<M> Ord for SortedRecv<M> {
 }
 
 pub struct ReliableConnection<M> {
-    inner: WriteJson<ReadJson<LengthDelimitedWrapper, ReliableMsg<M>>, ReliableMsg<M>>,
+    inner: Option<WriteJson<ReadJson<LengthDelimitedWrapper, ReliableMsg<M>>, ReliableMsg<M>>>,
     send_msgs_without_ack: HashMap<u64, (ReliableMsg<M>, Timeout)>,
     next_id: u64,
     // the last id that was propagated upwards
@@ -226,8 +226,8 @@ where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
     fn new(con: udp::UdpServerStream, handle: &Handle) -> ReliableConnection<P> {
-        let inner = WriteJson::new(ReadJson::new(LengthDelimitedWrapper(Some(
-            length_delimited::Framed::new(con),
+        let inner = Some(WriteJson::new(ReadJson::new(LengthDelimitedWrapper(
+            Some(length_delimited::Framed::new(con)),
         ))));
 
         ReliableConnection {
@@ -242,12 +242,17 @@ where
     }
 
     fn send_ack(&mut self, id: u64) {
-        self.inner.start_send(ReliableMsg::Ack { id });
-        self.inner.poll_complete();
+        self.inner
+            .as_mut()
+            .unwrap()
+            .start_send(ReliableMsg::Ack { id });
+        self.inner.as_mut().unwrap().poll_complete();
     }
 
-    pub fn into_pure(self) -> PureConnection {
+    pub fn into_pure(mut self) -> PureConnection {
         let con = self.inner
+            .take()
+            .unwrap()
             .into_inner()
             .into_inner()
             .0
@@ -291,7 +296,10 @@ where
             inner.poll_complete();
         }
 
-        check_resend(&mut self.inner, &mut self.send_msgs_without_ack);
+        check_resend(
+            self.inner.as_mut().unwrap(),
+            &mut self.send_msgs_without_ack,
+        );
 
         loop {
             if Some(self.last_propagated_id + 1) == self.received_heap.peek().map(|m| m.id) {
@@ -307,9 +315,24 @@ where
         }
 
         loop {
-            let msg = match self.inner.poll() {
+            let msg = match self.inner.as_mut().unwrap().poll() {
                 Err(e) => {
                     println!("ERROR: {:?}", e);
+
+                    // HACK, really, really shitty, to reset the state we need to create a new instance..
+                    let inner = self.inner
+                        .take()
+                        .unwrap()
+                        .into_inner()
+                        .into_inner()
+                        .0
+                        .take()
+                        .unwrap()
+                        .into_inner();
+                    self.inner = Some(WriteJson::new(ReadJson::new(LengthDelimitedWrapper(
+                        Some(length_delimited::Framed::new(inner)),
+                    ))));
+
                     continue;
                 }
                 Ok(NotReady) => return Ok(NotReady),
@@ -389,6 +412,8 @@ where
 
         println!("SEND({})", id);
         self.inner
+            .as_mut()
+            .unwrap()
             .start_send(msg)
             .map(|r| {
                 r.map(|v| match v {
@@ -400,7 +425,11 @@ where
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        self.inner.poll_complete().map_err(|e| e.into())
+        self.inner
+            .as_mut()
+            .unwrap()
+            .poll_complete()
+            .map_err(|e| e.into())
     }
 }
 
