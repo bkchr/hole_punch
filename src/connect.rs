@@ -193,7 +193,6 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            println!("POLL WAIT");
             let message = match try_ready!(
                 self.0
                     .as_mut()
@@ -311,15 +310,9 @@ where
         let mut strat = strat.get_connect();
         let address: SocketAddr = ([127, 0, 0, 1], addresses.get(0).unwrap().port()).into();
         DeviceToDeviceConnection {
-            wait_for_connect: futures_unordered(
-                ::std::iter::once(DeviceToDeviceConnectionDataWrapperFirst::new(
-                    strat.connect(address).unwrap(),
-                    address,
-                )), /*
-                addresses
-                    .iter().take(1)
-                    .map(|a| DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a))*/
-            ),
+            wait_for_connect: futures_unordered(addresses.iter().map(|a| {
+                DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a)
+            })),
             wait_for_hello: FuturesUnordered::new(),
             handle: handle.clone(),
         }
