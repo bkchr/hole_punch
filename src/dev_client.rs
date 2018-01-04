@@ -352,7 +352,6 @@ where
     ) -> Poll<AfterWaitForAckReUseConnection, Error> {
         let con = try_ready!(wait.wait.poll());
 
-        println!("REUSE ACK");
         wait.result_sender.unbounded_send(Ok(con.into_pure()));
         Ok(Ready(Finished(()).into()))
     }

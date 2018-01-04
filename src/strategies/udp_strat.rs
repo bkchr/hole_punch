@@ -286,7 +286,7 @@ where
                 .iter_mut()
                 .for_each(|(id, &mut (ref msg, ref mut timeout))| {
                     if timeout.poll().is_err() {
-                        println!("RESEND");
+                        //println!("RESEND");
                         inner.start_send(msg.clone());
                         timeout.reset();
                         let _ = timeout.poll();
@@ -341,13 +341,13 @@ where
 
             match msg {
                 Some(ReliableMsg::Ack { id }) => {
-                    println!("ACK({})", id);
+                    //println!("ACK({})", id);
                     self.send_msgs_without_ack.remove(&id);
                 }
                 Some(ReliableMsg::Msg { id, session, data }) => {
                     //only send acks for messages in the same session
                     if session == self.session_id {
-                        println!("SENDACK({})", id);
+                        //println!("SENDACK({})", id);
                         self.send_ack(id);
                     }
 
@@ -355,7 +355,7 @@ where
                     // that the other end does not received the ack.
                     if id > self.last_propagated_id {
                         if self.last_propagated_id + 1 == id {
-                            println!("PROPAGATE");
+                            //println!("PROPAGATE");
                             self.last_propagated_id = id;
 
                             if session == self.session_id {
@@ -410,7 +410,7 @@ where
         self.send_msgs_without_ack
             .insert(id, (msg.clone(), timeout));
 
-        println!("SEND({})", id);
+        //println!("SEND({})", id);
         self.inner
             .as_mut()
             .unwrap()

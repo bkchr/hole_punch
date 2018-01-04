@@ -18,3 +18,8 @@ itertools = "0.7.1"
 hyper = "0.11"
 state_machine_future = { git = "https://github.com/bkchr/state_machine_future.git", "branch" = "complex_type_parsing" }
 bincode = "0.8"
+h2 = { git = "https://github.com/carllerche/h2.git" }
+http = "0.1"
+bytes = "0.4"
+env_logger = "0.4.3"
+log = "0.4.1"
