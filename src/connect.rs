@@ -308,7 +308,6 @@ where
         handle: &Handle,
     ) -> DeviceToDeviceConnection<P> {
         let mut strat = strat.get_connect();
-        let address: SocketAddr = ([127, 0, 0, 1], addresses.get(0).unwrap().port()).into();
         DeviceToDeviceConnection {
             wait_for_connect: futures_unordered(addresses.iter().map(|a| {
                 DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a)
@@ -334,25 +333,22 @@ where
                 Ready(Some(mut con)) => {
                     con.0.send_and_poll(Protocol::Hello);
                     let wait = WaitForMessage::new(con.0, Protocol::Hello);
-                    /*
-                    let resend = PeriodicSend::new(
-                        wait,
-                        Duration::from_millis(100),
-                        Protocol::Hello,
-                        &self.handle,
-                    );*/
                     self.wait_for_hello.push((wait, con.1, con.2).into());
                 }
                 _ => break,
             }
         }
 
-        match try_ready!(self.wait_for_hello.poll()) {
-            Some(con) => {
+        loop {
+        match self.wait_for_hello.poll() {
+            Ok(Ready(Some(con))) => {
                 println!("DEVICETODEVICE: {} {}", con.1, con.2);
-                Ok(Ready(con))
-            }
-            None => Ok(NotReady),
+                return Ok(Ready(con));
+            },
+            Ok(NotReady) => return Ok(NotReady),
+            Ok(Ready(None)) => bail!("No connections left for connecting to device!"),
+            Err(e) => { println!("{:?}", e); },
+        }
         }
     }
 }
