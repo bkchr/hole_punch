@@ -339,12 +339,12 @@ where
             }
         }
 
+        //TODO: if a device is reachable via multiple ip addresses, we can get into trouble here,
+        //because each side does not know which connection is the correct one and so,
+        //both devices could talk via the wrong connection to each other.
         loop {
             match self.wait_for_hello.poll() {
-                Ok(Ready(Some(con))) => {
-                    println!("DEVICETODEVICE: {} {}", con.1, con.2);
-                    return Ok(Ready(con));
-                }
+                Ok(Ready(Some(con))) => return Ok(Ready(con)),
                 Ok(NotReady) => return Ok(NotReady),
                 Ok(Ready(None)) => bail!("No connections left for connecting to device!"),
                 Err(e) => {
