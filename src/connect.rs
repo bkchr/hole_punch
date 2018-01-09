@@ -340,15 +340,17 @@ where
         }
 
         loop {
-        match self.wait_for_hello.poll() {
-            Ok(Ready(Some(con))) => {
-                println!("DEVICETODEVICE: {} {}", con.1, con.2);
-                return Ok(Ready(con));
-            },
-            Ok(NotReady) => return Ok(NotReady),
-            Ok(Ready(None)) => bail!("No connections left for connecting to device!"),
-            Err(e) => { println!("{:?}", e); },
-        }
+            match self.wait_for_hello.poll() {
+                Ok(Ready(Some(con))) => {
+                    println!("DEVICETODEVICE: {} {}", con.1, con.2);
+                    return Ok(Ready(con));
+                }
+                Ok(NotReady) => return Ok(NotReady),
+                Ok(Ready(None)) => bail!("No connections left for connecting to device!"),
+                Err(e) => {
+                    println!("{:?}", e);
+                }
+            }
         }
     }
 }

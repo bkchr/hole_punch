@@ -175,7 +175,8 @@ fn do_http2(con: hole_punch::PureConnection, handle: Handle) {
 fn main() {
     env_logger::init();
     let h2 = env::args().any(|a| a == "h2");
-    let server_addr = ([176, 9, 73, 99], 22222).into();
+    // let server_addr = ([176, 9, 73, 99], 22222).into();
+    let server_addr = ([127, 0, 0, 1], 22222).into();
 
     let mut evt_loop = Core::new().unwrap();
 

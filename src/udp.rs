@@ -22,6 +22,8 @@ use futures::{self, Future, IntoFuture, Poll, Sink, Stream};
 use futures::stream::Fuse;
 use futures::task;
 
+use bytes::{Bytes, BytesMut};
+
 /// Represents an `UdpStream` that is connected to a remote socket.
 pub struct UdpConnectStream {
     /// The underlying socket
@@ -68,9 +70,9 @@ impl AsyncWrite for UdpConnectStream {
 /// Represents an incoming connection
 struct UdpConnection {
     /// This sender is used to forward data to the stream object
-    sender: Sender<Vec<u8>>,
+    sender: Sender<Bytes>,
     /// This receiver is used to forward data from the stream object
-    recv: Receiver<Vec<u8>>,
+    recv: Receiver<Bytes>,
 }
 
 impl UdpConnection {
@@ -78,7 +80,7 @@ impl UdpConnection {
     ///
     /// * `recv` - The receiver to receive data from the connected `UdpServerStream`
     /// * `sender` - The sender to send data to the connected `UdpServerStream`
-    fn new(mut recv: Receiver<Vec<u8>>, sender: Sender<Vec<u8>>) -> UdpConnection {
+    fn new(mut recv: Receiver<Bytes>, sender: Sender<Bytes>) -> UdpConnection {
         // we need to poll the receiver once, so that *this* `Task` is registered to be woken up,
         // when someone wants to send data
         let _ = recv.poll();
@@ -86,7 +88,7 @@ impl UdpConnection {
     }
 
     /// Forwards received data to the connected `UdpServerStream`
-    fn recv(&mut self, data: Vec<u8>) {
+    fn recv(&mut self, data: Bytes) {
         // if we see an error here, abort the function.
         // this connection will be dropped in the next `poll` call of `UdpServer`.
         // the check is only required for start_send, but to mute the warning, check the result of
@@ -104,7 +106,7 @@ impl UdpConnection {
     /// * `Ok(Some(d))` - The stream wants to send data
     /// * `Ok(None)` - The stream does not want to send data
     /// * `Err(_)` - The stream was dropped and this connection can also be dropped
-    fn send(&mut self) -> Result<Option<Vec<u8>>> {
+    fn send(&mut self) -> Result<Option<Bytes>> {
         match self.recv.poll() {
             Ok(Ready(Some(data))) => Ok(Some(data)),
             Ok(NotReady) => Ok(None),
@@ -163,7 +165,7 @@ struct UdpServerInner {
     /// The buffer size of the `UdpConnection` and `UdpServerStream` channels
     buffer_size: usize,
     /// Overflow element when the Socket currently is not able to send data
-    send_overflow: Option<(Vec<u8>, SocketAddr)>,
+    send_overflow: Option<(Bytes, SocketAddr)>,
     new_connection: Sender<(UdpServerStream, SocketAddr)>,
     connect_to: Fuse<UnboundedReceiver<(SocketAddr, oneshot::Sender<UdpServerStream>)>>,
 }
@@ -212,7 +214,7 @@ impl UdpServerInner {
         fn retain(
             connections: &mut HashMap<SocketAddr, UdpConnection>,
             socket: &mut UdpSocket,
-        ) -> Option<(Vec<u8>, SocketAddr)> {
+        ) -> Option<(Bytes, SocketAddr)> {
             let mut overflow = None;
             connections.retain(|addr, c| loop {
                 if overflow.is_some() {
@@ -289,17 +291,17 @@ impl Future for UdpServerInner {
         }
 
         loop {
-            let (len, addr) = try_nb!(self.socket.recv_from(&mut self.buf));
+            let (len, addr) = try_nb!(self.socket.recv_from(self.buf.as_mut()));
 
             // check if the address is already in our connections map
             match self.connections.entry(addr) {
-                Occupied(mut entry) => entry.get_mut().recv(self.buf[..len].to_vec()),
+                Occupied(mut entry) => entry.get_mut().recv(Bytes::from(&self.buf[..len])),
                 Vacant(entry) => {
                     let (mut con, stream) = Self::create_connection_and_stream(
                         self.buffer_size,
                         self.socket.local_addr().unwrap(),
                     );
-                    entry.insert(con).recv(self.buf[..len].to_vec());
+                    entry.insert(con).recv(Bytes::from(&self.buf[..len]));
 
                     self.new_connection.start_send((stream, addr));
                     self.new_connection.poll_complete();
@@ -312,17 +314,17 @@ impl Future for UdpServerInner {
 /// UdpStream that is created by a `UdpServer` and is connected to a `UdpConnection`.
 pub struct UdpServerStream {
     /// The sender to send data to the connected `UdpConnection` and effectively over the socket
-    sender: Sender<Vec<u8>>,
+    sender: Sender<Bytes>,
     /// The receiver to recv data from the connected `UdpConnection`
-    receiver: Receiver<Vec<u8>>,
+    receiver: Receiver<Bytes>,
     addr: SocketAddr,
 }
 
 impl UdpServerStream {
     /// Creates a new UdpServerStream
     fn new(
-        receiver: Receiver<Vec<u8>>,
-        sender: Sender<Vec<u8>>,
+        receiver: Receiver<Bytes>,
+        sender: Sender<Bytes>,
         addr: SocketAddr,
     ) -> UdpServerStream {
         UdpServerStream {
@@ -338,7 +340,7 @@ impl UdpServerStream {
 }
 
 impl Stream for UdpServerStream {
-    type Item = Vec<u8>;
+    type Item = Bytes;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -347,8 +349,8 @@ impl Stream for UdpServerStream {
 }
 
 impl Sink for UdpServerStream {
-    type SinkItem = Vec<u8>;
-    type SinkError = <Sender<Vec<u8>> as Sink>::SinkError;
+    type SinkItem = Bytes;
+    type SinkError = <Sender<Bytes> as Sink>::SinkError;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
         self.sender.start_send(item)
@@ -365,7 +367,7 @@ fn to_io_error<E: fmt::Debug>(error: E) -> io::Error {
 
 impl io::Write for UdpServerStream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if let AsyncSink::NotReady(_) = self.start_send(buf.to_vec()).map_err(to_io_error)? {
+        if let AsyncSink::NotReady(_) = self.start_send(Bytes::from(buf)).map_err(to_io_error)? {
             return Err(io::ErrorKind::WouldBlock.into());
         }
 
@@ -389,7 +391,7 @@ impl io::Read for UdpServerStream {
                 // If buf is too small, elements will get lost
                 // TODO: maybe integrate tmp buffer for 'lost' elements.
                 let len = min(buf.len(), data.len());
-                &buf[..len].copy_from_slice(&data.as_slice()[..len]);
+                &buf[..len].copy_from_slice(&data.as_ref()[..len]);
                 if buf.len() < data.len() {
                     println!("DATALOSS!!");
                 }

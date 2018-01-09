@@ -15,6 +15,7 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_json;
 extern crate tokio_timer;
+extern crate bytes;
 
 mod protocol;
 pub mod server;
