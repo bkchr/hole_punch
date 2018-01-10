@@ -203,11 +203,6 @@ where
                 None => bail!("connection closed while waiting for Message"),
             };
 
-            println!(
-                "WAIT: {:?} == {:?}",
-                discriminant(&self.1),
-                discriminant(&message)
-            );
             if discriminant(&self.1) == discriminant(&message) {
                 return Ok(Ready(self.0.take().unwrap()));
             }

@@ -188,8 +188,8 @@ impl Ord for SortedRecv {
 }
 
 fn get_reliable_msg_header_len() -> usize {
-    // length of the entire package, version as u16, id as u64, session id as u8, ty as u8
-    size_of::<u64>() + size_of::<u16>() + size_of::<u64>() + size_of::<u8>() + size_of::<u8>()
+    // length of the entire package, version as u8, id as u64, session id as u8, ty as u8
+    size_of::<u64>() + size_of::<u8>() + size_of::<u64>() + size_of::<u8>() + size_of::<u8>()
 }
 
 fn pack_reliable_msg(id: u64, session_id: u8, ty: ReliableMsgType, data: &[u8]) -> Bytes {
@@ -197,7 +197,7 @@ fn pack_reliable_msg(id: u64, session_id: u8, ty: ReliableMsgType, data: &[u8]) 
     let mut bytes = BytesMut::with_capacity(get_reliable_msg_header_len() + data.len());
 
     bytes.put_u64::<BigEndian>(len as u64);
-    bytes.put_u16::<BigEndian>(0);
+    bytes.put_u8(0);
     bytes.put_u64::<BigEndian>(id);
     bytes.put_u8(session_id);
     bytes.put_u8(ty as u8);
@@ -235,7 +235,7 @@ fn unpack_reliable_msg(mut data: Bytes) -> Result<(u64, u8, ReliableMsgType, Opt
         }
 
         // version
-        src.get_u16::<BigEndian>();
+        src.get_u8();
 
         let id = src.get_u64::<BigEndian>();
 
