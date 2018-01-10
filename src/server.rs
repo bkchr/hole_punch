@@ -11,6 +11,7 @@ use tokio_core::reactor::{Core, Handle};
 use futures::{Future, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
+use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 
 use serde::{Deserialize, Serialize};
 
@@ -138,7 +139,7 @@ where
     N: NewService,
     <N as NewService>::Service: Service,
 {
-    sockets: Vec<Strategy<P>>,
+    sockets: FuturesUnordered<StreamFuture<Strategy<P>>>,
     new_service: N,
     state: Arc<Mutex<State<P>>>,
     handle: Handle,
@@ -155,7 +156,7 @@ where
         let sockets = strategies::accept(&handle).chain_err(|| "failed to create sockets")?;
 
         Ok(Server {
-            sockets,
+            sockets: futures_unordered(sockets.into_iter().map(|v| v.into_future())),
             new_service,
             state,
             handle,
@@ -177,27 +178,13 @@ where
     type Error = Error;
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            let con = self.sockets.iter_mut().fold(None, |p, v| {
-                if p.is_none() {
-                    let v = v.poll();
-                    if let Ok(NotReady) = v {
-                        None
-                    } else {
-                        Some(v)
-                    }
-                } else {
-                    p
-                }
-            });
-
-            let con = if let Some(con) = con {
-                con
-            } else {
-                return Ok(NotReady);
+            let (con, strat) = match try_ready!(self.sockets.poll().map_err(|(e, _)| e)) {
+                Some(v) => v,
+                None => bail!("no sockets left, looks like an error!"),
             };
 
-            match con? {
-                Ready(Some(con)) => {
+            match con {
+                Some(con) => {
                     self.state.new_service(|id| {
                         let service = self.new_service.new_service(id);
 
@@ -217,14 +204,13 @@ where
 
                         sender
                     });
-
-                    continue;
                 }
-                Ready(None) => {
+                None => {
                     bail!("strategy returned None!");
                 }
-                _ => {}
             }
+
+            self.sockets.push(strat.into_future());
         }
     }
 }

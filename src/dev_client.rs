@@ -248,14 +248,10 @@ where
     ) -> Poll<AfterHandleMessages<P>, Error> {
         loop {
             let message = match handler.connection.poll() {
-                Ok(Ready(message)) => message,
+                Ok(Ready(Some(message))) => message,
+                Ok(Ready(None)) => bail!("connection({}) closed", handler.remote_addr),
                 Ok(NotReady) => break,
                 Err(e) => return Err(e),
-            };
-
-            let message = match message {
-                Some(message) => message,
-                None => bail!("connection({}) closed", handler.remote_addr),
             };
 
             let answer = match message {
@@ -304,11 +300,6 @@ where
                         .result_sender
                         .unbounded_send(Ok(handler.connection.into_pure()));
                     return Ok(Ready(Finished(()).into()));
-                }
-                Protocol::Hello => {
-                    //println!("HELLO");
-                    //Some(Protocol::HelloAck)
-                    None
                 }
                 _ => None,
             };
