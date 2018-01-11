@@ -346,7 +346,9 @@ impl Session {
         if self.last_propagated_id + 1 == id {
             self.last_propagated_id = id;
 
-            self.sender.unbounded_send(data).map_err(|_| "`Session::recv` send error")?;
+            self.sender
+                .unbounded_send(data)
+                .map_err(|_| "`Session::recv` send error")?;
             self.check_received_data()
         } else {
             self.received_data.push(SortedRecv { id, data });
@@ -567,11 +569,12 @@ impl ReliableConnection {
 
                                 entry.insert(session);
                                 self.known_sessions.push(session_id);
-                                self.next_session_id = match session_id
-                                    .checked_add(1)
-                                {
+                                self.next_session_id = match session_id.checked_add(1) {
                                     Some(val) => val,
-                                    None => {println!("session_id out of bounce"); return Err(());}
+                                    None => {
+                                        println!("session_id out of bounce");
+                                        return Err(());
+                                    }
                                 };
 
                                 self.new_session_inform.unbounded_send(con);

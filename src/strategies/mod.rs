@@ -83,7 +83,6 @@ where
             &Strategy::Udp(ref server) => server.local_addr(),
         }
     }
-
 }
 
 pub enum Connection<P> {
@@ -148,9 +147,7 @@ where
 {
     pub fn into_pure(self) -> PureConnection {
         match self {
-            Connection::Udp(stream) => {
-                PureConnection::Udp(stream.into_inner().into_inner())
-            }
+            Connection::Udp(stream) => PureConnection::Udp(stream.into_inner().into_inner()),
         }
     }
 
@@ -161,19 +158,19 @@ where
     }
 }
 
-pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> 
-    where
-        P: Serialize + for<'de> Deserialize<'de> + Clone,
-    {
+pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>>
+where
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
+{
     let udp = udp_strat::accept_async(handle).chain_err(|| "error creating udp strategy")?;
 
     Ok(vec![udp])
 }
 
-pub fn connect<P>(handle: &Handle) -> Result<(Vec<Strategy<P>>, Vec<Connect>)> 
-    where
-        P: Serialize + for<'de> Deserialize<'de> + Clone,
-    {
+pub fn connect<P>(handle: &Handle) -> Result<(Vec<Strategy<P>>, Vec<Connect>)>
+where
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
+{
     let udp = udp_strat::connect_async(handle).chain_err(|| "error creating udp strategy")?;
 
     Ok((vec![udp.0], vec![udp.1]))

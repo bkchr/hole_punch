@@ -136,7 +136,10 @@ where
                 handle.spawn(
                     ServiceHandler::start(
                         inner.clone(),
-                        wait.map(move |con| { let remote_addr = con.remote_addr(); (con, remote_addr)}),
+                        wait.map(move |con| {
+                            let remote_addr = con.remote_addr();
+                            (con, remote_addr)
+                        }),
                         handle.clone(),
                         sender,
                     ).map_err(|e| println!("{:?}", e)),

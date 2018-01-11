@@ -263,8 +263,11 @@ impl UdpServerInner {
     }
 
     fn connect(&mut self, addr: SocketAddr) -> UdpServerStream {
-        let (mut con, stream) =
-            Self::create_connection_and_stream(self.buffer_size, self.socket.local_addr().unwrap(), addr);
+        let (mut con, stream) = Self::create_connection_and_stream(
+            self.buffer_size,
+            self.socket.local_addr().unwrap(),
+            addr,
+        );
         self.connections.insert(addr, con);
         stream
     }
@@ -325,7 +328,12 @@ pub struct UdpServerStream {
 
 impl UdpServerStream {
     /// Creates a new UdpServerStream
-    fn new(receiver: Receiver<Bytes>, sender: Sender<Bytes>, local_addr: SocketAddr, remote_addr: SocketAddr) -> UdpServerStream {
+    fn new(
+        receiver: Receiver<Bytes>,
+        sender: Sender<Bytes>,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+    ) -> UdpServerStream {
         UdpServerStream {
             receiver,
             sender,
