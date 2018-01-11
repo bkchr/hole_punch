@@ -190,9 +190,11 @@ where
 
                         let (sender, receiver) = unbounded();
 
+                        let remote_addr = con.remote_addr();
+
                         let handler = ServiceHandler {
-                            connection: con.0,
-                            address: con.1,
+                            connection: con,
+                            address: remote_addr,
                             service,
                             receiver,
                             id,

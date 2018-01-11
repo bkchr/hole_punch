@@ -250,20 +250,21 @@ impl UdpServerInner {
     /// Creates a new `UdpConnection` and the connected `UdpServerStream`
     fn create_connection_and_stream(
         buffer_size: usize,
-        addr: SocketAddr,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
     ) -> (UdpConnection, UdpServerStream) {
         let (con_sender, con_receiver) = channel(buffer_size);
         let (stream_sender, stream_receiver) = channel(buffer_size);
 
         (
             UdpConnection::new(stream_receiver, con_sender),
-            UdpServerStream::new(con_receiver, stream_sender, addr),
+            UdpServerStream::new(con_receiver, stream_sender, local_addr, remote_addr),
         )
     }
 
     fn connect(&mut self, addr: SocketAddr) -> UdpServerStream {
         let (mut con, stream) =
-            Self::create_connection_and_stream(self.buffer_size, self.socket.local_addr().unwrap());
+            Self::create_connection_and_stream(self.buffer_size, self.socket.local_addr().unwrap(), addr);
         self.connections.insert(addr, con);
         stream
     }
@@ -300,6 +301,7 @@ impl Future for UdpServerInner {
                     let (mut con, stream) = Self::create_connection_and_stream(
                         self.buffer_size,
                         self.socket.local_addr().unwrap(),
+                        addr,
                     );
                     entry.insert(con).recv(Bytes::from(&self.buf[..len]));
 
@@ -317,25 +319,26 @@ pub struct UdpServerStream {
     sender: Sender<Bytes>,
     /// The receiver to recv data from the connected `UdpConnection`
     receiver: Receiver<Bytes>,
-    addr: SocketAddr,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
 }
 
 impl UdpServerStream {
     /// Creates a new UdpServerStream
-    fn new(
-        receiver: Receiver<Bytes>,
-        sender: Sender<Bytes>,
-        addr: SocketAddr,
-    ) -> UdpServerStream {
+    fn new(receiver: Receiver<Bytes>, sender: Sender<Bytes>, local_addr: SocketAddr, remote_addr: SocketAddr) -> UdpServerStream {
         UdpServerStream {
             receiver,
             sender,
-            addr,
+            local_addr,
+            remote_addr,
         }
     }
 
-    pub fn get_local_addr(&self) -> SocketAddr {
-        self.addr
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
     }
 }
 

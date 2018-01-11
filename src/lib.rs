@@ -1,3 +1,4 @@
+extern crate bytes;
 #[macro_use]
 extern crate error_chain;
 #[macro_use]
@@ -15,7 +16,6 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_json;
 extern crate tokio_timer;
-extern crate bytes;
 
 mod protocol;
 pub mod server;

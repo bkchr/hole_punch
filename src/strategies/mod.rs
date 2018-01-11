@@ -46,7 +46,7 @@ impl<P> Future for WaitForConnect<P>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, u16);
+    type Item = Connection<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -64,7 +64,7 @@ impl<P> Stream for Strategy<P>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, SocketAddr);
+    type Item = Connection<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -83,10 +83,25 @@ where
             &Strategy::Udp(ref server) => server.local_addr(),
         }
     }
+
 }
 
 pub enum Connection<P> {
     Udp(udp_strat::Connection<P>),
+}
+
+impl<P> Connection<P> {
+    pub fn local_addr(&self) -> SocketAddr {
+        match *self {
+            Connection::Udp(ref con) => con.get_ref().get_ref().local_addr(),
+        }
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        match *self {
+            Connection::Udp(ref con) => con.get_ref().get_ref().remote_addr(),
+        }
+    }
 }
 
 impl<P> Stream for Connection<P>
@@ -133,7 +148,9 @@ where
 {
     pub fn into_pure(self) -> PureConnection {
         match self {
-            Connection::Udp(stream) => PureConnection::Udp(stream.into_inner().into_inner().into_pure()),
+            Connection::Udp(stream) => {
+                PureConnection::Udp(stream.into_inner().into_inner())
+            }
         }
     }
 
@@ -144,13 +161,19 @@ where
     }
 }
 
-pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> {
+pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>> 
+    where
+        P: Serialize + for<'de> Deserialize<'de> + Clone,
+    {
     let udp = udp_strat::accept_async(handle).chain_err(|| "error creating udp strategy")?;
 
     Ok(vec![udp])
 }
 
-pub fn connect<P>(handle: &Handle) -> Result<(Vec<Strategy<P>>, Vec<Connect>)> {
+pub fn connect<P>(handle: &Handle) -> Result<(Vec<Strategy<P>>, Vec<Connect>)> 
+    where
+        P: Serialize + for<'de> Deserialize<'de> + Clone,
+    {
     let udp = udp_strat::connect_async(handle).chain_err(|| "error creating udp strategy")?;
 
     Ok((vec![udp.0], vec![udp.1]))

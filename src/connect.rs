@@ -33,10 +33,9 @@ enum ConnectStateMachine<P: 'static + Serialize + for<'de> Deserialize<'de> + Cl
     #[state_machine_future(transitions(Connected))]
     WaitingForRegisterResponse {
         wait_for_message: WaitForMessage<P>,
-        port: u16,
         timeout: Timeout,
     },
-    #[state_machine_future(ready)] Connected((Connection<P>, u16)),
+    #[state_machine_future(ready)] Connected(Connection<P>),
     #[state_machine_future(error)] ErrorState(Error),
 }
 
@@ -68,12 +67,11 @@ where
         let mut connection = try_ready!(wait.connect.poll());
 
         let wait = wait.take();
-        connection.0.send_and_poll(Protocol::Register);
+        connection.send_and_poll(Protocol::Register);
 
         Ok(Ready(
             WaitingForRegisterResponse {
-                wait_for_message: WaitForMessage::new(connection.0, Protocol::Acknowledge),
-                port: connection.1,
+                wait_for_message: WaitForMessage::new(connection, Protocol::Acknowledge),
                 timeout: wait.timeout.new_reset(),
             }.into(),
         ))
@@ -88,7 +86,7 @@ where
 
         let connection = try_ready!(wait.wait_for_message.poll());
 
-        Ok(Ready(Connected((connection, wait.port)).into()))
+        Ok(Ready(Connected(connection).into()))
     }
 }
 
@@ -128,7 +126,7 @@ impl<P> Future for ConnectWithStrategies<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, u16);
+    type Item = Connection<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -216,7 +214,6 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     future: F,
-    port: u16,
     addr: SocketAddr,
 }
 
@@ -225,25 +222,24 @@ where
     F: Future<Item = Connection<P>, Error = Error>,
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, SocketAddr, u16);
+    type Item = (Connection<P>, SocketAddr);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let con = try_ready!(self.future.poll());
 
-        Ok(Ready((con, self.addr, self.port)))
+        Ok(Ready((con, self.addr)))
     }
 }
 
-impl<P, F> From<(F, SocketAddr, u16)> for DeviceToDeviceConnectionDataWrapper<P, F>
+impl<P, F> From<(F, SocketAddr)> for DeviceToDeviceConnectionDataWrapper<P, F>
 where
     F: Future<Item = Connection<P>, Error = Error>,
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    fn from(val: (F, SocketAddr, u16)) -> DeviceToDeviceConnectionDataWrapper<P, F> {
+    fn from(val: (F, SocketAddr)) -> DeviceToDeviceConnectionDataWrapper<P, F> {
         DeviceToDeviceConnectionDataWrapper {
             future: val.0,
-            port: val.2,
             addr: val.1,
         }
     }
@@ -251,7 +247,7 @@ where
 
 struct DeviceToDeviceConnectionDataWrapperFirst<P, F>
 where
-    F: Future<Item = (Connection<P>, u16), Error = Error>,
+    F: Future<Item = Connection<P>, Error = Error>,
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     future: F,
@@ -260,22 +256,22 @@ where
 
 impl<P, F> Future for DeviceToDeviceConnectionDataWrapperFirst<P, F>
 where
-    F: Future<Item = (Connection<P>, u16), Error = Error>,
+    F: Future<Item = Connection<P>, Error = Error>,
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, SocketAddr, u16);
+    type Item = (Connection<P>, SocketAddr);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let con = try_ready!(self.future.poll());
 
-        Ok(Ready((con.0, self.addr, con.1)))
+        Ok(Ready((con, self.addr)))
     }
 }
 
 impl<P, F> DeviceToDeviceConnectionDataWrapperFirst<P, F>
 where
-    F: Future<Item = (Connection<P>, u16), Error = Error>,
+    F: Future<Item = Connection<P>, Error = Error>,
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     fn new(f: F, addr: SocketAddr) -> DeviceToDeviceConnectionDataWrapperFirst<P, F> {
@@ -317,7 +313,7 @@ impl<P> Future for DeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, SocketAddr, u16);
+    type Item = (Connection<P>, SocketAddr);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -328,7 +324,7 @@ where
                 Ready(Some(mut con)) => {
                     con.0.send_and_poll(Protocol::Hello);
                     let wait = WaitForMessage::new(con.0, Protocol::Hello);
-                    self.wait_for_hello.push((wait, con.1, con.2).into());
+                    self.wait_for_hello.push((wait, con.1).into());
                 }
                 _ => break,
             }

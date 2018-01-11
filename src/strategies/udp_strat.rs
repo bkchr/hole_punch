@@ -7,6 +7,7 @@ use timeout::Timeout;
 use std::marker::PhantomData;
 use std::net::SocketAddr;
 use std::collections::{BinaryHeap, HashMap};
+use std::collections::hash_map::Entry::{Occupied, Vacant};
 use std::cmp::Ordering;
 use std::time::Duration;
 use std::io::{self, Cursor};
@@ -16,6 +17,9 @@ use std::mem::{size_of, size_of_val};
 
 use futures::Async::{NotReady, Ready};
 use futures::{self, AsyncSink, Future, Poll, Sink, StartSend, Stream};
+use futures::sync::mpsc::{channel, unbounded, Receiver, SendError, Sender, UnboundedReceiver,
+                          UnboundedSender};
+use futures::sync::oneshot;
 
 use tokio_io::codec::length_delimited;
 use tokio_io::{AsyncRead, AsyncWrite};
@@ -28,22 +32,40 @@ use serde::{Deserialize, Serialize};
 
 use bytes::{BigEndian, Buf, BufMut, Bytes, BytesMut};
 
-pub type Connection<P> = WriteJson<ReadJson<ReliableConnection, Protocol<P>>, Protocol<P>>;
+pub type Connection<P> = WriteJson<ReadJson<UdpConnection, Protocol<P>>, Protocol<P>>;
 
-pub type PureConnection = ReliableConnection;
+pub type PureConnection = UdpConnection;
 
 pub struct Server<P> {
     server: udp::UdpServer,
     marker: PhantomData<P>,
     handle: Handle,
+    new_session_inform_recv: UnboundedReceiver<UdpConnection>,
+    new_session_inform_send: UnboundedSender<UdpConnection>,
 }
 
 impl<P> Server<P>
 where
     P: Serialize + for<'de> Deserialize<'de>,
 {
+    fn new(server: udp::UdpServer, handle: Handle) -> Self {
+        let (new_session_inform_send, new_session_inform_recv) = unbounded();
+
+        Server {
+            server,
+            marker: Default::default(),
+            handle,
+            new_session_inform_recv,
+            new_session_inform_send,
+        }
+    }
+
     pub fn local_addr(&self) -> Result<SocketAddr> {
         self.server.local_addr()
+    }
+
+    fn get_new_session_inform(&self) -> UnboundedSender<UdpConnection> {
+        self.new_session_inform_send.clone()
     }
 }
 
@@ -51,41 +73,55 @@ impl<P> Stream for Server<P>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (strategies::Connection<P>, SocketAddr);
+    type Item = strategies::Connection<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.server.poll() {
+        match self.new_session_inform_recv.poll() {
             Ok(Ready(Some(con))) => {
-                return Ok(Ready(Some((
-                    strategies::Connection::Udp(WriteJson::new(ReadJson::new(
-                        ReliableConnection::new(con.0, &self.handle),
-                    ))),
-                    con.1,
-                ))))
+                return Ok(Ready(Some(strategies::Connection::Udp(WriteJson::new(
+                    ReadJson::new(con),
+                )))))
             }
-            r @ _ => {
-                return r.map(|r| r.map(|_| None))
-                    .chain_err(|| "error polling UdpServer")
-            }
-        }
+            _ => {}
+        };
+
+        self.server
+            .poll()
+            .map(|r| {
+                r.map(|o| {
+                    o.map(|con| {
+                        let local_addr = con.0.local_addr();
+                        let (rel_con, con) = ReliableConnection::new(
+                            con.0,
+                            self.new_session_inform_send.clone(),
+                            &self.handle,
+                            local_addr,
+                            con.1,
+                        );
+
+                        self.handle.spawn(rel_con);
+
+                        strategies::Connection::Udp(WriteJson::new(ReadJson::new(con)))
+                    })
+                })
+            })
+            .chain_err(|| "error polling UdpServer")
     }
 }
 
-pub fn accept_async<P>(handle: &Handle) -> Result<strategies::Strategy<P>> {
+pub fn accept_async<P>(handle: &Handle) -> Result<strategies::Strategy<P>>
+where
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
+{
     let (server, _) = udp::connect_and_accept_async(([0, 0, 0, 0], 22222).into(), handle, 4)?;
 
-    let server = Server {
-        server: server,
-        marker: Default::default(),
-        handle: handle.clone(),
-    };
-
+    let server = Server::new(server, handle.clone());
     Ok(strategies::Strategy::Udp(server))
 }
 
 #[derive(Clone)]
-pub struct Connect(udp::Connect, Handle);
+pub struct Connect(udp::Connect, Handle, UnboundedSender<UdpConnection>);
 
 impl Connect {
     pub fn connect<P>(&mut self, addr: SocketAddr) -> Result<strategies::WaitForConnect<P>>
@@ -95,47 +131,54 @@ impl Connect {
         Ok(strategies::WaitForConnect::Udp(WaitForConnect(
             self.0.connect(addr)?,
             self.1.clone(),
+            self.2.clone(),
             Default::default(),
         )))
     }
 }
 
-pub struct WaitForConnect<P>(udp::WaitForConnect, Handle, PhantomData<P>);
+pub struct WaitForConnect<P>(
+    udp::WaitForConnect,
+    Handle,
+    UnboundedSender<UdpConnection>,
+    PhantomData<P>,
+);
 
 impl<P> Future for WaitForConnect<P>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (strategies::Connection<P>, u16);
+    type Item = strategies::Connection<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.0.poll().map(|v| {
-            v.map(|v| {
-                let port = v.get_local_addr().port();
-                (
-                    strategies::Connection::Udp(WriteJson::new(ReadJson::new(
-                        ReliableConnection::new(v, &self.1),
-                    ))),
-                    port,
-                )
+            v.map(|con| {
+                let remote_addr = con.remote_addr();
+                let local_addr = con.local_addr();
+                let (rel_con, con) =
+                    ReliableConnection::new(con, self.2.clone(), &self.1, local_addr, remote_addr);
+
+                self.1.spawn(rel_con);
+                strategies::Connection::Udp(WriteJson::new(ReadJson::new(con)))
             })
         })
     }
 }
 
-pub fn connect_async<P>(handle: &Handle) -> Result<(strategies::Strategy<P>, strategies::Connect)> {
+pub fn connect_async<P>(handle: &Handle) -> Result<(strategies::Strategy<P>, strategies::Connect)>
+where
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
+{
     let (server, connect) = udp::connect_and_accept_async(([0, 0, 0, 0], 0).into(), handle, 4)?;
 
-    let server = Server {
-        server: server,
-        marker: Default::default(),
-        handle: handle.clone(),
-    };
+    let server = Server::new(server, handle.clone());
+
+    let session_inform = server.get_new_session_inform();
 
     Ok((
         strategies::Strategy::Udp(server),
-        strategies::Connect::Udp(Connect(connect, handle.clone())),
+        strategies::Connect::Udp(Connect(connect, handle.clone(), session_inform)),
     ))
 }
 
@@ -156,7 +199,6 @@ impl ReliableMsgType {
 
 struct SortedRecv {
     id: u64,
-    session: u8,
     data: Bytes,
 }
 
@@ -189,24 +231,24 @@ impl Ord for SortedRecv {
 
 fn get_reliable_msg_header_len() -> usize {
     // length of the entire package, version as u8, id as u64, session id as u8, ty as u8
-    size_of::<u64>() + size_of::<u8>() + size_of::<u64>() + size_of::<u8>() + size_of::<u8>()
+    size_of::<u64>() + size_of::<u8>() + size_of::<u64>() + size_of::<u16>() + size_of::<u8>()
 }
 
-fn pack_reliable_msg(id: u64, session_id: u8, ty: ReliableMsgType, data: &[u8]) -> Bytes {
+fn pack_reliable_msg(id: u64, session_id: u16, ty: ReliableMsgType, data: &[u8]) -> Bytes {
     let len = get_reliable_msg_header_len() + data.len();
     let mut bytes = BytesMut::with_capacity(get_reliable_msg_header_len() + data.len());
 
     bytes.put_u64::<BigEndian>(len as u64);
     bytes.put_u8(0);
     bytes.put_u64::<BigEndian>(id);
-    bytes.put_u8(session_id);
+    bytes.put_u16::<BigEndian>(session_id);
     bytes.put_u8(ty as u8);
     bytes.put_slice(data);
 
     bytes.freeze()
 }
 
-fn unpack_reliable_msg(mut data: Bytes) -> Result<(u64, u8, ReliableMsgType, Option<Bytes>)> {
+fn unpack_reliable_msg(data: Bytes) -> Result<(u64, u16, ReliableMsgType, Option<Bytes>)> {
     let len = data.len();
 
     if len < get_reliable_msg_header_len() {
@@ -239,7 +281,7 @@ fn unpack_reliable_msg(mut data: Bytes) -> Result<(u64, u8, ReliableMsgType, Opt
 
         let id = src.get_u64::<BigEndian>();
 
-        let session_id = src.get_u8();
+        let session_id = src.get_u16::<BigEndian>();
 
         let ty = ReliableMsgType::try_from(src.get_u8())?;
 
@@ -263,94 +305,232 @@ fn unpack_reliable_msg(mut data: Bytes) -> Result<(u64, u8, ReliableMsgType, Opt
     Ok((id, session_id, ty, data))
 }
 
-pub struct ReliableConnection {
-    con: udp::UdpServerStream,
-    send_msgs_without_ack: HashMap<u64, (Bytes, Timeout)>,
+type NewSession = UnboundedSender<oneshot::Sender<UdpConnection>>;
+
+struct Session {
+    sender: UnboundedSender<Bytes>,
+    recv: UnboundedReceiver<BytesMut>,
     next_id: u64,
-    // the last id that was propagated upwards
+    session_id: u16,
+    received_data: BinaryHeap<SortedRecv>,
+    // the last id that was propagated
     last_propagated_id: u64,
-    received_heap: BinaryHeap<SortedRecv>,
-    handle: Handle,
-    session_id: u8,
+    send_msgs_without_ack: HashMap<u64, (Bytes, Timeout)>,
 }
 
-impl ReliableConnection {
-    fn new(con: udp::UdpServerStream, handle: &Handle) -> ReliableConnection {
-        ReliableConnection {
-            con,
-            send_msgs_without_ack: HashMap::new(),
-            next_id: 1,
-            last_propagated_id: 0,
-            received_heap: BinaryHeap::new(),
-            handle: handle.clone(),
-            session_id: 0,
+impl Session {
+    fn new(
+        session_id: u16,
+        new_session: NewSession,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+    ) -> (Session, UdpConnection) {
+        let (sender, poll_recv) = unbounded();
+        let (sink_sender, recv) = unbounded();
+
+        (
+            Session {
+                recv,
+                sender,
+                next_id: 1,
+                session_id,
+                received_data: BinaryHeap::new(),
+                last_propagated_id: 0,
+                send_msgs_without_ack: HashMap::new(),
+            },
+            UdpConnection::new(poll_recv, sink_sender, new_session, local_addr, remote_addr),
+        )
+    }
+
+    fn recv(&mut self, id: u64, data: Bytes) -> Result<()> {
+        if self.last_propagated_id + 1 == id {
+            self.last_propagated_id = id;
+
+            self.sender.unbounded_send(data).map_err(|_| "`Session::recv` send error")?;
+            self.check_received_data()
+        } else {
+            self.received_data.push(SortedRecv { id, data });
+
+            Ok(())
         }
     }
 
-    fn send_ack(&mut self, id: u64) {
-        self.con.start_send(pack_reliable_msg(
-            id,
-            self.session_id,
-            ReliableMsgType::Ack,
-            &[],
-        ));
-        self.con.poll_complete();
-    }
-
-    pub fn into_pure(mut self) -> PureConnection {
-        let con = self.con;
-        let handle = self.handle;
-
-        let mut connection = ReliableConnection::new(con, &handle);
-        connection.session_id += 1;
-
-        connection
-    }
-}
-
-impl Stream for ReliableConnection {
-    type Item = Bytes;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        fn check_resend(
-            con: &mut udp::UdpServerStream,
-            sends: &mut HashMap<u64, (Bytes, Timeout)>,
-        ) {
-            sends
-                .iter_mut()
-                .for_each(|(id, &mut (ref msg, ref mut timeout))| {
-                    if timeout.poll().is_err() {
-                        con.start_send(msg.clone());
-                        timeout.reset();
-                        let _ = timeout.poll();
-                    }
-                });
-
-            con.poll_complete();
-        }
-
-        check_resend(&mut self.con, &mut self.send_msgs_without_ack);
-
+    fn check_received_data(&mut self) -> Result<()> {
         loop {
-            if Some(self.last_propagated_id + 1) == self.received_heap.peek().map(|m| m.id) {
-                let msg = self.received_heap.pop().unwrap();
+            if Some(self.last_propagated_id + 1) == self.received_data.peek().map(|m| m.id) {
+                let msg = self.received_data.pop().unwrap();
                 self.last_propagated_id = msg.id;
 
-                if self.session_id == msg.session {
-                    return Ok(Ready(Some(msg.data)));
-                }
+                self.sender
+                    .unbounded_send(msg.data)
+                    .map_err(|_| "error sending")?;
             } else {
-                break;
+                return Ok(());
+            }
+        }
+    }
+
+    fn send(&mut self, handle: &Handle) -> Poll<Option<Bytes>, Error> {
+        let data = match try_ready!(self.recv.poll().map_err(|_| "`Session::send` poll error")) {
+            Some(data) => data,
+            None => bail!("None received in `Session::send`"),
+        };
+
+        let id = self.next_id;
+        self.next_id += 1;
+
+        let data = pack_reliable_msg(id, self.session_id, ReliableMsgType::Msg, &data);
+        self.send_msgs_without_ack.insert(
+            id,
+            (
+                data.clone(),
+                Timeout::new(Duration::from_millis(200), handle),
+            ),
+        );
+
+        Ok(Ready(Some(data)))
+    }
+
+    fn ack_recv(&mut self, id: u64) {
+        self.send_msgs_without_ack.remove(&id);
+    }
+
+    fn check_resend(&mut self) -> Option<Vec<Bytes>> {
+        if self.send_msgs_without_ack.is_empty() {
+            return None;
+        }
+
+        let mut result = Vec::new();
+
+        for &mut (ref data, ref mut timeout) in self.send_msgs_without_ack.values_mut() {
+            if timeout.poll().is_err() {
+                timeout.reset();
+                let _ = timeout.poll();
+
+                result.push(data.clone());
             }
         }
 
+        Some(result)
+    }
+}
+
+pub struct ReliableConnection {
+    con: udp::UdpServerStream,
+    handle: Handle,
+    next_session_id: u16,
+    sessions: HashMap<u16, Session>,
+    new_session_recv: UnboundedReceiver<oneshot::Sender<UdpConnection>>,
+    new_session: NewSession,
+    new_session_inform: UnboundedSender<UdpConnection>,
+    known_sessions: Vec<u16>,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+}
+
+impl ReliableConnection {
+    fn new(
+        con: udp::UdpServerStream,
+        new_session_inform: UnboundedSender<UdpConnection>,
+        handle: &Handle,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+    ) -> (ReliableConnection, UdpConnection) {
+        let (new_session, new_session_recv) = unbounded();
+
+        let mut con = ReliableConnection {
+            con,
+            handle: handle.clone(),
+            next_session_id: 0,
+            sessions: HashMap::new(),
+            new_session_recv,
+            new_session,
+            new_session_inform,
+            known_sessions: Vec::new(),
+            local_addr,
+            remote_addr,
+        };
+
+        // create the initial session
+        let udp_con = con.create_new_session();
+
+        (con, udp_con)
+    }
+
+    fn send_ack(&mut self, id: u64, session: u16) {
+        self.con
+            .start_send(pack_reliable_msg(id, session, ReliableMsgType::Ack, &[]));
+        self.con.poll_complete();
+    }
+
+    fn create_new_session(&mut self) -> UdpConnection {
+        let (session, con) = Session::new(
+            self.next_session_id,
+            self.new_session.clone(),
+            self.local_addr,
+            self.remote_addr,
+        );
+
+        self.sessions.insert(self.next_session_id, session);
+        self.known_sessions.push(self.next_session_id);
+        self.next_session_id += 1;
+
+        con
+    }
+
+    fn check_for_new_sessions(&mut self) {
         loop {
-            let msg = match self.con.poll() {
-                Err(_) => bail!("error polling UdpServerStream"),
-                Ok(Ready(Some(msg))) => msg,
-                Ok(Ready(None)) => return Ok(Ready(None)),
-                Ok(NotReady) => return Ok(NotReady),
+            let new = match self.new_session_recv.poll() {
+                Ok(Ready(Some(new))) => new,
+                _ => return,
+            };
+
+            let con = self.create_new_session();
+            let _ = new.send(con);
+        }
+    }
+
+    fn check_send_data(&mut self) {
+        fn retain(
+            sessions: &mut HashMap<u16, Session>,
+            stream: &mut udp::UdpServerStream,
+            handle: &Handle,
+        ) {
+            sessions.retain(|_, s| {
+                if let Some(resend) = s.check_resend() {
+                    resend.into_iter().for_each(|v| {
+                        let _ = stream.start_send(v);
+                    });
+                    let _ = stream.poll_complete();
+                }
+
+                loop {
+                    match s.send(handle) {
+                        Ok(Ready(None)) | Ok(NotReady) => return true,
+                        Ok(Ready(Some(data))) => {
+                            let _ = stream.start_send(data);
+                            let _ = stream.poll_complete();
+                        }
+                        Err(e) => {
+                            println!("{:?}", e);
+                            return false;
+                        }
+                    }
+                }
+            })
+        }
+
+        retain(&mut self.sessions, &mut self.con, &self.handle)
+    }
+
+    fn check_recv_data(&mut self) -> Poll<(), ()> {
+        loop {
+            let msg = match try_ready!(self.con.poll().map_err(|_| ())) {
+                Some(msg) => msg,
+                None => {
+                    println!("ReliableConnection closed!");
+                    return Err(());
+                }
             };
 
             let (id, session_id, ty, data) = match unpack_reliable_msg(msg) {
@@ -363,46 +543,41 @@ impl Stream for ReliableConnection {
 
             match (ty, data) {
                 (ReliableMsgType::Ack, None) => {
-                    self.send_msgs_without_ack.remove(&id);
+                    self.sessions.get_mut(&session_id).map(|s| s.ack_recv(id));
                 }
                 (ReliableMsgType::Msg, Some(data)) => {
-                    //only send acks for messages in the same session
-                    if session_id == self.session_id {
-                        self.send_ack(id);
-                    }
+                    self.send_ack(id, session_id);
 
-                    // if we already propagated the msg, we don't need to do anything, it just means
-                    // that the other end does not received the ack.
-                    if id > self.last_propagated_id {
-                        if self.last_propagated_id + 1 == id {
-                            //println!("PROPAGATE");
-                            self.last_propagated_id = id;
-
-                            if session_id == self.session_id {
-                                return Ok(Ready(Some(data)));
-                            } else {
-                                loop {
-                                    if Some(self.last_propagated_id + 1)
-                                        == self.received_heap.peek().map(|m| m.id)
-                                    {
-                                        let msg = self.received_heap.pop().unwrap();
-                                        self.last_propagated_id = msg.id;
-
-                                        if self.session_id == msg.session {
-                                            return Ok(Ready(Some(msg.data)));
-                                        }
-                                    } else {
-                                        break;
-                                    }
-                                }
+                    match self.sessions.entry(session_id) {
+                        Occupied(mut session) => {
+                            if session.get_mut().recv(id, data).is_err() {
+                                session.remove_entry();
                             }
-                        } else {
-                            // TODO: same id could be inserted multiple times
-                            self.received_heap.push(SortedRecv {
-                                id,
-                                session: session_id,
-                                data,
-                            });
+                        }
+                        Vacant(entry) => {
+                            if !self.known_sessions.contains(&session_id) {
+                                let (mut session, con) = Session::new(
+                                    session_id,
+                                    self.new_session.clone(),
+                                    self.local_addr,
+                                    self.remote_addr,
+                                );
+
+                                let _ = session.recv(id, data);
+
+                                entry.insert(session);
+                                self.known_sessions.push(session_id);
+                                self.next_session_id = match session_id
+                                    .checked_add(1)
+                                {
+                                    Some(val) => val,
+                                    None => {println!("session_id out of bounce"); return Err(());}
+                                };
+
+                                self.new_session_inform.unbounded_send(con);
+                            } else {
+                                println!("received package for session({}), after the session was finished!", session_id);
+                            }
                         }
                     }
                 }
@@ -414,31 +589,76 @@ impl Stream for ReliableConnection {
     }
 }
 
-impl Sink for ReliableConnection {
+impl Future for ReliableConnection {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.check_for_new_sessions();
+        self.check_send_data();
+        self.check_recv_data()
+    }
+}
+
+pub struct UdpConnection {
+    recv: UnboundedReceiver<Bytes>,
+    sender: UnboundedSender<BytesMut>,
+    new_session: NewSession,
+    local_addr: SocketAddr,
+    remote_addr: SocketAddr,
+}
+
+impl UdpConnection {
+    fn new(
+        recv: UnboundedReceiver<Bytes>,
+        sender: UnboundedSender<BytesMut>,
+        new_session: UnboundedSender<oneshot::Sender<UdpConnection>>,
+        local_addr: SocketAddr,
+        remote_addr: SocketAddr,
+    ) -> UdpConnection {
+        UdpConnection {
+            recv,
+            sender,
+            new_session,
+            local_addr,
+            remote_addr,
+        }
+    }
+
+    pub fn local_addr(&self) -> SocketAddr {
+        self.local_addr
+    }
+
+    pub fn remote_addr(&self) -> SocketAddr {
+        self.remote_addr
+    }
+}
+
+impl Stream for UdpConnection {
+    type Item = Bytes;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        self.recv
+            .poll()
+            .map_err(|_| "error `UdpConnection::poll`".into())
+    }
+}
+
+impl Sink for UdpConnection {
     type SinkItem = BytesMut;
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        let id = self.next_id;
-        self.next_id += 1;
-
-        let msg = pack_reliable_msg(id, self.session_id, ReliableMsgType::Msg, &item);
-
-        let mut timeout = Timeout::new(Duration::from_millis(200), &self.handle);
-        timeout.poll();
-        self.send_msgs_without_ack
-            .insert(id, (msg.clone(), timeout));
-
-        self.con
-            .start_send(msg)
-            .map(|r| r.map(|_| item))
-            .map_err(|_| "error at ReliableConnection::start_send".into())
+        self.sender
+            .start_send(item)
+            .map_err(|_| "error `UdpConnection::start_send`".into())
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        self.con
+        self.sender
             .poll_complete()
-            .map_err(|_| "error at ReliableConnection::poll_complete".into())
+            .map_err(|_| "error `UdpConnection::poll_complete`".into())
     }
 }
 
@@ -446,7 +666,7 @@ fn to_io_error<E: fmt::Debug>(error: E) -> io::Error {
     io::Error::new(io::ErrorKind::Other, format!("{:?}", error))
 }
 
-impl io::Write for ReliableConnection {
+impl io::Write for UdpConnection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         if let AsyncSink::NotReady(_) = self.start_send(BytesMut::from(buf)).map_err(to_io_error)? {
             return Err(io::ErrorKind::WouldBlock.into());
@@ -462,7 +682,7 @@ impl io::Write for ReliableConnection {
     }
 }
 
-impl io::Read for ReliableConnection {
+impl io::Read for UdpConnection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         let res = self.poll().map_err(to_io_error)?;
 
@@ -480,9 +700,9 @@ impl io::Read for ReliableConnection {
     }
 }
 
-impl AsyncRead for ReliableConnection {}
+impl AsyncRead for UdpConnection {}
 
-impl AsyncWrite for ReliableConnection {
+impl AsyncWrite for UdpConnection {
     fn shutdown(&mut self) -> io::Result<futures::Async<()>> {
         Ok(Ready(()))
     }

@@ -136,7 +136,7 @@ where
                 handle.spawn(
                     ServiceHandler::start(
                         inner.clone(),
-                        wait.map(move |(con, port)| (con, addr, port)),
+                        wait.map(move |con| { let remote_addr = con.remote_addr(); (con, remote_addr)}),
                         handle.clone(),
                         sender,
                     ).map_err(|e| println!("{:?}", e)),
@@ -179,7 +179,7 @@ where
 enum ServiceHandler<
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
-    F: Future<Item = (Connection<P>, SocketAddr, u16), Error = Error>,
+    F: Future<Item = (Connection<P>, SocketAddr), Error = Error>,
 > {
     #[state_machine_future(start, transitions(HandleMessages))]
     WaitForConnection {
@@ -195,7 +195,6 @@ enum ServiceHandler<
         handle: Handle,
         connection: Connection<P>,
         remote_addr: SocketAddr,
-        local_port: u16,
         service: <N as NewService<P>>::Service,
         service_control_receiver: UnboundedReceiver<ServiceControlEvent<P>>,
     },
@@ -212,12 +211,12 @@ impl<P, N, F> PollServiceHandler<P, N, F> for ServiceHandler<P, N, F>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
-    F: Future<Item = (Connection<P>, SocketAddr, u16), Error = Error>,
+    F: Future<Item = (Connection<P>, SocketAddr), Error = Error>,
 {
     fn poll_wait_for_connection<'a>(
         wait: &'a mut RentToOwn<'a, WaitForConnection<P, N, F>>,
     ) -> Poll<AfterWaitForConnection<P, N>, Error> {
-        let (connection, remote_addr, local_port) = try_ready!(wait.wait.poll());
+        let (connection, remote_addr) = try_ready!(wait.wait.poll());
 
         let wait = wait.take();
         let (servicec, service_control_receiver) = ServiceControl::new();
@@ -234,7 +233,6 @@ where
                 client: wait.client,
                 connection,
                 remote_addr,
-                local_port,
                 handle: wait.handle,
                 result_sender: wait.result_sender,
                 service,
@@ -268,7 +266,7 @@ where
                         .iter()
                         .map(|v| v.ip())
                         .filter(|ip| !ip.is_loopback())
-                        .map(|ip| (ip, handler.local_port).into())
+                        .map(|ip| (ip, handler.connection.local_addr().port()).into())
                         .collect_vec();
 
                     Some(Protocol::PrivateAdressInformation(id, addresses))
