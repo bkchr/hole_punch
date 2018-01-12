@@ -1,6 +1,6 @@
 use errors::*;
 use protocol::Protocol;
-use strategies::{Connect, Connection, WaitForConnect};
+use strategies::{Connect, Connection, NewSessionController, NewSessionWait, WaitForConnect};
 use timeout::Timeout;
 
 use std::net::SocketAddr;
@@ -208,7 +208,7 @@ where
     }
 }
 
-pub struct DeviceToDeviceConnection<P>
+pub struct DirectDeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
@@ -217,7 +217,7 @@ where
     handle: Handle,
 }
 
-impl<P> DeviceToDeviceConnection<P>
+impl<P> DirectDeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
@@ -225,9 +225,9 @@ where
         strat: Connector,
         addresses: &[SocketAddr],
         handle: &Handle,
-    ) -> DeviceToDeviceConnection<P> {
+    ) -> DirectDeviceToDeviceConnection<P> {
         let mut strat = strat.get_connect();
-        DeviceToDeviceConnection {
+        DirectDeviceToDeviceConnection {
             wait_for_connect: futures_unordered(
                 addresses.iter().map(|a| strat.connect(*a).unwrap()),
             ),
@@ -237,7 +237,7 @@ where
     }
 }
 
-impl<P> Future for DeviceToDeviceConnection<P>
+impl<P> Future for DirectDeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
@@ -265,11 +265,171 @@ where
             match self.wait_for_hello.poll() {
                 Ok(Ready(Some(con))) => return Ok(Ready(con)),
                 Ok(NotReady) => return Ok(NotReady),
-                Ok(Ready(None)) => bail!("No connections left for connecting to device!"),
+                Ok(Ready(None)) => {
+                    if self.wait_for_connect.is_empty() {
+                        bail!("No connections left for connecting to device!");
+                    } else {
+                        return Ok(NotReady);
+                    }
+                }
                 Err(e) => {
                     println!("{:?}", e);
                 }
             }
         }
+    }
+}
+
+#[derive(StateMachineFuture)]
+pub enum RelayDeviceToDeviceConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    #[state_machine_future(start, transitions(WaitForRelayMode))]
+    WaitForNewSession {
+        wait: NewSessionWait<P>,
+        other_device_id: u64,
+    },
+    #[state_machine_future(transitions(RelayModeActivated))]
+    WaitForRelayMode {
+        wait: WaitForMessage<P>,
+    },
+    #[state_machine_future(ready)] RelayModeActivated(Connection<P>),
+    #[state_machine_future(error)] RelayModeError(Error),
+}
+
+impl<P> PollRelayDeviceToDeviceConnection<P> for RelayDeviceToDeviceConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    fn poll_wait_for_new_session<'a>(
+        wait: &'a mut RentToOwn<'a, WaitForNewSession<P>>,
+    ) -> Poll<AfterWaitForNewSession<P>, Error> {
+        let mut con = try_ready!(wait.wait.poll());
+
+        con.send_and_poll(Protocol::RelayConnection(wait.other_device_id));
+
+        let wait = WaitForMessage::new(con, Protocol::RelayModeActivated);
+
+        Ok(Ready(WaitForRelayMode { wait }.into()))
+    }
+
+    fn poll_wait_for_relay_mode<'a>(
+        wait: &'a mut RentToOwn<'a, WaitForRelayMode<P>>,
+    ) -> Poll<AfterWaitForRelayMode<P>, Error> {
+        let con = try_ready!(wait.wait.poll());
+
+        Ok(Ready(RelayModeActivated(con).into()))
+    }
+}
+
+#[derive(StateMachineFuture)]
+pub enum DeviceToDeviceConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    #[state_machine_future(start, transitions(TryDirectConnection))]
+    InitState {
+        connector: Connector,
+        addresses: Vec<SocketAddr>,
+        new_session_controller: NewSessionController,
+        // TODO: This is the id of the device in the hashmap on the server. Don't do that!
+        remote_device_id: u64,
+        // Is that the device that initiated the connection?
+        is_controller: bool,
+        handle: Handle,
+    },
+    #[state_machine_future(transitions(ConnectionEstablished, RelayConnection))]
+    TryDirectConnection {
+        connect: DirectDeviceToDeviceConnection<P>,
+        timeout: Timeout,
+        new_session_controller: NewSessionController,
+        // TODO: This is the id of the device in the hashmap on the server. Don't do that!
+        remote_device_id: u64,
+        // Is that the device that initiated the connection?
+        is_controller: bool,
+    },
+    #[state_machine_future(transitions(ConnectionEstablished))]
+    RelayConnection {
+        relay: RelayDeviceToDeviceConnectionFuture<P>,
+        timeout: Timeout,
+    },
+    #[state_machine_future(ready)] ConnectionEstablished(Connection<P>),
+    #[state_machine_future(error)] ErrorState2(Error),
+}
+
+impl<P> PollDeviceToDeviceConnection<P> for DeviceToDeviceConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    fn poll_init_state<'a>(
+        init: &'a mut RentToOwn<'a, InitState>,
+    ) -> Poll<AfterInitState<P>, Error> {
+        let init = init.take();
+
+        let timeout = Timeout::new(Duration::from_secs(2), &init.handle);
+        let remote_device_id = init.remote_device_id;
+        let is_controller = init.is_controller;
+        let new_session_controller = init.new_session_controller;
+        let connector = init.connector;
+
+        Ok(Ready(
+            TryDirectConnection {
+                connect: DirectDeviceToDeviceConnection::new(
+                    connector,
+                    &init.addresses,
+                    &init.handle,
+                ),
+                timeout,
+                new_session_controller,
+                remote_device_id,
+                is_controller,
+            }.into(),
+        ))
+    }
+
+    fn poll_try_direct_connection<'a>(
+        try: &'a mut RentToOwn<'a, TryDirectConnection<P>>,
+    ) -> Poll<AfterTryDirectConnection<P>, Error> {
+        let con = try.connect.poll();
+        let timeout = try.timeout.poll();
+
+        if timeout.is_err() || con.is_err() {
+            if try.is_controller {
+                let try = try.take();
+
+                let timeout = try.timeout.new_reset();
+
+                Ok(Ready(
+                    RelayConnection {
+                        relay: RelayDeviceToDeviceConnection::start(
+                            try.new_session_controller.new_session(),
+                            try.remote_device_id,
+                        ),
+                        timeout,
+                    }.into(),
+                ))
+            } else {
+                // The controller will create a relay connection via the server
+                bail!("direct device to device connection timeout")
+            }
+        } else {
+            let con = try_ready!(con);
+
+            Ok(Ready(ConnectionEstablished(con).into()))
+        }
+    }
+
+    fn poll_relay_connection<'a>(
+        relay: &'a mut RentToOwn<'a, RelayConnection<P>>,
+    ) -> Poll<AfterRelayConnection<P>, Error> {
+        relay
+            .timeout
+            .poll()
+            .map_err(|_| "relay connection timeout")?;
+
+        let con = try_ready!(relay.relay.poll());
+
+        Ok(Ready(ConnectionEstablished(con).into()))
     }
 }

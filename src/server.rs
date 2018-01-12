@@ -1,6 +1,6 @@
 use errors::*;
 use protocol::Protocol;
-use strategies::{self, Connection, Strategy};
+use strategies::{self, Connection, NewSessionWait, Strategy};
 
 use std::sync::{Arc, Mutex};
 use std::collections::HashMap;
@@ -14,6 +14,8 @@ use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 
 use serde::{Deserialize, Serialize};
+
+use state_machine_future::RentToOwn;
 
 pub enum ServiceControlMessage {
     CreateConnectionTo(ServiceId),
@@ -33,104 +35,169 @@ pub trait NewService {
     fn new_service(&self, id: ServiceId) -> Self::Service;
 }
 
-struct ServiceHandler<T, P>
-where
-    T: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    connection: Connection<P>,
-    service: T,
-    receiver: UnboundedReceiver<Protocol<P>>,
-    id: ServiceId,
-    state: Arc<Mutex<State<P>>>,
-    address: SocketAddr,
+enum InterServiceProtocol<P> {
+    SendMessage(Protocol<P>),
+    RelayConnection(ServiceId),
+    NewSessionCreated(NewSessionWait<P>),
 }
 
-impl<T, P> ServiceHandler<T, P>
+#[derive(StateMachineFuture)]
+enum ServiceHandler<T, P>
 where
     T: Service<Message = P>,
     P: Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    fn send_message(&mut self, msg: Protocol<P>) -> Result<()> {
-        self.connection
-            .start_send(msg)
-            .chain_err(|| "error sending message")?;
-        self.connection
-            .poll_complete()
-            .chain_err(|| "error sending message")
-            .map(|_| ())
-    }
+    #[state_machine_future(start, transitions(WaitForRelayMode, Finished))]
+    ServiceMode {
+        connection: Connection<P>,
+        service: T,
+        receiver: UnboundedReceiver<InterServiceProtocol<P>>,
+        id: ServiceId,
+        state: Arc<Mutex<State<P>>>,
+        address: SocketAddr,
+        handle: Handle,
+    },
+    #[state_machine_future(transitions(Finished))]
+    WaitForRelayMode {
+        connection: Connection<P>,
+        new_session: NewSessionWait<P>,
+        handle: Handle,
+    },
+    #[state_machine_future(ready)] Finished(()),
+    //TODO: We are not removing the service if an error occurs....
+    #[state_machine_future(error)] ErrorState(Error),
+}
 
-    fn poll_impl(&mut self) -> Poll<(), Error> {
+impl<T, P> PollServiceHandler<T, P> for ServiceHandler<T, P>
+where
+    T: Service<Message = P>,
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    fn poll_service_mode<'a>(
+        mode: &'a mut RentToOwn<'a, ServiceMode<T, P>>,
+    ) -> Poll<AfterServiceMode<P>, Error> {
         loop {
-            let msg = match self.connection.poll()? {
+            let msg = match mode.connection.poll()? {
                 Ready(Some(msg)) => msg,
-                Ready(None) => return Ok(Ready(())),
+                Ready(None) => {
+                    mode.service.close();
+                    mode.state.free_service(mode.id);
+                    return Ok(Ready(Finished(()).into()));
+                }
                 NotReady => break,
             };
 
             let answer = match msg {
                 Protocol::Embedded(v) => {
-                    self.service.on_message(&v)?.map(|v| Protocol::Embedded(v))
+                    mode.service.on_message(&v)?.map(|v| Protocol::Embedded(v))
                 }
                 Protocol::Register => {
-                    println!("REGISTER");
+                    println!("REGISTER: {}", mode.id);
                     Some(Protocol::Acknowledge)
                 }
                 Protocol::KeepAlive => Some(Protocol::KeepAlive),
                 Protocol::PrivateAdressInformation(id, mut addresses) => {
-                    addresses.push(self.address);
-                    let connect = Protocol::Connect(addresses, 0);
-                    self.state.send_message(id, connect)?;
+                    addresses.push(mode.address);
+                    let connect = Protocol::Connect(addresses, 0, mode.id);
+                    mode.state
+                        .send_message(id, InterServiceProtocol::SendMessage(connect))?;
 
+                    None
+                }
+                Protocol::RelayConnection(id) => {
+                    println!("RELAYCONNECTION: {} --- {}", mode.id, id);
+                    mode.state
+                        .send_message(id, InterServiceProtocol::RelayConnection(mode.id))?;
                     None
                 }
                 _ => None,
             };
 
             if let Some(answer) = answer {
-                self.send_message(answer)?;
+                mode.connection.send_and_poll(answer);
             }
 
-            if let Some(msg) = self.service.request_control_message() {
+            if let Some(msg) = mode.service.request_control_message() {
                 match msg {
                     ServiceControlMessage::CreateConnectionTo(id) => {
-                        self.state
-                            .send_message(id, Protocol::RequestPrivateAdressInformation(self.id))?;
-                        self.send_message(Protocol::RequestPrivateAdressInformation(id))?;
+                        mode.state.send_message(
+                            id,
+                            InterServiceProtocol::SendMessage(
+                                Protocol::RequestPrivateAdressInformation(mode.id),
+                            ),
+                        )?;
+                        mode.connection
+                            .send_and_poll(Protocol::RequestPrivateAdressInformation(id));
                     }
                 }
             }
         }
 
         loop {
-            match self.receiver.poll() {
-                Ok(Ready(Some(msg))) => self.send_message(msg)?,
+            match mode.receiver.poll() {
+                Ok(Ready(Some(msg))) => match msg {
+                    InterServiceProtocol::SendMessage(msg) => {
+                        mode.connection.send_and_poll(msg);
+                    }
+                    InterServiceProtocol::RelayConnection(other) => {
+                        let new_session = mode.connection.new_session();
+                        mode.state.send_message(
+                            other,
+                            InterServiceProtocol::NewSessionCreated(new_session),
+                        )?;
+                    }
+                    InterServiceProtocol::NewSessionCreated(new_session) => {
+                        let mut mode = mode.take();
+
+                        mode.service.close();
+                        mode.state.free_service(mode.id);
+                        mode.connection.send_and_poll(Protocol::RelayModeActivated);
+
+                        let connection = mode.connection;
+                        let handle = mode.handle;
+
+                        return Ok(Ready(
+                            WaitForRelayMode {
+                                connection,
+                                new_session,
+                                handle,
+                            }.into(),
+                        ));
+                    }
+                },
                 _ => break,
             }
         }
 
         Ok(NotReady)
     }
-}
 
-impl<T, P> Future for ServiceHandler<T, P>
-where
-    T: Service<Message = P>,
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = ();
-    type Error = Error;
+    fn poll_wait_for_relay_mode<'a>(
+        mode: &'a mut RentToOwn<'a, WaitForRelayMode<P>>,
+    ) -> Poll<AfterWaitForRelayMode, Error> {
+        let con = try_ready!(mode.new_session.poll());
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.poll_impl() {
-            r @ Ok(NotReady) => r,
-            r @ _ => {
-                self.service.close();
-                self.state.free_service(self.id);
-                r
-            }
-        }
+        let mode = mode.take();
+
+        let (con_sink, con_stream) = mode.connection.into_pure().split();
+        let (other_sink, other_stream) = con.into_pure().split();
+
+        mode.handle.spawn(
+            con_stream
+                .map(|v| v.try_mut().unwrap())
+                .forward(other_sink)
+                .map(|_| ())
+                .map_err(|e| println!("connection relaying error: {:?}", e)),
+        );
+        mode.handle.spawn(
+            other_stream
+                .map(|v| v.try_mut().unwrap())
+                .forward(con_sink)
+                .map(|_| ())
+                .map_err(|e| println!("connection relaying error: {:?}", e)),
+        );
+
+        Ok(Ready(Finished(()).into()))
     }
 }
 
@@ -192,14 +259,15 @@ where
 
                         let remote_addr = con.remote_addr();
 
-                        let handler = ServiceHandler {
-                            connection: con,
-                            address: remote_addr,
+                        let handler = ServiceHandler::start(
+                            con,
                             service,
                             receiver,
                             id,
-                            state: self.state.clone(),
-                        };
+                            self.state.clone(),
+                            remote_addr,
+                            self.handle.clone(),
+                        );
 
                         self.handle
                             .spawn(handler.map_err(|e| println!("Error: {:?}", e)));
@@ -218,7 +286,7 @@ where
 }
 
 struct State<P> {
-    services: HashMap<ServiceId, UnboundedSender<Protocol<P>>>,
+    services: HashMap<ServiceId, UnboundedSender<InterServiceProtocol<P>>>,
     unused_ids: Vec<ServiceId>,
 }
 
@@ -234,17 +302,17 @@ impl<P> State<P> {
 trait ServerState<P> {
     fn new_service<F>(&self, create_service: F)
     where
-        F: FnOnce(ServiceId) -> UnboundedSender<Protocol<P>>;
+        F: FnOnce(ServiceId) -> UnboundedSender<InterServiceProtocol<P>>;
 
     fn free_service(&self, id: ServiceId);
 
-    fn send_message(&self, id: ServiceId, msg: Protocol<P>) -> Result<()>;
+    fn send_message(&self, id: ServiceId, msg: InterServiceProtocol<P>) -> Result<()>;
 }
 
 impl<P> ServerState<P> for Arc<Mutex<State<P>>> {
     fn new_service<F>(&self, create_service: F)
     where
-        F: FnOnce(ServiceId) -> UnboundedSender<Protocol<P>>,
+        F: FnOnce(ServiceId) -> UnboundedSender<InterServiceProtocol<P>>,
     {
         let mut state = self.lock().unwrap();
 
@@ -266,7 +334,7 @@ impl<P> ServerState<P> for Arc<Mutex<State<P>>> {
         }
     }
 
-    fn send_message(&self, id: ServiceId, msg: Protocol<P>) -> Result<()> {
+    fn send_message(&self, id: ServiceId, msg: InterServiceProtocol<P>) -> Result<()> {
         let state = self.lock().unwrap();
 
         if let Some(sender) = state.services.get(&id) {

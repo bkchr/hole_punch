@@ -180,24 +180,22 @@ fn main() {
 
     let mut evt_loop = Core::new().unwrap();
 
-    loop {
-        let new_service = NewCarrierService {};
+    let new_service = NewCarrierService {};
 
-        let mut client =
-            Client::new(evt_loop.handle().clone(), new_service, false).expect("client");
-        let addr: SocketAddr = server_addr;
-        client.connect_to(&addr).expect("connect");
+    let mut client = Client::new(evt_loop.handle().clone(), new_service, false).expect("client");
+    let addr: SocketAddr = server_addr;
+    client.connect_to(&addr).expect("connect");
 
-        let con = evt_loop
-            .run(client.into_future().map_err(|_| ()))
-            .unwrap()
-            .0
-            .unwrap();
-
-        if h2 {
-            do_http2(con, evt_loop.handle());
-        } else {
-            do_http(con, evt_loop.handle());
-        }
-    }
+    let handle = evt_loop.handle();
+    evt_loop
+        .run(client.for_each(move |con| {
+            let handle = handle.clone();
+            if h2 {
+                do_http2(con, handle);
+            } else {
+                do_http(con, handle);
+            }
+            Ok(())
+        }))
+        .unwrap();
 }

@@ -11,11 +11,11 @@ use std::sync::{Arc, Mutex};
 
 use tokio_core::reactor::{Handle, Timeout};
 
-use futures::{Future, IntoFuture, Poll, Sink, Stream};
+use futures::{self, Future, IntoFuture, Poll, Sink, Stream};
 use futures::Async::{NotReady, Ready};
 use futures::sync::mpsc::{unbounded, UnboundedReceiver, UnboundedSender};
 use futures::sync::oneshot;
-use futures::stream::{FuturesUnordered, StreamFuture};
+use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 
 use serde::{Deserialize, Serialize};
 
@@ -75,25 +75,23 @@ impl<P> ServiceControl<P> {
     }
 }
 
-pub struct ClientInner<P, N>
-where
-    N: NewService<P>,
+pub struct ClientInner<N>
 {
-    strategies: Vec<Strategy<P>>,
     connector: Connector,
     new_service: N,
     coordinator: bool,
 }
 
-type ClientInnerSync<P, N> = Arc<Mutex<ClientInner<P, N>>>;
+type ClientInnerSync<N> = Arc<Mutex<ClientInner<N>>>;
 
 pub struct Client<P, N>
 where
     N: NewService<P>,
 {
-    inner: ClientInnerSync<P, N>,
+    inner: ClientInnerSync<N>,
     handle: Handle,
     result_recvs: FuturesUnordered<StreamFuture<UnboundedReceiver<Result<PureConnection>>>>,
+    strategies: FuturesUnordered<StreamFuture<Strategy<P>>>,
 }
 
 impl<P, N> Client<P, N>
@@ -109,13 +107,13 @@ where
 
         Ok(Client {
             inner: Arc::new(Mutex::new(ClientInner {
-                strategies,
                 connector,
                 new_service,
                 coordinator,
             })),
             handle,
             result_recvs: FuturesUnordered::new(),
+            strategies: futures_unordered(strategies.into_iter().map(|v| v.into_future())),
         })
     }
 
@@ -157,6 +155,34 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        loop {
+            let (con, strat) = match self.strategies.poll().map_err(|(e, _)| e)? {
+                Ready(Some(con)) => con,
+                _ => break,
+            };
+
+            let con = if let Some(con) = con {
+                con
+            } else {
+                self.strategies.push(strat.into_future());
+                continue;
+            };
+
+            let (sender, recv) = unbounded();
+            self.result_recvs.push(recv.into_future());
+
+            self.handle.spawn(
+                ServiceHandler::start(
+                    self.inner.clone(),
+                    futures::future::ok(con),
+                    self.handle.clone(),
+                    sender,
+                ).map_err(|e| println!("{:?}", e)),
+            );
+
+            self.strategies.push(strat.into_future());
+        }
+
         let result = match self.result_recvs.poll() {
             Ok(Ready(Some(val))) => val,
             _ => return Ok(NotReady),
@@ -181,14 +207,14 @@ enum ServiceHandler<
 > {
     #[state_machine_future(start, transitions(HandleMessages))]
     WaitForConnection {
-        client: ClientInnerSync<P, N>,
+        client: ClientInnerSync<N>,
         wait: F,
         handle: Handle,
         result_sender: UnboundedSender<Result<PureConnection>>,
     },
     #[state_machine_future(transitions(WaitForAckReUseConnection, Finished))]
     HandleMessages {
-        client: ClientInnerSync<P, N>,
+        client: ClientInnerSync<N>,
         result_sender: UnboundedSender<Result<PureConnection>>,
         handle: Handle,
         connection: Connection<P>,
@@ -268,35 +294,34 @@ where
                         .map(|ip| (ip, handler.connection.local_addr().port()).into())
                         .collect_vec();
 
+                    eprintln!("PrivateAdressInformation: {}", id);
                     Some(Protocol::PrivateAdressInformation(id, addresses))
                 }
-                Protocol::Connect(addresses, _) => {
-                    println!("CONNECT: {:?}", addresses);
+                Protocol::Connect(addresses, _, remote) => {
+                    eprintln!("CONNECT: {:?} {}", addresses, remote);
                     handler.service.inform(ServiceInformEvent::Connecting);
                     let coordinator = handler.client.lock().unwrap().coordinator;
                     let connector = handler.client.lock().unwrap().connector.clone();
 
-                        // TODO: this should only be done when DeviceToDeviceConnection fails
-                        let new_session = handler.connection.new_session();
-                        let wait =
-                            DeviceToDeviceConnection::new(connector, &addresses, &handler.handle)
-                        .then(|r| {
-                            match r {
-                                Ok(r) => Ok(r),
-                                Err(_) if coordinator => Ok(new_session),
-                                Err(e) => Err(e),
-                            }
-                        });
+                    let new_session = handler.connection.new_session_controller();
+                    let wait = DeviceToDeviceConnection::start(
+                        connector,
+                        addresses,
+                        new_session,
+                        remote,
+                        coordinator,
+                        handler.handle.clone(),
+                    );
 
-                        handler.handle.spawn(
-                            ServiceHandler::start(
-                                handler.client.clone(),
-                                wait,
-                                handler.handle.clone(),
-                                handler.result_sender.clone(),
-                            ).map_err(|e| println!("{:?}", e)),
-                        );
-                    
+                    handler.handle.spawn(
+                        ServiceHandler::start(
+                            handler.client.clone(),
+                            wait,
+                            handler.handle.clone(),
+                            handler.result_sender.clone(),
+                        ).map_err(|e| eprintln!("{:?}", e)),
+                    );
+
                     None
                 }
                 Protocol::ReUseConnection => {
@@ -304,7 +329,7 @@ where
                         .connection
                         .send_and_poll(Protocol::AckReUseConnection);
                     let handler = handler.take();
-                    println!("REUSE");
+                    eprintln!("REUSE");
                     handler
                         .result_sender
                         .unbounded_send(Ok(handler.connection.into_pure()));

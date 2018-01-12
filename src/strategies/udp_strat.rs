@@ -81,7 +81,7 @@ where
             Ok(Ready(Some(con))) => {
                 return Ok(Ready(Some(strategies::Connection::Udp(WriteJson::new(
                     ReadJson::new(con),
-                )))))
+                )))));
             }
             _ => {}
         };
@@ -305,7 +305,7 @@ fn unpack_reliable_msg(data: Bytes) -> Result<(u64, u16, ReliableMsgType, Option
     Ok((id, session_id, ty, data))
 }
 
-type NewSession = UnboundedSender<oneshot::Sender<UdpConnection>>;
+pub type NewSession = UnboundedSender<oneshot::Sender<UdpConnection>>;
 
 struct Session {
     sender: UnboundedSender<Bytes>,
@@ -326,7 +326,11 @@ impl Session {
         remote_addr: SocketAddr,
     ) -> (Session, UdpConnection) {
         let (sender, poll_recv) = unbounded();
-        let (sink_sender, recv) = unbounded();
+        let (sink_sender, mut recv) = unbounded();
+
+        // We need to poll the receiver onces, that the *current* task is registered to be woken up,
+        // when new data should be send!
+        let _ = recv.poll();
 
         (
             Session {
@@ -514,7 +518,7 @@ impl ReliableConnection {
                             let _ = stream.poll_complete();
                         }
                         Err(e) => {
-                            println!("{:?}", e);
+                            eprintln!("{:?}", e);
                             return false;
                         }
                     }
@@ -530,14 +534,14 @@ impl ReliableConnection {
             let msg = match try_ready!(self.con.poll().map_err(|_| ())) {
                 Some(msg) => msg,
                 None => {
-                    println!("ReliableConnection closed!");
+                    eprintln!("ReliableConnection closed!");
                     return Err(());
                 }
             };
 
             let (id, session_id, ty, data) = match unpack_reliable_msg(msg) {
                 Err(e) => {
-                    println!("Error: {:?}", e);
+                    eprintln!("Error: {:?}", e);
                     continue;
                 }
                 Ok(msg) => msg,
@@ -558,6 +562,7 @@ impl ReliableConnection {
                         }
                         Vacant(entry) => {
                             if !self.known_sessions.contains(&session_id) {
+                                eprintln!("New session found: {}", session_id);
                                 let (mut session, con) = Session::new(
                                     session_id,
                                     self.new_session.clone(),
@@ -572,20 +577,20 @@ impl ReliableConnection {
                                 self.next_session_id = match session_id.checked_add(1) {
                                     Some(val) => val,
                                     None => {
-                                        println!("session_id out of bounce");
+                                        eprintln!("session_id out of bounce");
                                         return Err(());
                                     }
                                 };
 
                                 self.new_session_inform.unbounded_send(con);
                             } else {
-                                println!("received package for session({}), after the session was finished!", session_id);
+                                eprintln!("received package for session({}), after the session was finished!", session_id);
                             }
                         }
                     }
                 }
                 _ => {
-                    println!("received weird shit and will ignore it!");
+                    eprintln!("received weird shit and will ignore it!");
                 }
             }
         }
@@ -599,11 +604,25 @@ impl Future for ReliableConnection {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.check_for_new_sessions();
         self.check_send_data();
-        self.check_recv_data()
+        self.check_recv_data()?;
+
+        if self.sessions.is_empty() {
+            println!("Goodbye: {} -> {}", self.local_addr, self.remote_addr);
+            // we are done
+            Ok(Ready(()))
+        } else {
+            Ok(NotReady)
+        }
     }
 }
 
 pub struct NewSessionWait(oneshot::Receiver<UdpConnection>);
+
+impl NewSessionWait {
+    pub fn new(recv: oneshot::Receiver<UdpConnection>) -> NewSessionWait {
+        NewSessionWait(recv)
+    }
+}
 
 impl Future for NewSessionWait {
     type Item = UdpConnection;
@@ -655,6 +674,10 @@ impl UdpConnection {
         self.new_session.unbounded_send(sender);
 
         NewSessionWait(receiver)
+    }
+
+    pub fn new_session_controller(&self) -> NewSession {
+        self.new_session.clone()
     }
 }
 

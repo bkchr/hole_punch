@@ -7,6 +7,7 @@ use std::marker::PhantomData;
 
 use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Sink, StartSend, Stream};
+use futures::sync::oneshot;
 
 use tokio_core::reactor::Handle;
 
@@ -15,6 +16,8 @@ use tokio_io::{AsyncRead, AsyncWrite};
 use tokio_serde_json::{ReadJson, WriteJson};
 
 use serde::{Deserialize, Serialize};
+
+use bytes::{Bytes, BytesMut};
 
 mod udp_strat;
 
@@ -155,8 +158,8 @@ where
     }
 
     pub fn send_and_poll(&mut self, msg: Protocol<P>) {
-        if self.start_send(msg).is_ok() {
-            let _ = self.poll_complete();
+        if self.start_send(msg).is_err() || self.poll_complete().is_err() {
+            eprintln!("error at `send_and_poll`");
         }
     }
 
@@ -164,6 +167,14 @@ where
         match *self {
             Connection::Udp(ref stream) => {
                 NewSessionWait::Udp(stream.get_ref().get_ref().new_session(), Default::default())
+            }
+        }
+    }
+
+    pub fn new_session_controller(&self) -> NewSessionController {
+        match *self {
+            Connection::Udp(ref stream) => {
+                NewSessionController::Udp(stream.get_ref().get_ref().new_session_controller())
             }
         }
     }
@@ -188,6 +199,24 @@ where
     }
 }
 
+#[derive(Clone)]
+pub enum NewSessionController {
+    Udp(udp_strat::NewSession),
+}
+
+impl NewSessionController {
+    pub fn new_session<P>(&self) -> NewSessionWait<P> {
+        match *self {
+            NewSessionController::Udp(ref new) => {
+                let (sender, recv) = oneshot::channel();
+                new.unbounded_send(sender);
+
+                NewSessionWait::Udp(udp_strat::NewSessionWait::new(recv), Default::default())
+            }
+        }
+    }
+}
+
 pub fn accept<P>(handle: &Handle) -> Result<Vec<Strategy<P>>>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
@@ -208,6 +237,34 @@ where
 
 pub enum PureConnection {
     Udp(udp_strat::PureConnection),
+}
+
+impl Stream for PureConnection {
+    type Item = Bytes;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match *self {
+            PureConnection::Udp(ref mut con) => con.poll(),
+        }
+    }
+}
+
+impl Sink for PureConnection {
+    type SinkItem = BytesMut;
+    type SinkError = Error;
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        match self {
+            &mut PureConnection::Udp(ref mut sink) => sink.start_send(item),
+        }
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        match self {
+            &mut PureConnection::Udp(ref mut sink) => sink.poll_complete(),
+        }
+    }
 }
 
 impl Read for PureConnection {
