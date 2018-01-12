@@ -94,7 +94,7 @@ impl UdpConnection {
         // the check is only required for start_send, but to mute the warning, check the result of
         // poll_complete, too.
         if self.sender.start_send(data).is_err() || self.sender.poll_complete().is_err() {
-            println!("ERROR");
+            eprintln!("ERROR");
             return;
         }
     }
@@ -126,7 +126,7 @@ impl UdpServer {
         let addr = socket.local_addr();
         let (inner, new_connection, connect) = UdpServerInner::new(socket, channel_buffer);
 
-        handle.spawn(inner.map_err(|e| println!("Inner error: {:?}", e)));
+        handle.spawn(inner.map_err(|e| eprintln!("Inner error: {:?}", e)));
 
         (
             UdpServer {
@@ -404,7 +404,7 @@ impl io::Read for UdpServerStream {
                 let len = min(buf.len(), data.len());
                 &buf[..len].copy_from_slice(&data.as_ref()[..len]);
                 if buf.len() < data.len() {
-                    println!("DATALOSS!!");
+                    eprintln!("DATALOSS!!");
                 }
                 Ok(len)
             }

@@ -92,7 +92,7 @@ where
                     mode.service.on_message(&v)?.map(|v| Protocol::Embedded(v))
                 }
                 Protocol::Register => {
-                    println!("REGISTER: {}", mode.id);
+                    eprintln!("REGISTER: {}", mode.id);
                     Some(Protocol::Acknowledge)
                 }
                 Protocol::KeepAlive => Some(Protocol::KeepAlive),
@@ -105,7 +105,7 @@ where
                     None
                 }
                 Protocol::RelayConnection(id) => {
-                    println!("RELAYCONNECTION: {} --- {}", mode.id, id);
+                    eprintln!("RELAYCONNECTION: {} --- {}", mode.id, id);
                     mode.state
                         .send_message(id, InterServiceProtocol::RelayConnection(mode.id))?;
                     None
@@ -187,14 +187,14 @@ where
                 .map(|v| v.try_mut().unwrap())
                 .forward(other_sink)
                 .map(|_| ())
-                .map_err(|e| println!("connection relaying error: {:?}", e)),
+                .map_err(|e| eprintln!("connection relaying error: {:?}", e)),
         );
         mode.handle.spawn(
             other_stream
                 .map(|v| v.try_mut().unwrap())
                 .forward(con_sink)
                 .map(|_| ())
-                .map_err(|e| println!("connection relaying error: {:?}", e)),
+                .map_err(|e| eprintln!("connection relaying error: {:?}", e)),
         );
 
         Ok(Ready(Finished(()).into()))
@@ -270,7 +270,7 @@ where
                         );
 
                         self.handle
-                            .spawn(handler.map_err(|e| println!("Error: {:?}", e)));
+                            .spawn(handler.map_err(|e| eprintln!("Error: {:?}", e)));
 
                         sender
                     });

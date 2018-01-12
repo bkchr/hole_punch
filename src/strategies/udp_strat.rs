@@ -607,7 +607,7 @@ impl Future for ReliableConnection {
         self.check_recv_data()?;
 
         if self.sessions.is_empty() {
-            println!("Goodbye: {} -> {}", self.local_addr, self.remote_addr);
+            eprintln!("Goodbye: {} -> {}", self.local_addr, self.remote_addr);
             // we are done
             Ok(Ready(()))
         } else {

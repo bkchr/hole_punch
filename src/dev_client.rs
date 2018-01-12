@@ -135,7 +135,7 @@ where
                 let wait = inner.lock().unwrap().connector.connect(addr);
                 handle.spawn(
                     ServiceHandler::start(inner.clone(), wait, handle.clone(), sender)
-                        .map_err(|e| println!("{:?}", e)),
+                        .map_err(|e| eprintln!("{:?}", e)),
                 );
             }
 
@@ -177,7 +177,7 @@ where
                     futures::future::ok(con),
                     self.handle.clone(),
                     sender,
-                ).map_err(|e| println!("{:?}", e)),
+                ).map_err(|e| eprintln!("{:?}", e)),
             );
 
             self.strategies.push(strat.into_future());
@@ -252,7 +252,7 @@ where
             .new_service
             .new_service(servicec, remote_addr);
 
-        println!("CONNECTION NEW");
+        eprintln!("CONNECTION NEW");
         Ok(Ready(
             HandleMessages {
                 client: wait.client,
@@ -353,7 +353,7 @@ where
                 ServiceControlEvent::UseAsResult => {
                     handler.connection.send_and_poll(Protocol::ReUseConnection);
                     let handler = handler.take();
-                    println!("USEASRESULT");
+                    eprintln!("USEASRESULT");
                     return Ok(Ready(
                         WaitForAckReUseConnection {
                             result_sender: handler.result_sender,

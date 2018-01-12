@@ -134,7 +134,7 @@ where
             Ok(Ready(con)) => Ok(Ready(con)),
             Ok(NotReady) => Ok(NotReady),
             Err(e) => {
-                println!("error: {:?}", e);
+                eprintln!("error: {:?}", e);
 
                 match self.strategies.pop() {
                     Some(mut strat) => {
@@ -273,7 +273,7 @@ where
                     }
                 }
                 Err(e) => {
-                    println!("{:?}", e);
+                    eprintln!("{:?}", e);
                 }
             }
         }
