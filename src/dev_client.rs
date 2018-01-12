@@ -82,6 +82,7 @@ where
     strategies: Vec<Strategy<P>>,
     connector: Connector,
     new_service: N,
+    coordinator: bool,
 }
 
 type ClientInnerSync<P, N> = Arc<Mutex<ClientInner<P, N>>>;
@@ -100,7 +101,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
 {
-    pub fn new(handle: Handle, new_service: N) -> Result<Client<P, N>> {
+    pub fn new(handle: Handle, new_service: N, coordinator: bool) -> Result<Client<P, N>> {
         let (strategies, connects) =
             strategies::connect(&handle).chain_err(|| "error creating strategy sockets")?;
 
@@ -111,6 +112,7 @@ where
                 strategies,
                 connector,
                 new_service,
+                coordinator,
             })),
             handle,
             result_recvs: FuturesUnordered::new(),
@@ -134,15 +136,8 @@ where
             for (addr, sender) in addr_and_sender {
                 let wait = inner.lock().unwrap().connector.connect(addr);
                 handle.spawn(
-                    ServiceHandler::start(
-                        inner.clone(),
-                        wait.map(move |con| {
-                            let remote_addr = con.remote_addr();
-                            (con, remote_addr)
-                        }),
-                        handle.clone(),
-                        sender,
-                    ).map_err(|e| println!("{:?}", e)),
+                    ServiceHandler::start(inner.clone(), wait, handle.clone(), sender)
+                        .map_err(|e| println!("{:?}", e)),
                 );
             }
 
@@ -182,7 +177,7 @@ where
 enum ServiceHandler<
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
-    F: Future<Item = (Connection<P>, SocketAddr), Error = Error>,
+    F: Future<Item = Connection<P>, Error = Error>,
 > {
     #[state_machine_future(start, transitions(HandleMessages))]
     WaitForConnection {
@@ -214,12 +209,13 @@ impl<P, N, F> PollServiceHandler<P, N, F> for ServiceHandler<P, N, F>
 where
     P: Serialize + for<'de> Deserialize<'de> + Clone,
     N: NewService<P> + 'static,
-    F: Future<Item = (Connection<P>, SocketAddr), Error = Error>,
+    F: Future<Item = Connection<P>, Error = Error>,
 {
     fn poll_wait_for_connection<'a>(
         wait: &'a mut RentToOwn<'a, WaitForConnection<P, N, F>>,
     ) -> Poll<AfterWaitForConnection<P, N>, Error> {
-        let (connection, remote_addr) = try_ready!(wait.wait.poll());
+        let connection = try_ready!(wait.wait.poll());
+        let remote_addr = connection.remote_addr();
 
         let wait = wait.take();
         let (servicec, service_control_receiver) = ServiceControl::new();
@@ -277,18 +273,30 @@ where
                 Protocol::Connect(addresses, _) => {
                     println!("CONNECT: {:?}", addresses);
                     handler.service.inform(ServiceInformEvent::Connecting);
+                    let coordinator = handler.client.lock().unwrap().coordinator;
                     let connector = handler.client.lock().unwrap().connector.clone();
-                    let wait =
-                        DeviceToDeviceConnection::new(connector, &addresses, &handler.handle);
 
-                    handler.handle.spawn(
-                        ServiceHandler::start(
-                            handler.client.clone(),
-                            wait,
-                            handler.handle.clone(),
-                            handler.result_sender.clone(),
-                        ).map_err(|e| println!("{:?}", e)),
-                    );
+                        // TODO: this should only be done when DeviceToDeviceConnection fails
+                        let new_session = handler.connection.new_session();
+                        let wait =
+                            DeviceToDeviceConnection::new(connector, &addresses, &handler.handle)
+                        .then(|r| {
+                            match r {
+                                Ok(r) => Ok(r),
+                                Err(_) if coordinator => Ok(new_session),
+                                Err(e) => Err(e),
+                            }
+                        });
+
+                        handler.handle.spawn(
+                            ServiceHandler::start(
+                                handler.client.clone(),
+                                wait,
+                                handler.handle.clone(),
+                                handler.result_sender.clone(),
+                            ).map_err(|e| println!("{:?}", e)),
+                        );
+                    
                     None
                 }
                 Protocol::ReUseConnection => {

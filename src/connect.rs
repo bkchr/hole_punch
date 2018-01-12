@@ -208,84 +208,12 @@ where
     }
 }
 
-struct DeviceToDeviceConnectionDataWrapper<P, F>
-where
-    F: Future<Item = Connection<P>, Error = Error>,
-    P: 'static + Serialize + for<'de> Deserialize<'de>,
-{
-    future: F,
-    addr: SocketAddr,
-}
-
-impl<P, F> Future for DeviceToDeviceConnectionDataWrapper<P, F>
-where
-    F: Future<Item = Connection<P>, Error = Error>,
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = (Connection<P>, SocketAddr);
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let con = try_ready!(self.future.poll());
-
-        Ok(Ready((con, self.addr)))
-    }
-}
-
-impl<P, F> From<(F, SocketAddr)> for DeviceToDeviceConnectionDataWrapper<P, F>
-where
-    F: Future<Item = Connection<P>, Error = Error>,
-    P: 'static + Serialize + for<'de> Deserialize<'de>,
-{
-    fn from(val: (F, SocketAddr)) -> DeviceToDeviceConnectionDataWrapper<P, F> {
-        DeviceToDeviceConnectionDataWrapper {
-            future: val.0,
-            addr: val.1,
-        }
-    }
-}
-
-struct DeviceToDeviceConnectionDataWrapperFirst<P, F>
-where
-    F: Future<Item = Connection<P>, Error = Error>,
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    future: F,
-    addr: SocketAddr,
-}
-
-impl<P, F> Future for DeviceToDeviceConnectionDataWrapperFirst<P, F>
-where
-    F: Future<Item = Connection<P>, Error = Error>,
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = (Connection<P>, SocketAddr);
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let con = try_ready!(self.future.poll());
-
-        Ok(Ready((con, self.addr)))
-    }
-}
-
-impl<P, F> DeviceToDeviceConnectionDataWrapperFirst<P, F>
-where
-    F: Future<Item = Connection<P>, Error = Error>,
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn new(f: F, addr: SocketAddr) -> DeviceToDeviceConnectionDataWrapperFirst<P, F> {
-        DeviceToDeviceConnectionDataWrapperFirst { future: f, addr }
-    }
-}
-
 pub struct DeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    wait_for_connect:
-        FuturesUnordered<DeviceToDeviceConnectionDataWrapperFirst<P, WaitForConnect<P>>>,
-    wait_for_hello: FuturesUnordered<DeviceToDeviceConnectionDataWrapper<P, WaitForMessage<P>>>,
+    wait_for_connect: FuturesUnordered<WaitForConnect<P>>,
+    wait_for_hello: FuturesUnordered<WaitForMessage<P>>,
     handle: Handle,
 }
 
@@ -300,9 +228,9 @@ where
     ) -> DeviceToDeviceConnection<P> {
         let mut strat = strat.get_connect();
         DeviceToDeviceConnection {
-            wait_for_connect: futures_unordered(addresses.iter().map(|a| {
-                DeviceToDeviceConnectionDataWrapperFirst::new(strat.connect(*a).unwrap(), *a)
-            })),
+            wait_for_connect: futures_unordered(
+                addresses.iter().map(|a| strat.connect(*a).unwrap()),
+            ),
             wait_for_hello: FuturesUnordered::new(),
             handle: handle.clone(),
         }
@@ -313,7 +241,7 @@ impl<P> Future for DeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, SocketAddr);
+    type Item = Connection<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -322,9 +250,9 @@ where
 
             match connection {
                 Ready(Some(mut con)) => {
-                    con.0.send_and_poll(Protocol::Hello);
-                    let wait = WaitForMessage::new(con.0, Protocol::Hello);
-                    self.wait_for_hello.push((wait, con.1).into());
+                    con.send_and_poll(Protocol::Hello);
+                    let wait = WaitForMessage::new(con, Protocol::Hello);
+                    self.wait_for_hello.push(wait);
                 }
                 _ => break,
             }

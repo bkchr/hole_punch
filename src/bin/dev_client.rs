@@ -217,7 +217,7 @@ fn main() {
 
     let new_service = NewCarrierService {};
 
-    let mut client = Client::new(evt_loop.handle(), new_service).expect("client");
+    let mut client = Client::new(evt_loop.handle(), new_service, true).expect("client");
     let addr: SocketAddr = server_addr;
     client.connect_to(&addr).expect("connect");
 

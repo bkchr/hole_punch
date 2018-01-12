@@ -603,6 +603,19 @@ impl Future for ReliableConnection {
     }
 }
 
+pub struct NewSessionWait(oneshot::Receiver<UdpConnection>);
+
+impl Future for NewSessionWait {
+    type Item = UdpConnection;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.0
+            .poll()
+            .map_err(|_| "error at `NewSessionWait::poll`".into())
+    }
+}
+
 pub struct UdpConnection {
     recv: UnboundedReceiver<Bytes>,
     sender: UnboundedSender<BytesMut>,
@@ -634,6 +647,14 @@ impl UdpConnection {
 
     pub fn remote_addr(&self) -> SocketAddr {
         self.remote_addr
+    }
+
+    pub fn new_session(&self) -> NewSessionWait {
+        let (sender, receiver) = oneshot::channel();
+
+        self.new_session.unbounded_send(sender);
+
+        NewSessionWait(receiver)
     }
 }
 

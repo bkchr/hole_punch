@@ -183,7 +183,8 @@ fn main() {
     loop {
         let new_service = NewCarrierService {};
 
-        let mut client = Client::new(evt_loop.handle().clone(), new_service).expect("client");
+        let mut client =
+            Client::new(evt_loop.handle().clone(), new_service, false).expect("client");
         let addr: SocketAddr = server_addr;
         client.connect_to(&addr).expect("connect");
 

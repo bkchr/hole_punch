@@ -3,6 +3,7 @@ use protocol::Protocol;
 
 use std::net::SocketAddr;
 use std::io::{self, Read, Write};
+use std::marker::PhantomData;
 
 use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Sink, StartSend, Stream};
@@ -10,6 +11,8 @@ use futures::{Future, Poll, Sink, StartSend, Stream};
 use tokio_core::reactor::Handle;
 
 use tokio_io::{AsyncRead, AsyncWrite};
+
+use tokio_serde_json::{ReadJson, WriteJson};
 
 use serde::{Deserialize, Serialize};
 
@@ -154,6 +157,33 @@ where
     pub fn send_and_poll(&mut self, msg: Protocol<P>) {
         if self.start_send(msg).is_ok() {
             let _ = self.poll_complete();
+        }
+    }
+
+    pub fn new_session(&self) -> NewSessionWait<P> {
+        match *self {
+            Connection::Udp(ref stream) => {
+                NewSessionWait::Udp(stream.get_ref().get_ref().new_session(), Default::default())
+            }
+        }
+    }
+}
+
+pub enum NewSessionWait<P> {
+    Udp(udp_strat::NewSessionWait, PhantomData<P>),
+}
+
+impl<P> Future for NewSessionWait<P>
+where
+    P: Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    type Item = Connection<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match *self {
+            NewSessionWait::Udp(ref mut wait, _) => wait.poll()
+                .map(|r| r.map(|v| Connection::Udp(WriteJson::new(ReadJson::new(v))))),
         }
     }
 }
