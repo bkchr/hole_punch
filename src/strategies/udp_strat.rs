@@ -740,6 +740,9 @@ impl io::Read for UdpConnection {
                 // TODO: maybe integrate tmp buffer for 'lost' elements.
                 let len = min(buf.len(), data.as_ref().len());
                 &buf[..len].copy_from_slice(&data.as_ref()[..len]);
+                if buf.len() < data.len() {
+                    eprintln!("DATALOSS!!");
+                }
                 Ok(len)
             }
             Ready(None) => Ok(0),

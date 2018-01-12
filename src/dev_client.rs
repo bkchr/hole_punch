@@ -75,8 +75,7 @@ impl<P> ServiceControl<P> {
     }
 }
 
-pub struct ClientInner<N>
-{
+pub struct ClientInner<N> {
     connector: Connector,
     new_service: N,
     coordinator: bool,

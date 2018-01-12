@@ -245,6 +245,7 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        bail!("TEST");
         loop {
             let connection = self.wait_for_connect.poll()?;
 

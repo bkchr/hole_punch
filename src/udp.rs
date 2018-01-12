@@ -191,7 +191,7 @@ impl UdpServerInner {
         (
             UdpServerInner {
                 socket,
-                buf: vec![0; 1024],
+                buf: vec![0; 1400],
                 connections: HashMap::new(),
                 buffer_size: channel_buffer,
                 send_overflow: None,
