@@ -87,8 +87,8 @@ impl NewService<CarrierProtocol> for NewCarrierService {
 
 fn main() {
     env_logger::init();
-    // let server_addr = ([176, 9, 73, 99], 22222).into();
-    let server_addr = ([127, 0, 0, 1], 22222).into();
+    let server_addr = ([176, 9, 73, 99], 22222).into();
+    //let server_addr = ([127, 0, 0, 1], 22222).into();
 
     let mut evt_loop = Core::new().unwrap();
 

@@ -117,8 +117,8 @@ impl<R: AsyncRead> Future for TestReader<R> {
 
 fn main() {
     env_logger::init();
-    let device = env::args().nth(1).expect("please give name for device!");
-    // let server_addr = ([176, 9, 73, 99], 22222).into();
+    // let device = env::args().nth(1).expect("please give name for device!");
+    let server_addr = ([176, 9, 73, 99], 22222).into();
     let server_addr = ([127, 0, 0, 1], 22222).into();
     let mut evt_loop = Core::new().unwrap();
 
@@ -145,6 +145,7 @@ fn main() {
 
     handle.spawn(recv.for_each(|buf| {
         std::io::stdout().write(&buf);
+        std::io::stdout().flush();
         Ok(())
     }).map_err(|_| ()));
 
