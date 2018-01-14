@@ -119,7 +119,7 @@ fn main() {
     env_logger::init();
     // let device = env::args().nth(1).expect("please give name for device!");
     let server_addr = ([176, 9, 73, 99], 22222).into();
-    let server_addr = ([127, 0, 0, 1], 22222).into();
+    // let server_addr = ([127, 0, 0, 1], 22222).into();
     let mut evt_loop = Core::new().unwrap();
 
     let new_service = NewCarrierService {};
