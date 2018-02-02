@@ -16,12 +16,12 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_json;
 extern crate tokio_timer;
+extern crate picoquic;
 
 mod protocol;
 pub mod server;
 pub mod peer_client;
 pub mod dev_client;
-mod udp;
 pub mod errors;
 mod strategies;
 mod connect;

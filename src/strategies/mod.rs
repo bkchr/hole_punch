@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use bytes::{Bytes, BytesMut};
 
-mod udp_strat;
+mod udp;
 
 pub enum ConnectionType {
     /// The connection was created by an incoming connection from a remote address
