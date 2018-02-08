@@ -32,28 +32,23 @@ use serde::{Deserialize, Serialize};
 
 use bytes::{BigEndian, Buf, BufMut, Bytes, BytesMut};
 
-pub type Connection<P> = WriteJson<ReadJson<UdpConnection, Protocol<P>>, Protocol<P>>;
+use picoquic;
 
-pub type PureConnection = UdpConnection;
+type Connection = picoquic::Stream;
 
-pub struct Server<P> {
-    server: Context,
-    marker: PhantomData<P>,
+pub struct Server {
+    server: picoquic::Context,
     handle: Handle,
     new_session_inform_recv: UnboundedReceiver<UdpConnection>,
     new_session_inform_send: UnboundedSender<UdpConnection>,
 }
 
-impl<P> Server<P>
-where
-    P: Serialize + for<'de> Deserialize<'de>,
-{
-    fn new(server: udp::UdpServer, handle: Handle) -> Self {
+impl Server {
+    fn new(listen_address: SocketAddr, handle: Handle) -> Self {
         let (new_session_inform_send, new_session_inform_recv) = unbounded();
 
         Server {
             server,
-            marker: Default::default(),
             handle,
             new_session_inform_recv,
             new_session_inform_send,

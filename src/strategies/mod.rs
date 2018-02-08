@@ -21,47 +21,6 @@ use bytes::{Bytes, BytesMut};
 
 mod udp;
 
-pub enum ConnectionType {
-    /// The connection was created by an incoming connection from a remote address
-    Incoming,
-    /// The connection was created by connecting to a remote address
-    Outgoing,
-}
-
-#[derive(Clone)]
-pub enum Connect {
-    Udp(udp_strat::Connect),
-}
-
-impl Connect {
-    pub fn connect<P>(&mut self, addr: SocketAddr) -> Result<WaitForConnect<P>>
-    where
-        P: Serialize + for<'de> Deserialize<'de> + Clone,
-    {
-        match self {
-            &mut Connect::Udp(ref mut connect) => connect.connect(addr),
-        }
-    }
-}
-
-pub enum WaitForConnect<P> {
-    Udp(udp_strat::WaitForConnect<P>),
-}
-
-impl<P> Future for WaitForConnect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Connection<P>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self {
-            &mut WaitForConnect::Udp(ref mut wait) => wait.poll(),
-        }
-    }
-}
-
 pub enum Strategy<P> {
     Udp(udp_strat::Server<P>),
 }
@@ -91,29 +50,27 @@ where
     }
 }
 
-pub enum Connection<P> {
-    Udp(udp_strat::Connection<P>),
+pub enum Connection {
+    Udp(udp_strat::Connection),
 }
 
-impl<P> Connection<P> {
+impl Connection {
     pub fn local_addr(&self) -> SocketAddr {
         match *self {
-            Connection::Udp(ref con) => con.get_ref().get_ref().local_addr(),
+            Connection::Udp(ref con) => con.local_addr(),
         }
     }
 
-    pub fn remote_addr(&self) -> SocketAddr {
+    pub fn peer_addr(&self) -> SocketAddr {
         match *self {
-            Connection::Udp(ref con) => con.get_ref().get_ref().remote_addr(),
+            Connection::Udp(ref con) => con.peer_addr(),
         }
     }
 }
 
-impl<P> Stream for Connection<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
+impl Stream for Connection
 {
-    type Item = Protocol<P>;
+    type Item = BytesMut;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -125,11 +82,9 @@ where
     }
 }
 
-impl<P> Sink for Connection<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
+impl Sink for Connection
 {
-    type SinkItem = Protocol<P>;
+    type SinkItem = BytesMut;
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
@@ -147,72 +102,10 @@ where
     }
 }
 
-impl<P> Connection<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    pub fn into_pure(self) -> PureConnection {
-        match self {
-            Connection::Udp(stream) => PureConnection::Udp(stream.into_inner().into_inner()),
-        }
-    }
-
-    pub fn send_and_poll(&mut self, msg: Protocol<P>) {
-        if self.start_send(msg).is_err() || self.poll_complete().is_err() {
-            eprintln!("error at `send_and_poll`");
-        }
-    }
-
-    pub fn new_session(&self) -> NewSessionWait<P> {
+impl NewSession for Connection {
+    fn new_session(&mut self) -> NewConnectionFuture {
         match *self {
-            Connection::Udp(ref stream) => {
-                NewSessionWait::Udp(stream.get_ref().get_ref().new_session(), Default::default())
-            }
-        }
-    }
-
-    pub fn new_session_controller(&self) -> NewSessionController {
-        match *self {
-            Connection::Udp(ref stream) => {
-                NewSessionController::Udp(stream.get_ref().get_ref().new_session_controller())
-            }
-        }
-    }
-}
-
-pub enum NewSessionWait<P> {
-    Udp(udp_strat::NewSessionWait, PhantomData<P>),
-}
-
-impl<P> Future for NewSessionWait<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Connection<P>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match *self {
-            NewSessionWait::Udp(ref mut wait, _) => wait.poll()
-                .map(|r| r.map(|v| Connection::Udp(WriteJson::new(ReadJson::new(v))))),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub enum NewSessionController {
-    Udp(udp_strat::NewSession),
-}
-
-impl NewSessionController {
-    pub fn new_session<P>(&self) -> NewSessionWait<P> {
-        match *self {
-            NewSessionController::Udp(ref new) => {
-                let (sender, recv) = oneshot::channel();
-                new.unbounded_send(sender);
-
-                NewSessionWait::Udp(udp_strat::NewSessionWait::new(recv), Default::default())
-            }
+            Connection::Udp(ref mut sink) => sink.new_session()
         }
     }
 }
@@ -235,66 +128,56 @@ where
     Ok((vec![udp.0], vec![udp.1]))
 }
 
-pub enum PureConnection {
-    Udp(udp_strat::PureConnection),
-}
-
-impl Stream for PureConnection {
-    type Item = Bytes;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match *self {
-            PureConnection::Udp(ref mut con) => con.poll(),
-        }
-    }
-}
-
-impl Sink for PureConnection {
-    type SinkItem = BytesMut;
-    type SinkError = Error;
-
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        match self {
-            &mut PureConnection::Udp(ref mut sink) => sink.start_send(item),
-        }
-    }
-
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        match self {
-            &mut PureConnection::Udp(ref mut sink) => sink.poll_complete(),
-        }
-    }
-}
-
-impl Read for PureConnection {
+impl Read for Connection {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         match self {
-            &mut PureConnection::Udp(ref mut con) => con.read(buf),
+            &mut Connection::Udp(ref mut con) => con.read(buf),
         }
     }
 }
 
-impl Write for PureConnection {
+impl Write for Connection {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         match self {
-            &mut PureConnection::Udp(ref mut con) => con.write(buf),
+            &mut Connection::Udp(ref mut con) => con.write(buf),
         }
     }
 
     fn flush(&mut self) -> io::Result<()> {
         match self {
-            &mut PureConnection::Udp(ref mut con) => Write::flush(con),
+            &mut Connection::Udp(ref mut con) => Write::flush(con),
         }
     }
 }
 
-impl AsyncRead for PureConnection {}
+impl AsyncRead for Connection {}
 
-impl AsyncWrite for PureConnection {
+impl AsyncWrite for Connection {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         match self {
-            &mut PureConnection::Udp(ref mut con) => con.shutdown(),
+            &mut Connection::Udp(ref mut con) => con.shutdown(),
         }
     }
 }
+
+pub trait NewSession {
+    fn new_session(&mut self) -> NewConnectionFuture;
+}
+
+pub trait NewConnection {
+    fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture;
+}
+
+pub struct NewSessionFuture {
+    inner: Box<Future<Item=Connection>>
+}
+
+impl Future for NewConnectionFuture {
+    type Item = Connection;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.inner.poll()
+    }
+}
+
