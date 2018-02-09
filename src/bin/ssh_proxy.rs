@@ -26,7 +26,7 @@ use std::io::{self, Write};
 use std::cell::RefCell;
 use std::env;
 
-use futures::{future, Future, IntoFuture, Poll, Sink, Stream, stream};
+use futures::{future, stream, Future, IntoFuture, Poll, Sink, Stream};
 
 #[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
@@ -108,7 +108,8 @@ impl<R: AsyncRead> Future for TestReader<R> {
             let len = try_nb!(self.read.read(&mut self.buf));
 
             if len > 0 {
-                self.sink.start_send(bytes::BytesMut::from(&self.buf[..len]));
+                self.sink
+                    .start_send(bytes::BytesMut::from(&self.buf[..len]));
                 self.sink.poll_complete();
             }
         }
@@ -150,5 +151,9 @@ fn main() {
     }).map_err(|_| ()));
 
     let buf: Vec<u8> = vec![0; 1024];
-    evt_loop.run(TestReader { read: stdin, buf, sink: send });
+    evt_loop.run(TestReader {
+        read: stdin,
+        buf,
+        sink: send,
+    });
 }

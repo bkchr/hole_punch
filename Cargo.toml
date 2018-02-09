@@ -22,6 +22,6 @@ h2 = { git = "https://github.com/carllerche/h2.git" }
 http = "0.1"
 bytes = "0.4"
 env_logger = "0.4.3"
-log = "0.4.1"
+log = "0.4"
 tokio-file-unix = "0.3"
 picoquic = { version = "0.1", path = "../picoquic" }

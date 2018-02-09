@@ -63,9 +63,11 @@ where
         new_session: NewSessionWait<P>,
         handle: Handle,
     },
-    #[state_machine_future(ready)] Finished(()),
+    #[state_machine_future(ready)]
+    Finished(()),
     //TODO: We are not removing the service if an error occurs....
-    #[state_machine_future(error)] ErrorState(Error),
+    #[state_machine_future(error)]
+    ErrorState(Error),
 }
 
 impl<T, P> PollServiceHandler<T, P> for ServiceHandler<T, P>

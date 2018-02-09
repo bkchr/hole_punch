@@ -35,8 +35,10 @@ enum ConnectStateMachine<P: 'static + Serialize + for<'de> Deserialize<'de> + Cl
         wait_for_message: WaitForMessage<P>,
         timeout: Timeout,
     },
-    #[state_machine_future(ready)] Connected(Connection<P>),
-    #[state_machine_future(error)] ErrorState(Error),
+    #[state_machine_future(ready)]
+    Connected(Connection<P>),
+    #[state_machine_future(error)]
+    ErrorState(Error),
 }
 
 impl<P> PollConnectStateMachine<P> for ConnectStateMachine<P>
@@ -291,11 +293,11 @@ where
         other_device_id: u64,
     },
     #[state_machine_future(transitions(RelayModeActivated))]
-    WaitForRelayMode {
-        wait: WaitForMessage<P>,
-    },
-    #[state_machine_future(ready)] RelayModeActivated(Connection<P>),
-    #[state_machine_future(error)] RelayModeError(Error),
+    WaitForRelayMode { wait: WaitForMessage<P> },
+    #[state_machine_future(ready)]
+    RelayModeActivated(Connection<P>),
+    #[state_machine_future(error)]
+    RelayModeError(Error),
 }
 
 impl<P> PollRelayDeviceToDeviceConnection<P> for RelayDeviceToDeviceConnection<P>
@@ -354,8 +356,10 @@ where
         relay: RelayDeviceToDeviceConnectionFuture<P>,
         timeout: Timeout,
     },
-    #[state_machine_future(ready)] ConnectionEstablished(Connection<P>),
-    #[state_machine_future(error)] ErrorState2(Error),
+    #[state_machine_future(ready)]
+    ConnectionEstablished(Connection<P>),
+    #[state_machine_future(error)]
+    ErrorState2(Error),
 }
 
 impl<P> PollDeviceToDeviceConnection<P> for DeviceToDeviceConnection<P>

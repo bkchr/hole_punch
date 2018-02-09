@@ -4,6 +4,9 @@ extern crate error_chain;
 #[macro_use]
 extern crate futures;
 extern crate itertools;
+#[macro_use]
+extern crate log;
+extern crate picoquic;
 extern crate pnet_datalink;
 extern crate serde;
 #[macro_use]
@@ -16,7 +19,6 @@ extern crate tokio_core;
 extern crate tokio_io;
 extern crate tokio_serde_json;
 extern crate tokio_timer;
-extern crate picoquic;
 
 mod protocol;
 pub mod server;
@@ -26,5 +28,4 @@ pub mod errors;
 mod strategies;
 mod connect;
 mod timeout;
-
-pub use strategies::PureConnection;
+mod config;

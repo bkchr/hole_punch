@@ -1,8 +1,7 @@
 use errors::*;
-use udp;
-use protocol::Protocol;
-use strategies;
-use timeout::Timeout;
+use strategies::{AddressInformation, Connection, NewConnection, NewConnectionFuture,
+                 NewConnectionHandle, NewSession, Strategy};
+use config::Config;
 
 use std::marker::PhantomData;
 use std::net::SocketAddr;
@@ -12,8 +11,7 @@ use std::cmp::Ordering;
 use std::time::Duration;
 use std::io::{self, Cursor};
 use std::cmp::min;
-use std::fmt;
-use std::mem::{size_of, size_of_val};
+use std::path::Path;
 
 use futures::Async::{NotReady, Ready};
 use futures::{self, AsyncSink, Future, Poll, Sink, StartSend, Stream};
@@ -21,160 +19,247 @@ use futures::sync::mpsc::{channel, unbounded, Receiver, SendError, Sender, Unbou
                           UnboundedSender};
 use futures::sync::oneshot;
 
-use tokio_io::codec::length_delimited;
-use tokio_io::{AsyncRead, AsyncWrite};
-
 use tokio_core::reactor::Handle;
-
-use tokio_serde_json::{ReadJson, WriteJson};
-
-use serde::{Deserialize, Serialize};
-
-use bytes::{BigEndian, Buf, BufMut, Bytes, BytesMut};
 
 use picoquic;
 
-type Connection = picoquic::Stream;
+use bytes::BytesMut;
 
-pub struct Server {
-    server: picoquic::Context,
+struct StrategyWrapper {
+    context: picoquic::Context,
     handle: Handle,
-    new_session_inform_recv: UnboundedReceiver<UdpConnection>,
-    new_session_inform_send: UnboundedSender<UdpConnection>,
+    new_con: (UnboundedSender<Connection>, UnboundedReceiver<Connection>),
 }
 
-impl Server {
-    fn new(listen_address: SocketAddr, handle: Handle) -> Self {
-        let (new_session_inform_send, new_session_inform_recv) = unbounded();
+impl StrategyWrapper {
+    fn new(
+        listen_address: SocketAddr,
+        cert_file: &Path,
+        key_file: &Path,
+        handle: Handle,
+    ) -> Result<StrategyWrapper> {
+        let config = picoquic::Config::server(
+            cert_file
+                .to_str()
+                .expect("cert filename contains illegal characters"),
+            key_file
+                .to_str()
+                .expect("key filename contains illegal characters"),
+        );
 
-        Server {
-            server,
+        let context = picoquic::Context::new(&listen_address, &handle, config)?;
+
+        let new_con = unbounded();
+
+        Ok(StrategyWrapper {
+            context,
             handle,
-            new_session_inform_recv,
-            new_session_inform_send,
+            new_con,
+        })
+    }
+
+    fn poll_context(&mut self) {
+        loop {
+            match self.context.poll() {
+                Ok(Ready(None)) => panic!("picoquic context returned None!"),
+                Ok(Ready(Some(con))) => {
+                    let send = self.new_con.0.clone();
+                    self.handle
+                        .spawn(ConnectionHandler::new(con, send).map_err(|e| error!("{:?}", e)));
+                }
+                Err(e) => panic!("{:?}", e),
+                _ => return,
+            }
         }
     }
-
-    pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.server.local_addr()
-    }
-
-    fn get_new_session_inform(&self) -> UnboundedSender<UdpConnection> {
-        self.new_session_inform_send.clone()
-    }
 }
 
-impl<P> Stream for Server<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = strategies::Connection<P>;
+impl Stream for StrategyWrapper {
+    type Item = Connection;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.new_session_inform_recv.poll() {
-            Ok(Ready(Some(con))) => {
-                return Ok(Ready(Some(strategies::Connection::Udp(WriteJson::new(
-                    ReadJson::new(con),
-                )))));
-            }
-            _ => {}
-        };
+        self.poll_context();
 
-        self.server
+        self.new_con
+            .1
             .poll()
-            .map(|r| {
-                r.map(|o| {
-                    o.map(|con| {
-                        let local_addr = con.0.local_addr();
-                        let (rel_con, con) = ReliableConnection::new(
-                            con.0,
-                            self.new_session_inform_send.clone(),
-                            &self.handle,
-                            local_addr,
-                            con.1,
-                        );
-
-                        self.handle.spawn(rel_con);
-
-                        strategies::Connection::Udp(WriteJson::new(ReadJson::new(con)))
-                    })
-                })
-            })
-            .chain_err(|| "error polling UdpServer")
+            .map_err(|_| "failed to poll new_con".into())
     }
 }
 
-pub fn accept_async<P>(handle: &Handle) -> Result<strategies::Strategy<P>>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    let (server, _) = udp::connect_and_accept_async(([0, 0, 0, 0], 22222).into(), handle, 4)?;
+impl NewConnection for StrategyWrapper {
+    fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
+        new_connection(
+            self.context.new_connection(addr),
+            self.new_con.0.clone(),
+            self.handle.clone(),
+        )
+    }
 
-    let server = Server::new(server, handle.clone());
-    Ok(strategies::Strategy::Udp(server))
-}
-
-#[derive(Clone)]
-pub struct Connect(udp::Connect, Handle, UnboundedSender<UdpConnection>);
-
-impl Connect {
-    pub fn connect<P>(&mut self, addr: SocketAddr) -> Result<strategies::WaitForConnect<P>>
-    where
-        P: Serialize + for<'de> Deserialize<'de>,
-    {
-        Ok(strategies::WaitForConnect::Udp(WaitForConnect(
-            self.0.connect(addr)?,
-            self.1.clone(),
-            self.2.clone(),
-            Default::default(),
-        )))
+    fn get_new_connection_handle(&self) -> NewConnectionHandle {
+        NewConnectionHandle::new(NewConnectionHandleWrapper::new(
+            self.context.get_new_connection_handle(),
+            self.handle.clone(),
+            self.new_con.0.clone(),
+        ))
     }
 }
 
-pub struct WaitForConnect<P>(
-    udp::WaitForConnect,
-    Handle,
-    UnboundedSender<UdpConnection>,
-    PhantomData<P>,
-);
+/// We don't propagate the underlying picoquic `Connection`, but we still need to poll this
+/// connection for new `Stream`'s and that is done by the `ConnectionHandler`.
+struct ConnectionHandler {
+    con: picoquic::Connection,
+    new_con_send: UnboundedSender<Connection>,
+}
 
-impl<P> Future for WaitForConnect<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = strategies::Connection<P>;
+impl ConnectionHandler {
+    fn new(
+        con: picoquic::Connection,
+        new_con_send: UnboundedSender<Connection>,
+    ) -> ConnectionHandler {
+        ConnectionHandler { con, new_con_send }
+    }
+}
+
+impl Future for ConnectionHandler {
+    type Item = ();
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0.poll().map(|v| {
-            v.map(|con| {
-                let remote_addr = con.remote_addr();
-                let local_addr = con.local_addr();
-                let (rel_con, con) =
-                    ReliableConnection::new(con, self.2.clone(), &self.1, local_addr, remote_addr);
+        loop {
+            let stream = match try_ready!(self.con.poll()) {
+                Some(s) => s,
+                None => return Ok(Ready(())),
+            };
 
-                self.1.spawn(rel_con);
-                strategies::Connection::Udp(WriteJson::new(ReadJson::new(con)))
-            })
-        })
+            let _ = self.new_con_send
+                .unbounded_send(Connection::new(ConnectionWrapper::new(
+                    stream,
+                    self.con.get_new_stream_handle(),
+                )));
+        }
     }
 }
 
-pub fn connect_async<P>(handle: &Handle) -> Result<(strategies::Strategy<P>, strategies::Connect)>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    let (server, connect) = udp::connect_and_accept_async(([0, 0, 0, 0], 0).into(), handle, 4)?;
-
-    let server = Server::new(server, handle.clone());
-
-    let session_inform = server.get_new_session_inform();
-
-    Ok((
-        strategies::Strategy::Udp(server),
-        strategies::Connect::Udp(Connect(connect, handle.clone(), session_inform)),
-    ))
+struct ConnectionWrapper {
+    stream: picoquic::Stream,
+    new_session: picoquic::NewStreamHandle,
 }
 
+impl ConnectionWrapper {
+    fn new(stream: picoquic::Stream, new_session: picoquic::NewStreamHandle) -> ConnectionWrapper {
+        ConnectionWrapper {
+            stream,
+            new_session,
+        }
+    }
+}
 
+impl Stream for ConnectionWrapper {
+    type Item = BytesMut;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        self.stream.poll().map_err(|e| e.into())
+    }
+}
+
+impl Sink for ConnectionWrapper {
+    type SinkItem = BytesMut;
+    type SinkError = Error;
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        self.stream.start_send(item).map_err(|e| e.into())
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        self.stream.poll_complete().map_err(|e| e.into())
+    }
+}
+
+impl AddressInformation for ConnectionWrapper {
+    fn local_addr(&self) -> SocketAddr {
+        self.stream.local_addr()
+    }
+
+    fn peer_addr(&self) -> SocketAddr {
+        self.peer_addr()
+    }
+}
+
+impl NewSession for ConnectionWrapper {
+    fn new_session(&mut self) -> NewConnectionFuture {
+        let handle = self.new_session.clone();
+        let new_con = self.new_session
+            .new_bidirectional_stream()
+            .map(move |s| Connection::new(ConnectionWrapper::new(s, handle)))
+            .map_err(|e| e.into());
+
+        NewConnectionFuture::new(new_con)
+    }
+}
+
+#[derive(Clone)]
+struct NewConnectionHandleWrapper {
+    new_con: picoquic::NewConnectionHandle,
+    new_con_send: UnboundedSender<Connection>,
+    handle: Handle,
+}
+
+impl NewConnectionHandleWrapper {
+    fn new(
+        new_con: picoquic::NewConnectionHandle,
+        handle: Handle,
+        new_con_send: UnboundedSender<Connection>,
+    ) -> NewConnectionHandleWrapper {
+        NewConnectionHandleWrapper {
+            new_con,
+            handle,
+            new_con_send,
+        }
+    }
+}
+
+fn new_connection(
+    new_con: picoquic::NewConnectionFuture,
+    new_con_send: UnboundedSender<Connection>,
+    handle: Handle,
+) -> NewConnectionFuture {
+    // Create a new `Connection` with picoquic. If the `Connection` is ready, we spawn
+    // the `ConnectionHandler` and create a new `Stream`. The `Stream` will be returned
+    // as the new hole_punch `Connection`.
+    let future = new_con
+        .and_then(move |mut con| {
+            let new_stream_handle = con.get_new_stream_handle();
+            let stream = con.new_bidirectional_stream();
+            handle.spawn(ConnectionHandler::new(con, new_con_send).map_err(|e| error!("{:?}", e)));
+            stream.map(move |s| Connection::new(ConnectionWrapper::new(s, new_stream_handle)))
+        })
+        .map_err(|e| e.into());
+
+    NewConnectionFuture::new(future)
+}
+
+impl NewConnection for NewConnectionHandleWrapper {
+    fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
+        new_connection(
+            self.new_con.new_connection(addr),
+            self.new_con_send.clone(),
+            self.handle.clone(),
+        )
+    }
+
+    fn get_new_connection_handle(&self) -> NewConnectionHandle {
+        NewConnectionHandle::new(self.clone())
+    }
+}
+
+pub fn init(handle: Handle, config: &Config) -> Result<Strategy> {
+    Ok(Strategy::new(StrategyWrapper::new(
+        config.udp_listen_address,
+        &config.cert_file,
+        &config.key_file,
+        handle,
+    )?))
+}

@@ -226,8 +226,10 @@ enum ServiceHandler<
         result_sender: UnboundedSender<Result<PureConnection>>,
         wait: WaitForMessage<P>,
     },
-    #[state_machine_future(ready)] Finished(()),
-    #[state_machine_future(error)] ErrorState(Error),
+    #[state_machine_future(ready)]
+    Finished(()),
+    #[state_machine_future(error)]
+    ErrorState(Error),
 }
 
 impl<P, N, F> PollServiceHandler<P, N, F> for ServiceHandler<P, N, F>
