@@ -222,7 +222,7 @@ impl Clone for Box<NewConnection> {
 }
 
 impl NewConnectionHandle {
-    fn new<H: NewConnection>(inner: H) -> NewConnectionHandle {
+    fn new<H: NewConnection + 'static>(inner: H) -> NewConnectionHandle {
         let inner = Box::new(inner);
         NewConnectionHandle { inner }
     }
@@ -238,6 +238,6 @@ impl NewConnection for NewConnectionHandle {
     }
 }
 
-pub fn init(handle: Handle, config: &Config) -> Vec<Strategy> {
-    vec![udp::init(handle, config)]
+pub fn init(handle: Handle, config: &Config) -> Result<Vec<Strategy>> {
+    vec![udp::init(handle, config)?]
 }
