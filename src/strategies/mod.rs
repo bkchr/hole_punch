@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use std::cmp::min;
 
 use futures::Async::{NotReady, Ready};
-use futures::{Future, Poll, Sink, StartSend, Stream};
+use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_core::reactor::Handle;
 
@@ -16,7 +16,7 @@ use bytes::BytesMut;
 
 mod udp;
 
-trait StrategyTrait: Stream<Item = Connection, Error = Error> + NewConnection {}
+trait StrategyTrait: FStream<Item = Connection, Error = Error> + NewConnection {}
 impl<T: NewConnection + Future<Item = Connection, Error = Error>> StrategyTrait for T {}
 
 pub struct Strategy {
@@ -30,7 +30,7 @@ impl Strategy {
     }
 }
 
-impl Stream for Strategy {
+impl FStream for Strategy {
     type Item = Connection;
     type Error = Error;
 
@@ -42,36 +42,55 @@ impl Stream for Strategy {
 /// The super `Connection` trait. We need this hack, to store the `inner` of the connection
 /// in a `Box`.
 trait ConnectionTrait
-    : Stream<Item = BytesMut, Error = Error>
-    + AddressInformation
-    + Sink<SinkItem = BytesMut, SinkError = Error>
-    + NewSession {
+    : FStream<Item = Stream, Error = Error> + AddressInformation + NewStream {
 }
 
-impl<
-    T: Stream<Item = BytesMut, Error = Error>
-        + AddressInformation
-        + Sink<SinkItem = BytesMut, SinkError = Error>
-        + NewSession,
-> ConnectionTrait for T
+impl<T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream> ConnectionTrait
+    for T
 {
 }
 
 pub struct Connection {
-    inner: Box<
-        ConnectionTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>,
-    >,
-    read_overflow: Option<BytesMut>,
+    inner: Box<ConnectionTrait<Item = Stream, Error = Error>>,
 }
 
 impl Connection {
-    fn new<
-        C: ConnectionTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>,
-    >(
-        inner: C,
-    ) -> Connection {
+    fn new<C: ConnectionTrait<Item = Stream, Error = Error>>(inner: C) -> Connection {
         let inner = Box::new(inner);
         Connection { inner }
+    }
+}
+
+/// The super `Stream` trait. We need this hack, to store the `inner` of the stream in a `Box`.
+trait StreamTrait
+    : FStream<Item = BytesMut, Error = Error>
+    + AddressInformation
+    + Sink<SinkItem = BytesMut, SinkError = Error>
+    + NewStream {
+}
+
+impl<
+    T: FStream<Item = BytesMut, Error = Error>
+        + AddressInformation
+        + Sink<SinkItem = BytesMut, SinkError = Error>
+        + NewStream,
+> StreamTrait for T
+{
+}
+
+pub struct Stream {
+    inner: Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>>,
+    read_overflow: Option<BytesMut>,
+}
+
+impl Stream {
+    fn new<
+        C: StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>,
+    >(
+        inner: C,
+    ) -> Stream {
+        let inner = Box::new(inner);
+        Stream { inner }
     }
 }
 
@@ -80,7 +99,7 @@ pub trait AddressInformation {
     fn peer_addr(&self) -> SocketAddr;
 }
 
-impl AddressInformation for Connection {
+impl AddressInformation for Stream {
     fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr()
     }
@@ -90,7 +109,7 @@ impl AddressInformation for Connection {
     }
 }
 
-impl Stream for Connection {
+impl FStream for Stream {
     type Item = BytesMut;
     type Error = Error;
 
@@ -99,7 +118,7 @@ impl Stream for Connection {
     }
 }
 
-impl Sink for Connection {
+impl Sink for Stream {
     type SinkItem = BytesMut;
     type SinkError = Error;
 
@@ -112,13 +131,13 @@ impl Sink for Connection {
     }
 }
 
-impl NewSession for Connection {
-    fn new_session(&mut self) -> NewConnectionFuture {
-        self.inner.new_session()
+impl NewStream for Stream {
+    fn new_stream(&mut self) -> NewStreamFuture {
+        self.inner.new_stream()
     }
 }
 
-impl Read for Connection {
+impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         fn copy_data(mut src: BytesMut, dst: &mut [u8]) -> (usize, Option<BytesMut>) {
             let len = min(src.len(), dst.len());
@@ -154,7 +173,7 @@ impl Read for Connection {
     }
 }
 
-impl Write for Connection {
+impl Write for Stream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         // TODO find a way to check if the Sink can send, before we try to write!
         let res = self.inner.start_send(BytesMut::from(buf))?;
@@ -172,17 +191,17 @@ impl Write for Connection {
     }
 }
 
-impl AsyncRead for Connection {}
+impl AsyncRead for Stream {}
 
-impl AsyncWrite for Connection {
+impl AsyncWrite for Stream {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         self.inner.close()?;
         Ok(Ready(()))
     }
 }
 
-pub trait NewSession {
-    fn new_session(&mut self) -> NewConnectionFuture;
+pub trait NewStream {
+    fn new_stream(&mut self) -> NewStreamFuture;
 }
 
 pub trait NewConnection {
@@ -190,12 +209,12 @@ pub trait NewConnection {
     fn get_new_connection_handle(&mut self) -> NewConnectionHandle;
 }
 
-pub struct NewConnectionFuture {
-    inner: Box<Future<Item = Connection, Error = Error>>,
+pub struct NewTypeFuture<T> {
+    inner: Box<Future<Item = T, Error = Error>>,
 }
 
-impl Future for NewConnectionFuture {
-    type Item = Connection;
+impl<T> Future for NewTypeFuture<T> {
+    type Item = T;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -203,32 +222,38 @@ impl Future for NewConnectionFuture {
     }
 }
 
-impl NewConnectionFuture {
-    fn new<F: Future<Item = Connection, Error = Error> + 'static>(inner: F) -> NewConnectionFuture {
+impl<T> NewTypeFuture<T> {
+    fn new<F: Future<Item = T, Error = Error> + 'static>(inner: F) -> NewTypeFuture<T> {
         let inner = Box::new(inner);
-        NewConnectionFuture { inner }
+        NewTypeFuture { inner }
     }
 }
 
+pub type NewStreamFuture = NewTypeFuture<Stream>;
+pub type NewConnectionFuture = NewTypeFuture<Connection>;
+
 #[derive(Clone)]
-pub struct NewConnectionHandle {
-    inner: Box<NewConnection>,
+pub struct NewTypeHandle<T> {
+    inner: Box<T>,
 }
 
-impl Clone for Box<NewConnection> {
+impl<T> Clone for Box<T>
+where
+    T: Clone,
+{
     fn clone(&self) -> Box<NewConnection> {
         Box::new((&self).clone())
     }
 }
 
-impl NewConnectionHandle {
-    fn new<H: NewConnection + 'static>(inner: H) -> NewConnectionHandle {
+impl<T: NewConnection> NewTypeHandle<T> {
+    fn new<H: NewConnection + 'static>(inner: H) -> NewTypeHandle<T> {
         let inner = Box::new(inner);
-        NewConnectionHandle { inner }
+        NewTypeHandle { inner }
     }
 }
 
-impl NewConnection for NewConnectionHandle {
+impl<T: NewConnection> NewConnection for NewTypeHandle<T> {
     fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
         self.inner.new_connection(addr)
     }
@@ -237,6 +262,22 @@ impl NewConnection for NewConnectionHandle {
         self.clone()
     }
 }
+
+impl<T: NewStream> NewTypeHandle<T> {
+    fn new<H: NewStream + 'static>(inner: H) -> NewTypeHandle<T> {
+        let inner = Box::new(inner);
+        NewTypeHandle { inner }
+    }
+}
+
+impl<T: NewStream> NewStream for NewTypeHandle<T> {
+    fn new_stream(&mut self) -> NewStreamFuture {
+        self.inner.new_stream();
+    }
+}
+
+pub type NewConnectionHandle = NewTypeHandle<NewConnection>;
+pub type NewStreamHandle = NewTypeHandle<NewStream>;
 
 pub fn init(handle: Handle, config: &Config) -> Result<Vec<Strategy>> {
     vec![udp::init(handle, config)?]
