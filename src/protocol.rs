@@ -2,7 +2,11 @@ use std::net::SocketAddr;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Protocol<P> {
-    Register,
+    /// Represents an incoming connection request
+    RequestConnection,
+    /// Represents an incoming poke connection that can be ignored. 
+    PokeConnection,
+
     Connect(Vec<SocketAddr>, u32, u64),
     KeepAlive,
     Embedded(P),

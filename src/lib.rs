@@ -22,7 +22,6 @@ extern crate tokio_timer;
 
 mod protocol;
 pub mod server;
-pub mod peer_client;
 pub mod dev_client;
 pub mod errors;
 mod strategies;
@@ -30,3 +29,4 @@ mod connect;
 mod timeout;
 mod config;
 mod context;
+mod incoming;
