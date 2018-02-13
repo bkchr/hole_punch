@@ -16,7 +16,7 @@ tokio-timer = { "git" = "https://github.com/bkchr/tokio-timer.git", "branch" = "
 tokio-serde-json = { git = "https://github.com/bkchr/tokio-serde-json.git", branch = "do_not_require_io_error" }
 itertools = "0.7.1"
 hyper = "0.11"
-state_machine_future = "0.1"
+state_machine_future = "^0.1.6"
 bincode = "0.8"
 h2 = { git = "https://github.com/carllerche/h2.git" }
 http = "0.1"

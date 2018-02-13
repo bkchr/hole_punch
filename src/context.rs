@@ -4,6 +4,8 @@ use config::Config;
 use incoming;
 use protocol::Protocol;
 
+use std::time::Duration;
+
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::{Poll, Stream as FStream};
 use futures::Async::{NotReady, Ready};
@@ -38,7 +40,17 @@ impl<P> Context<P> {
             match self.strategies.poll() {
                 Ok(NotReady) => return Ok(()),
                 Err(e) => return Err(e),
-                Ok(Ready(Some((con, strat)))) => self.incoming.push(incoming::Handler::new()),
+                Ok(Ready(Some((con, strat)))) => {
+                    self.strategies.push(strat.into_future());
+                    self.incoming.push(incoming::Handler::new(
+                        Connection::new(con),
+                        Duration::from_secs(1),
+                        &self.handle,
+                    ));
+                }
+                Ok(Ready(None)) => {
+                    bail!("strategy returned None!");
+                }
             }
         }
     }
@@ -48,13 +60,20 @@ impl<P> FStream for Context<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = Connection<P>;
+    type Item = ( Connection<P>, Stream<P> );
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.poll_strategies()?;
 
-        self.incoming.poll()
+        loop {
+            match try_ready!(self.incoming.poll()) {
+                Some((con, stream)) => return Ok(Ready((con, stream))),
+                // If the incoming handler returns `None`, then the incoming connection
+                // does not need to be propagated.
+                None => {}
+            }
+        }
     }
 }
 
@@ -148,7 +167,7 @@ enum StreamState {
     UnAuthenticated(oneshot::Sender<bool>),
 }
 
-struct Stream<P>
+pub struct Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
@@ -218,7 +237,7 @@ where
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         match self.state {
             StreamState::Authenticated => self.poll_authenticated(),
-            StreamState::UnAuthenticated(_) => self.poll_unauthenticated()
+            StreamState::UnAuthenticated(_) => self.poll_unauthenticated(),
         }
     }
 }
