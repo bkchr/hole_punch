@@ -6,15 +6,16 @@ pub enum Protocol<P> {
     RequestConnection,
     /// Represents an incoming poke connection that can be ignored. 
     PokeConnection,
+    PeerToPeerConnection(u64),
+    ConnectionEstablished,
 
     Connect(Vec<SocketAddr>, u32, u64),
-    KeepAlive,
     Embedded(P),
-    Acknowledge,
+    RequestPeerConnection(u64, P),
+
     RequestPrivateAdressInformation(u64),
     PrivateAdressInformation(u64, Vec<SocketAddr>),
-    Hello,
-    HelloAck,
+
     ReUseConnection,
     AckReUseConnection,
     RelayConnection(u64),

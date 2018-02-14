@@ -30,7 +30,15 @@ where
         timeout: Timeout,
     },
     #[state_machine_future(ready)]
-    Finished(Option<(context::Connection<P>, context::Stream<P>)>),
+    Finished(
+        Option<
+            (
+                context::Connection<P>,
+                context::Stream<P>,
+                Option<context::ConnectionId>,
+            ),
+        >,
+    ),
     #[state_machine_future(error)]
     ErrorState(Error),
 }
@@ -80,9 +88,18 @@ where
             match try_ready!(wait.stream.direct_poll()) {
                 Some(Protocol::RequestConnection) => {
                     let wait = wait.take();
-                    transition!(Finished(Some((wait.con, wait.stream))))
+                    wait.stream.direct_send(Protocol::ConnectionEstablished);
+                    transition!(Finished(Some((wait.con, wait.stream, None))))
                 }
-                Some(Protocol::PokeConnection) => transition!(Finished(None)),
+                Some(Protocol::PokeConnection) => {
+                    wait.stream.direct_send(Protocol::ConnectionEstablished);
+                    transition!(Finished(None))
+                }
+                Some(Protocol::PeerToPeerConnection(connection_id) => {
+                    let wait = wait.take();
+                    wait.stream.direct_send(Protocol::ConnectionEstablished);
+                    transition!(Finished(Some((wait.con, wait.stream, Some(connection_id)))))
+                }
                 _ => {}
             }
         }

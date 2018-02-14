@@ -272,7 +272,7 @@ impl<T: NewStream> NewTypeHandle<T> {
 
 impl<T: NewStream> NewStream for NewTypeHandle<T> {
     fn new_stream(&mut self) -> NewStreamFuture {
-        self.inner.new_stream();
+        self.inner.new_stream()
     }
 }
 
