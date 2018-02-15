@@ -1,15 +1,22 @@
+#[macro_use]
+extern crate futures;
 extern crate hole_punch;
 #[macro_use]
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::server::{NewService, Server, Service, ServiceControlMessage, ServiceId};
+use hole_punch::{config, context};
 use hole_punch::errors::*;
 
 use tokio_core::reactor::Core;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::rc::Rc;
+use std::cell::RefCell;
+use std::path::PathBuf;
+
+use futures::{Future, Poll, Sink, Stream};
+use futures::Async::Ready;
 
 #[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
@@ -21,82 +28,88 @@ enum CarrierProtocol {
 }
 
 struct Carrier {
-    devices: HashMap<String, ServiceId>,
+    devices: HashMap<String, Rc<RefCell<context::Stream<CarrierProtocol>>>>,
 }
 
-struct CarrierService {
-    id: ServiceId,
-    carrier: Arc<Mutex<Carrier>>,
-    name: String,
-    control_message: Option<ServiceControlMessage>,
+struct CarrierConnection {
+    con: context::Connection<CarrierProtocol>,
+    stream: Rc<RefCell<context::Stream<CarrierProtocol>>>,
+    name: Option<String>,
+    carrier: Rc<RefCell<Carrier>>,
 }
 
-impl Service for CarrierService {
-    type Message = CarrierProtocol;
+impl Future for CarrierConnection {
+    type Item = ();
+    type Error = Error;
 
-    fn on_message(&mut self, msg: &CarrierProtocol) -> Result<Option<CarrierProtocol>> {
-        match msg {
-            &CarrierProtocol::Register { ref name } => {
-                self.name = name.clone();
-                println!("New device: {}", name);
-                self.carrier
-                    .lock()
-                    .unwrap()
-                    .devices
-                    .insert(name.clone(), self.id);
-                Ok(Some(CarrierProtocol::Registered))
-            }
-            &CarrierProtocol::RequestDevice { ref name } => {
-                println!("REQUEST: {}", name);
-                let carrier = self.carrier.lock().unwrap();
-                let other = carrier.devices.get(name);
-
-                if let Some(id) = other {
-                    self.control_message = Some(ServiceControlMessage::CreateConnectionTo(*id));
-                    Ok(None)
-                } else {
-                    Ok(Some(CarrierProtocol::DeviceNotFound))
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            let msg = match try_ready!(self.stream.borrow_mut().poll()) {
+                Some(msg) => msg,
+                None => {
+                    println!("stream closed: {:?}", self.name);
+                    if let Some(ref name) = self.name {
+                        self.carrier.borrow_mut().devices.remove(name);
+                    }
+                    return Ok(Ready(()));
                 }
-            }
-            _ => Ok(None),
-        }
-    }
+            };
+            match msg {
+                CarrierProtocol::Register { name } => {
+                    self.name = Some(name.clone());
+                    println!("New device: {}", name);
+                    self.carrier
+                        .borrow_mut()
+                        .devices
+                        .insert(name, self.stream.clone());
 
-    fn close(&self) {
-        self.carrier.lock().unwrap().devices.remove(&self.name);
-        println!("device gone {}", self.name);
-    }
+                    self.stream
+                        .borrow_mut()
+                        .start_send(CarrierProtocol::Registered);
+                    self.stream.borrow_mut().poll_complete();
+                }
+                CarrierProtocol::RequestDevice { name } => {
+                    println!("REQUEST: {}", name);
 
-    fn request_control_message(&mut self) -> Option<ServiceControlMessage> {
-        self.control_message.take()
-    }
-}
-
-struct CarrierServiceCreator {
-    carrier: Arc<Mutex<Carrier>>,
-}
-
-impl NewService for CarrierServiceCreator {
-    type Service = CarrierService;
-
-    fn new_service(&self, id: ServiceId) -> Self::Service {
-        CarrierService {
-            carrier: self.carrier.clone(),
-            id: id,
-            name: String::new(),
-            control_message: None,
+                    self.stream
+                        .borrow_mut()
+                        .start_send(CarrierProtocol::DeviceNotFound);
+                    self.stream.borrow_mut().poll_complete();
+                }
+                _ => {}
+            };
         }
     }
 }
 
 fn main() {
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let mut evt_loop = Core::new().unwrap();
 
-    let carrier = Arc::new(Mutex::new(Carrier {
+    let carrier = Rc::new(RefCell::new(Carrier {
         devices: HashMap::new(),
     }));
-    let new_service = CarrierServiceCreator { carrier };
 
-    let server = Server::new(new_service, evt_loop.handle()).expect("server");
-    server.run(&mut evt_loop).expect("server running");
+    let config = config::Config {
+        udp_listen_address: ([0, 0, 0, 0], 22222).into(),
+        cert_file: PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
+        key_file: PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
+    };
+
+    let server = context::Context::new(evt_loop.handle(), config).unwrap();
+
+    let handle = evt_loop.handle();
+    let server = server.for_each(|(con, stream)| {
+        handle.spawn(
+            CarrierConnection {
+                con,
+                stream: Rc::new(RefCell::new(stream)),
+                name: None,
+                carrier: carrier.clone(),
+            }.map_err(|e| println!("error: {:?}", e)),
+        );
+        Ok(())
+    });
+
+    evt_loop.run(server).unwrap();
 }

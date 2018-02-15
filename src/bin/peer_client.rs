@@ -1,17 +1,13 @@
-extern crate bytes;
 extern crate env_logger;
 extern crate futures;
-extern crate h2;
 extern crate hole_punch;
-extern crate http;
-extern crate hyper;
 #[macro_use]
 extern crate log;
 #[macro_use]
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::dev_client::{Client, NewService, Service, ServiceControl, ServiceInformEvent};
+use hole_punch::context;
 use hole_punch::errors::*;
 
 use tokio_core::reactor::{Core, Handle};
@@ -34,6 +30,10 @@ enum CarrierProtocol {
     RequestDevice { name: String },
     DeviceNotFound,
     AlreadyConnected,
+}
+
+struct CarrierConnection {
+    stream: context::Stream<CarrierProtocol>,
 }
 
 struct CarrierService {
@@ -87,94 +87,8 @@ impl NewService<CarrierProtocol> for NewCarrierService {
     }
 }
 
-struct HelloWorld;
-
-const PHRASE: &'static str = "Hello, from the universe!";
-
-impl hyper::server::Service for HelloWorld {
-    // boilerplate hooking up hyper's server types
-    type Request = Request;
-    type Response = Response;
-    type Error = hyper::Error;
-    // The future representing the eventual Response your call will
-    // resolve to. This can change to whatever Future you need.
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
-
-    fn call(&self, _req: Request) -> Self::Future {
-        // We're currently ignoring the Request
-        // And returning an 'ok' Future, which means it's ready
-        // immediately, and build a Response with the 'PHRASE' body.
-        Box::new(futures::future::ok(
-            Response::new()
-                .with_header(ContentLength(PHRASE.len() as u64))
-                .with_body(PHRASE),
-        ))
-    }
-}
-
-fn do_http(con: hole_punch::PureConnection, handle: Handle) {
-    println!("DO HTTP");
-
-    let http: Http<hyper::Chunk> = Http::new();
-
-    handle.spawn(
-        http.serve_connection(con, HelloWorld)
-            .map_err(|e| println!("\n\n\nERROR: {:?}\n\n\n", e))
-            .map(|_| ()),
-    );
-}
-
-fn do_http2(con: hole_punch::PureConnection, handle: Handle) {
-    println!("DO HTTP2");
-
-    let connection = h2::server::handshake(con)
-        .and_then(|conn| {
-            println!("H2 connection bound");
-
-            conn.for_each(|(request, mut respond)| {
-                println!("GOT request: {:?}", request);
-
-                let response = http::Response::builder()
-                    .status(http::StatusCode::OK)
-                    .body(())
-                    .unwrap();
-
-                let mut send = match respond.send_response(response, false) {
-                    Ok(send) => send,
-                    Err(e) => {
-                        println!(" error respond; err={:?}", e);
-                        return Ok(());
-                    }
-                };
-
-                println!(">>>> sending data");
-                if let Err(e) =
-                    send.send_data(bytes::Bytes::from_static(b"hello world from http2"), true)
-                {
-                    println!("  -> err={:?}", e);
-                }
-
-                Ok(())
-            })
-        })
-        .and_then(|_| {
-            println!("~~~~~~~~~~~~~~~~~~~~~~~~~~~ H2 connection CLOSE !!!!!! ~~~~~~~~~~~");
-            Ok(())
-        })
-        .then(|res| {
-            if let Err(e) = res {
-                println!("  -> err={:?}", e);
-            }
-
-            Ok(())
-        });
-
-    handle.spawn(connection);
-}
-
 fn main() {
     env_logger::init();
-    let h2 = env::args().any(|a| a == "h2");
     // let server_addr = ([176, 9, 73, 99], 22222).into();
     let server_addr = ([127, 0, 0, 1], 22222).into();
 
