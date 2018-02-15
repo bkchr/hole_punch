@@ -8,10 +8,9 @@ use std::net::SocketAddr;
 use std::time::Duration;
 use std::mem::discriminant;
 
-use tokio_core::reactor::{self, Handle};
+use tokio_core::reactor::Handle;
 
-use futures::{Future, Join, Poll, Sink};
-use futures::stream::StreamFuture;
+use futures::{Future, Join, Poll, Stream as FStream};
 use futures::Async::{NotReady, Ready};
 use futures::stream::{futures_unordered, FuturesUnordered};
 use futures::sync::{mpsc, oneshot};
@@ -62,10 +61,10 @@ where
     fn poll_init_connect<'a>(
         init: &'a mut RentToOwn<'a, InitConnect>,
     ) -> Poll<AfterInitConnect<P>, Error> {
-        let init = init.take();
+        let mut init = init.take();
 
         let wait = init.strat.new_connection(init.addr);
-        let timeout = Timeout::new(Duration::from_secs(2), init.handle);
+        let timeout = Timeout::new(Duration::from_secs(2), &init.handle);
 
         transition!(WaitForConnection { wait, timeout })
     }
@@ -73,7 +72,7 @@ where
     fn poll_wait_for_connection<'a>(
         wait: &'a mut RentToOwn<'a, WaitForConnection<P>>,
     ) -> Poll<AfterWaitForConnection<P>, Error> {
-        let _ = wait.timeout().poll()?;
+        let _ = wait.timeout.poll()?;
 
         let mut con = try_ready!(wait.wait.poll());
 
@@ -88,23 +87,23 @@ where
     fn poll_wait_for_connect_stream<'a>(
         wait: &'a mut RentToOwn<'a, WaitForConnectStream<P>>,
     ) -> Poll<AfterWaitForConnectStream<P>, Error> {
-        let _ = wait.timeout().poll()?;
+        let _ = wait.timeout.poll()?;
 
         let mut stream = try_ready!(wait.wait.poll());
 
-        stream.send_and_poll(Protocol::RequestConnection);
+        stream.direct_send(Protocol::RequestConnection);
 
         let wait = wait.take();
         let timeout = wait.timeout.new_reset();
         let wait = WaitForMessage::new(Some(wait.con), stream, Protocol::ConnectionEstablished);
 
-        transition!(WaitForRelayMode { wait, timeout })
+        transition!(WaitForInitialAnswer { wait, timeout })
     }
 
     fn poll_wait_for_initial_answer<'a>(
         wait: &'a mut RentToOwn<'a, WaitForInitialAnswer<P>>,
     ) -> Poll<AfterWaitForInitialAnswer<P>, Error> {
-        let _ = wait.timeout().poll()?;
+        let _ = wait.timeout.poll()?;
 
         let (con, stream) = try_ready!(wait.wait.poll());
 
@@ -148,7 +147,7 @@ impl<P> Future for ConnectWithStrategies<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = ( Connection<P>, Stream<P> );
+    type Item = (Connection<P>, Stream<P>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -172,15 +171,20 @@ where
     }
 }
 
-pub struct WaitForMessage<P>(Option<Connection<P>>, Option<Stream<P>>, Protocol<P>);
+pub struct WaitForMessage<P>(Option<Connection<P>>, Option<Stream<P>>, Protocol<P>)
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone;
 
-impl<P> WaitForMessage<P> {
+impl<P> WaitForMessage<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     pub fn new(
         con: Option<Connection<P>>,
         stream: Stream<P>,
         msg: Protocol<P>,
     ) -> WaitForMessage<P> {
-        WaitForMessage(Some(con), Some(stream), msg)
+        WaitForMessage(con, Some(stream), msg)
     }
 }
 
@@ -197,26 +201,32 @@ where
                 self.1
                     .as_mut()
                     .expect("can not be polled when message was already received")
-                    .poll()
+                    .direct_poll()
             ) {
                 Some(message) => message,
                 None => bail!("connection closed while waiting for Message"),
             };
 
-            if discriminant(&self.1) == discriminant(&message) {
-                return Ok(Ready(self.0.take().unwrap()));
+            if discriminant(&self.2) == discriminant(&message) {
+                return Ok(Ready((self.0.take(), self.1.take().unwrap())));
             }
         }
     }
 }
 
-struct WaitForNewStream<P> {
+struct WaitForNewStream<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     new_stream: NewStreamFuture<P>,
     con: Option<Connection<P>>,
 }
 
-impl<P> WaitForNewStream<P> {
-    fn new(con: Connection<P>) -> WaitForNewStream<P> {
+impl<P> WaitForNewStream<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    fn new(mut con: Connection<P>) -> WaitForNewStream<P> {
         let new_stream = con.new_stream();
         let con = Some(con);
         WaitForNewStream { new_stream, con }
@@ -254,16 +264,19 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(
-        strat: NewConnectionHandle,
+        mut strat: NewConnectionHandle,
         addresses: &[SocketAddr],
         handle: &Handle,
+        is_master: bool,
+        connection_id: ConnectionId,
     ) -> DirectDeviceToDeviceConnection<P> {
-        let mut strat = strat.get_connect();
         DirectDeviceToDeviceConnection {
             wait_for_con: futures_unordered(addresses.iter().map(|a| strat.new_connection(*a))),
             wait_for_stream: FuturesUnordered::new(),
             wait_for_resp: FuturesUnordered::new(),
             handle: handle.clone(),
+            is_master,
+            connection_id,
         }
     }
 }
@@ -272,7 +285,7 @@ impl<P> Future for DirectDeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = Connection<P>;
+    type Item = (Connection<P>, Stream<P>);
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -298,7 +311,7 @@ where
                             .unwrap();
                     }
 
-                    self.wait_for_resp.push(WaitForNewStream::new(
+                    self.wait_for_resp.push(WaitForMessage::new(
                         Some(con),
                         stream,
                         Protocol::ConnectionEstablished,
@@ -310,7 +323,7 @@ where
 
         loop {
             match self.wait_for_resp.poll() {
-                Ok(Ready(Some(con))) => return Ok(Ready(con)),
+                Ok(Ready(Some((con, stream)))) => return Ok(Ready((con.unwrap(), stream))),
                 Ok(NotReady) => return Ok(NotReady),
                 Ok(Ready(None)) => {
                     if self.wait_for_stream.is_empty() {
@@ -340,7 +353,7 @@ where
     #[state_machine_future(transitions(RelayModeActivated))]
     WaitForRelayMode { wait: WaitForMessage<P> },
     #[state_machine_future(ready)]
-    RelayModeActivated(Connection<P>),
+    RelayModeActivated(Stream<P>),
     #[state_machine_future(error)]
     RelayModeError(Error),
 }
@@ -354,7 +367,7 @@ where
     ) -> Poll<AfterWaitForStream<P>, Error> {
         let mut stream = try_ready!(wait.wait.poll());
 
-        stream.send_and_poll(Protocol::RelayConnection(wait.other_device_id));
+        stream.direct_send(Protocol::RelayConnection(wait.other_device_id));
 
         let wait = WaitForMessage::new(None, stream, Protocol::RelayModeActivated);
 
@@ -364,9 +377,9 @@ where
     fn poll_wait_for_relay_mode<'a>(
         wait: &'a mut RentToOwn<'a, WaitForRelayMode<P>>,
     ) -> Poll<AfterWaitForRelayMode<P>, Error> {
-        let con = try_ready!(wait.wait.poll());
+        let (_, stream) = try_ready!(wait.wait.poll());
 
-        transition!(RelayModeActivated(con))
+        transition!(RelayModeActivated(stream))
     }
 }
 
@@ -423,6 +436,8 @@ where
                 new_connection_handle,
                 &init.addresses,
                 &init.handle,
+                is_master,
+                connection_id,
             ),
             timeout,
             new_stream_handle,
@@ -434,19 +449,19 @@ where
     fn poll_try_direct_connection<'a>(
         try: &'a mut RentToOwn<'a, TryDirectConnection<P>>,
     ) -> Poll<AfterTryDirectConnection<P>, Error> {
-        let con = try.connect.poll();
+        let res = try.connect.poll();
         let timeout = try.timeout.poll();
 
-        if timeout.is_err() || con.is_err() {
+        if timeout.is_err() || res.is_err() {
             if try.is_master {
                 unimplemented!();
-                let try = try.take();
+                let mut try = try.take();
 
                 let timeout = try.timeout.new_reset();
 
                 transition!(RelayConnection {
                     relay: RelayDeviceToDeviceConnection::start(
-                        try.new_stream_handle.new_session(),
+                        try.new_stream_handle.new_stream(),
                         try.connection_id,
                     ),
                     timeout,
@@ -456,9 +471,9 @@ where
                 bail!("direct device to device connection timeout")
             }
         } else {
-            let con = try_ready!(con);
+            let res = try_ready!(res);
 
-            transition!(ConnectionEstablished(con))
+            transition!(ConnectionEstablished(either::Left(res)))
         }
     }
 
@@ -470,9 +485,9 @@ where
             .poll()
             .map_err(|_| "relay connection timeout")?;
 
-        let con = try_ready!(relay.relay.poll());
+        let stream = try_ready!(relay.relay.poll());
 
-        transition!(ConnectionEstablished(con))
+        transition!(ConnectionEstablished(either::Right(stream)))
     }
 }
 
@@ -480,15 +495,18 @@ pub struct ConnectToPeerCoordinator<P> {
     connection_id: ConnectionId,
     recv: Join<oneshot::Receiver<Vec<SocketAddr>>, oneshot::Receiver<Vec<SocketAddr>>>,
     master: mpsc::UnboundedSender<Protocol<P>>,
-    slave: mpsc::UnboundedReceiver<Protocol<P>>,
+    slave: mpsc::UnboundedSender<Protocol<P>>,
 }
 
-impl<P> ConnectToPeerCoordinator<P> {
+impl<P> ConnectToPeerCoordinator<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     pub fn spawn(
         handle: &Handle,
         connection_id: ConnectionId,
-        master: mpsc::Sender<Protocol<P>>,
-        slave: mpsc::Sender<Protocol<P>>,
+        master: mpsc::UnboundedSender<Protocol<P>>,
+        slave: mpsc::UnboundedSender<Protocol<P>>,
     ) -> (ConnectToPeerHandle, ConnectToPeerHandle) {
         let (master_send, master_recv) = oneshot::channel();
         let (slave_send, slave_recv) = oneshot::channel();
@@ -530,14 +548,16 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (master, slave) = try_ready!(self.recv.poll());
+        let (master, slave) = try_ready!(
+            self.recv.poll() //.map_err(|_| "error polling master and slave".into())
+        );
 
         self.master
             .unbounded_send(Protocol::Connect(slave, 0, self.connection_id));
         self.slave
             .unbounded_send(Protocol::Connect(master, 0, self.connection_id));
 
-        Ok(())
+        Ok(Ready(()))
     }
 }
 
@@ -547,6 +567,6 @@ pub struct ConnectToPeerHandle {
 
 impl ConnectToPeerHandle {
     pub fn send_address_information(self, info: Vec<SocketAddr>) {
-        self.sender.send((self.is_master, info));
+        self.sender.send(info);
     }
 }

@@ -7,5 +7,5 @@ pub struct Config {
     /// Path to the cert file.
     pub cert_file: PathBuf,
     /// Path to the key file.
-    pub key_filename: PathBuf,
+    pub key_file: PathBuf,
 }

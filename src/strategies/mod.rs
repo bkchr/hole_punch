@@ -14,17 +14,19 @@ use tokio_io::{AsyncRead, AsyncWrite};
 
 use bytes::BytesMut;
 
+use objekt;
+
 mod udp;
 
 trait StrategyTrait: FStream<Item = Connection, Error = Error> + NewConnection {}
-impl<T: NewConnection + Future<Item = Connection, Error = Error>> StrategyTrait for T {}
+impl<T: NewConnection + FStream<Item = Connection, Error = Error>> StrategyTrait for T {}
 
 pub struct Strategy {
     inner: Box<StrategyTrait<Item = Connection, Error = Error>>,
 }
 
 impl Strategy {
-    fn new<S: StrategyTrait<Item = Connection, Error = Error>>(inner: S) -> Strategy {
+    fn new<S: StrategyTrait<Item = Connection, Error = Error> + 'static>(inner: S) -> Strategy {
         let inner = Box::new(inner);
         Strategy { inner }
     }
@@ -36,6 +38,16 @@ impl FStream for Strategy {
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.inner.poll()
+    }
+}
+
+impl NewConnection for Strategy {
+    fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
+        self.inner.new_connection(addr)
+    }
+
+    fn get_new_connection_handle(&self) -> NewConnectionHandle {
+        self.inner.get_new_connection_handle()
     }
 }
 
@@ -55,9 +67,28 @@ pub struct Connection {
 }
 
 impl Connection {
-    fn new<C: ConnectionTrait<Item = Stream, Error = Error>>(inner: C) -> Connection {
+    fn new<C: ConnectionTrait<Item = Stream, Error = Error> + 'static>(inner: C) -> Connection {
         let inner = Box::new(inner);
         Connection { inner }
+    }
+}
+
+impl NewStream for Connection {
+    fn new_stream(&mut self) -> NewStreamFuture {
+        self.inner.new_stream()
+    }
+
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
+        self.inner.get_new_stream_handle()
+    }
+}
+
+impl FStream for Connection {
+    type Item = Stream;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        self.inner.poll()
     }
 }
 
@@ -85,12 +116,16 @@ pub struct Stream {
 
 impl Stream {
     fn new<
-        C: StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>,
+        C: StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>
+            + 'static,
     >(
         inner: C,
     ) -> Stream {
         let inner = Box::new(inner);
-        Stream { inner }
+        Stream {
+            inner,
+            read_overflow: None,
+        }
     }
 }
 
@@ -134,6 +169,10 @@ impl Sink for Stream {
 impl NewStream for Stream {
     fn new_stream(&mut self) -> NewStreamFuture {
         self.inner.new_stream()
+    }
+
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
+        self.inner.get_new_stream_handle()
     }
 }
 
@@ -181,7 +220,7 @@ impl Write for Stream {
         if res.is_ready() {
             Ok(buf.len())
         } else {
-            io::ErrorKind::WouldBlock.into()?
+            return Err(io::ErrorKind::WouldBlock.into());
         }
     }
 
@@ -202,11 +241,12 @@ impl AsyncWrite for Stream {
 
 pub trait NewStream {
     fn new_stream(&mut self) -> NewStreamFuture;
+    fn get_new_stream_handle(&self) -> NewStreamHandle;
 }
 
 pub trait NewConnection {
     fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture;
-    fn get_new_connection_handle(&mut self) -> NewConnectionHandle;
+    fn get_new_connection_handle(&self) -> NewConnectionHandle;
 }
 
 pub struct NewTypeFuture<T> {
@@ -232,28 +272,29 @@ impl<T> NewTypeFuture<T> {
 pub type NewStreamFuture = NewTypeFuture<Stream>;
 pub type NewConnectionFuture = NewTypeFuture<Connection>;
 
-#[derive(Clone)]
-pub struct NewTypeHandle<T> {
-    inner: Box<T>,
+trait NewConnectionHandleTrait: NewConnection + objekt::Clone {}
+impl<T: NewConnection + objekt::Clone> NewConnectionHandleTrait for T {}
+
+pub struct NewConnectionHandle {
+    inner: Box<NewConnectionHandleTrait>,
 }
 
-impl<T> Clone for Box<T>
-where
-    T: Clone,
-{
-    fn clone(&self) -> Box<NewConnection> {
-        Box::new((&self).clone())
+impl Clone for NewConnectionHandle {
+    fn clone(&self) -> Self {
+        NewConnectionHandle {
+            inner: objekt::clone_box(&*self.inner),
+        }
     }
 }
 
-impl<T: NewConnection> NewTypeHandle<T> {
-    fn new<H: NewConnection + 'static>(inner: H) -> NewTypeHandle<T> {
+impl NewConnectionHandle {
+    fn new<T: NewConnection + Clone + 'static>(inner: T) -> NewConnectionHandle {
         let inner = Box::new(inner);
-        NewTypeHandle { inner }
+        NewConnectionHandle { inner }
     }
 }
 
-impl<T: NewConnection> NewConnection for NewTypeHandle<T> {
+impl NewConnection for NewConnectionHandle {
     fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
         self.inner.new_connection(addr)
     }
@@ -263,22 +304,38 @@ impl<T: NewConnection> NewConnection for NewTypeHandle<T> {
     }
 }
 
-impl<T: NewStream> NewTypeHandle<T> {
-    fn new<H: NewStream + 'static>(inner: H) -> NewTypeHandle<T> {
-        let inner = Box::new(inner);
-        NewTypeHandle { inner }
+trait NewStreamHandleTrait: NewStream + objekt::Clone {}
+impl<T: NewStream + objekt::Clone> NewStreamHandleTrait for T {}
+
+pub struct NewStreamHandle {
+    inner: Box<NewStreamHandleTrait>,
+}
+
+impl Clone for NewStreamHandle {
+    fn clone(&self) -> Self {
+        NewStreamHandle {
+            inner: objekt::clone_box(&*self.inner),
+        }
     }
 }
 
-impl<T: NewStream> NewStream for NewTypeHandle<T> {
+impl NewStreamHandle {
+    fn new<T: NewStream + Clone + 'static>(inner: T) -> NewStreamHandle {
+        let inner = Box::new(inner);
+        NewStreamHandle { inner }
+    }
+}
+
+impl NewStream for NewStreamHandle {
     fn new_stream(&mut self) -> NewStreamFuture {
         self.inner.new_stream()
     }
+
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
+        self.clone()
+    }
 }
 
-pub type NewConnectionHandle = NewTypeHandle<NewConnection>;
-pub type NewStreamHandle = NewTypeHandle<NewStream>;
-
 pub fn init(handle: Handle, config: &Config) -> Result<Vec<Strategy>> {
-    vec![udp::init(handle, config)?]
+    Ok(vec![udp::init(handle, config)?])
 }

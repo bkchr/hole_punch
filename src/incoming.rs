@@ -5,7 +5,7 @@ use timeout::Timeout;
 
 use std::time::Duration;
 
-use futures::{Future, Poll};
+use futures::{Future, Poll, Stream};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,7 +18,7 @@ pub enum Handler<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    #[state_machine_future(start, transitions(WaitForInitialMessage))]
+    #[state_machine_future(start, transitions(WaitForInitialMessage, Finished))]
     WaitForStream {
         con: context::Connection<P>,
         timeout: Timeout,
@@ -51,8 +51,8 @@ where
         con: context::Connection<P>,
         timeout: Duration,
         handle: &Handle,
-    ) -> Handler<P> {
-        Handler::init(con, Timeout::new(timeout, handle))
+    ) -> HandlerFuture<P> {
+        Handler::start(con, Timeout::new(timeout, handle))
     }
 }
 
@@ -81,13 +81,13 @@ where
         wait: &'a mut RentToOwn<'a, WaitForInitialMessage<P>>,
     ) -> Poll<AfterWaitForInitialMessage<P>, Error> {
         loop {
-            if let Err(e) = wait.timeout.poll() {
+            if let Err(_) = wait.timeout.poll() {
                 bail!("timeout at incoming::Handler");
             }
 
             match try_ready!(wait.stream.direct_poll()) {
                 Some(Protocol::RequestConnection) => {
-                    let wait = wait.take();
+                    let mut wait = wait.take();
                     wait.stream.direct_send(Protocol::ConnectionEstablished);
                     transition!(Finished(Some((wait.con, wait.stream, None))))
                 }
@@ -95,8 +95,8 @@ where
                     wait.stream.direct_send(Protocol::ConnectionEstablished);
                     transition!(Finished(None))
                 }
-                Some(Protocol::PeerToPeerConnection(connection_id) => {
-                    let wait = wait.take();
+                Some(Protocol::PeerToPeerConnection(connection_id)) => {
+                    let mut wait = wait.take();
                     wait.stream.direct_send(Protocol::ConnectionEstablished);
                     transition!(Finished(Some((wait.con, wait.stream, Some(connection_id)))))
                 }

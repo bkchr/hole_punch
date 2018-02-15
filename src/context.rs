@@ -1,5 +1,5 @@
 use errors::*;
-use strategies;
+use strategies::{self, AddressInformation, NewConnection, NewStream};
 use config::Config;
 use incoming;
 use protocol::Protocol;
@@ -9,6 +9,7 @@ use std::time::Duration;
 use std::net::SocketAddr;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
+use std::mem;
 
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
@@ -27,23 +28,34 @@ use pnet_datalink::interfaces;
 
 use rand::{self, Rng};
 
+use itertools::Itertools;
+
 pub type ConnectionId = u64;
 
-pub struct Context<P> {
+pub struct Context<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
-    incoming: FuturesUnordered<incoming::Handler<P>>,
+    incoming: FuturesUnordered<incoming::HandlerFuture<P>>,
     requested_connections:
         HashMap<ConnectionId, oneshot::Sender<Either<(Connection<P>, Stream<P>), Stream<P>>>>,
     handle: Handle,
     new_connection_handles: Vec<NewConnectionHandle>,
 }
 
-impl<P> Context<P> {
+impl<P> Context<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     pub fn new(handle: Handle, config: Config) -> Result<Context<P>> {
-        let strats =
-            strategies::init(handle, &config).chain_err(|| "error initializing the strategies")?;
+        let strats = strategies::init(handle.clone(), &config)
+            .chain_err(|| "error initializing the strategies")?;
 
-        let new_connection_handles = strats.map(|s| s.get_new_connection_handle()).collect();
+        let new_connection_handles = strats
+            .iter()
+            .map(|s| NewConnectionHandle::new(s.get_new_connection_handle(), &handle))
+            .collect();
 
         Ok(Context {
             strategies: futures_unordered(strats.into_iter().map(|s| s.into_future())),
@@ -58,17 +70,27 @@ impl<P> Context<P> {
         loop {
             match self.strategies.poll() {
                 Ok(NotReady) => return Ok(()),
-                Err(e) => return Err(e),
-                Ok(Ready(Some((con, strat)))) => {
-                    self.strategies.push(strat.into_future());
+                Err(e) => return Err(e.0),
+                Ok(Ready(Some((Some(con), strat)))) => {
                     self.incoming.push(incoming::Handler::new(
-                        Connection::new(con),
+                        Connection::new(
+                            con,
+                            NewConnectionHandle::new(
+                                strat.get_new_connection_handle(),
+                                &self.handle,
+                            ),
+                            &self.handle,
+                        ),
                         Duration::from_secs(1),
                         &self.handle,
                     ));
+                    self.strategies.push(strat.into_future());
+                }
+                Ok(Ready(Some((None, _)))) => {
+                    bail!("strategy returned None!");
                 }
                 Ok(Ready(None)) => {
-                    bail!("strategy returned None!");
+                    panic!("strategies empty");
                 }
             }
         }
@@ -80,7 +102,7 @@ impl<P> Context<P> {
         loop {
             let id = rng.next_u64();
 
-            if !self.requested_connections.contains(&id) {
+            if !self.requested_connections.contains_key(&id) {
                 return id;
             }
         }
@@ -92,7 +114,7 @@ impl<P> Context<P> {
         server: &mut Stream<P>,
         msg: P,
     ) -> Result<NewPeerConnection<P>> {
-        if self.requested_connections.contains(&connection_id) {
+        if self.requested_connections.contains_key(&connection_id) {
             bail!("connection with the same id was already requested");
         }
 
@@ -101,19 +123,25 @@ impl<P> Context<P> {
         let (sender, receiver) = oneshot::channel();
 
         self.requested_connections.insert(connection_id, sender);
-        NewPeerConnection::new(receiver)
+        Ok(NewPeerConnection::new(receiver))
     }
 
     pub fn create_connection_to_server(&mut self, addr: &SocketAddr) -> ConnectWithStrategies<P> {
-        ConnectWithStrategies::new(self.new_connection_handles.clone(), &self.handle(), addr)
+        ConnectWithStrategies::new(self.new_connection_handles.clone(), &self.handle, *addr)
     }
 }
 
-struct NewPeerConnection<P> {
+pub struct NewPeerConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     recv: oneshot::Receiver<Either<(Connection<P>, Stream<P>), Stream<P>>>,
 }
 
-impl<P> NewPeerConnection<P> {
+impl<P> NewPeerConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     fn new(
         recv: oneshot::Receiver<Either<(Connection<P>, Stream<P>), Stream<P>>>,
     ) -> NewPeerConnection<P> {
@@ -133,15 +161,16 @@ where
 
         loop {
             match try_ready!(self.incoming.poll()) {
-                Some((con, stream)) => return Ok(Ready((con, stream))),
+                Some(Some((con, stream, _))) => return Ok(Ready(Some((con, stream)))),
                 // If the incoming handler returns `None`, then the incoming connection
                 // does not need to be propagated.
-                None => {}
+                _ => {}
             }
         }
     }
 }
 
+#[derive(Clone)]
 pub struct NewConnectionHandle {
     new_con: strategies::NewConnectionHandle,
     handle: Handle,
@@ -156,12 +185,17 @@ impl NewConnectionHandle {
     }
 
     pub fn new_connection<P>(&mut self, addr: SocketAddr) -> NewConnectionFuture<P> {
-        NewConnectionFuture::new(self.new_con.new_connection(addr), &self.handle)
+        NewConnectionFuture::new(
+            self.new_con.new_connection(addr),
+            self.clone(),
+            &self.handle,
+        )
     }
 }
 
 pub struct NewConnectionFuture<P> {
     new_con_recv: strategies::NewConnectionFuture,
+    new_con_handle: NewConnectionHandle,
     _marker: PhantomData<P>,
     handle: Handle,
 }
@@ -169,10 +203,12 @@ pub struct NewConnectionFuture<P> {
 impl<P> NewConnectionFuture<P> {
     fn new(
         new_con_recv: strategies::NewConnectionFuture,
+        new_con_handle: NewConnectionHandle,
         handle: &Handle,
     ) -> NewConnectionFuture<P> {
         NewConnectionFuture {
             new_con_recv,
+            new_con_handle,
             _marker: Default::default(),
             handle: handle.clone(),
         }
@@ -187,8 +223,9 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.new_con_recv()
-            .map(|r| r.map(|v| Connection::new(v, &self.handle)))
+        self.new_con_recv
+            .poll()
+            .map(|r| r.map(|v| Connection::new(v, self.new_con_handle.clone(), &self.handle)))
     }
 }
 
@@ -207,13 +244,19 @@ where
     con: strategies::Connection,
     state: ConnectionState,
     handle: Handle,
+    new_con_handle: NewConnectionHandle,
+    _marker: PhantomData<P>,
 }
 
 impl<P> Connection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    fn new(con: strategies::Connection) -> Connection<P> {
+    fn new(
+        con: strategies::Connection,
+        new_con_handle: NewConnectionHandle,
+        handle: &Handle,
+    ) -> Connection<P> {
         let (send, auth_recv) = oneshot::channel();
 
         Connection {
@@ -222,42 +265,153 @@ where
                 auth_recv,
                 auth_send: Some(send),
             },
+            handle: handle.clone(),
+            _marker: Default::default(),
+            new_con_handle,
         }
     }
 
     pub fn new_stream(&mut self) -> NewStreamFuture<P> {
-        NewStreamFuture::new(self.con.new_stream(), &self.handle)
+        NewStreamFuture::new(
+            self.con.new_stream(),
+            self.get_new_stream_handle(),
+            self.new_con_handle.clone(),
+            &self.handle,
+        )
+    }
+
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
+        NewStreamHandle::new(
+            self.con.get_new_stream_handle(),
+            self.new_con_handle.clone(),
+            &self.handle,
+        )
     }
 }
 
+impl<P> FStream for Connection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    type Item = Stream<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        loop {
+            let state = match self.state {
+                ConnectionState::Authenticated => {
+                    return self.con.poll().map(|r| {
+                        r.map(|o| {
+                            o.map(|v| {
+                                Stream::new(
+                                    v,
+                                    None,
+                                    &self.handle,
+                                    self.get_new_stream_handle(),
+                                    self.new_con_handle.clone(),
+                                )
+                            })
+                        })
+                    })
+                }
+                ConnectionState::UnAuthenticated {
+                    ref mut auth_recv,
+                    ref mut auth_send,
+                } => {
+                    loop {
+                        let auth = match auth_recv.poll() {
+                            Ok(Ready(auth)) => {
+                                assert!(auth);
+                                auth
+                            }
+                            _ => false,
+                        };
+
+                        if auth {
+                            break;
+                        } else {
+                            let stream = match try_ready!(self.con.poll()) {
+                                Some(stream) => stream,
+                                None => return Ok(Ready(None)),
+                            };
+
+                            // Take `auth_send` and return the new `Stream`.
+                            // If `auth_send` is None, we don't propagate any longer `Stream`s,
+                            // because only one `Stream` is allowed for unauthorized `Connection`s.
+                            if let Some(send) = auth_send.take() {
+                                return Ok(Ready(Some(Stream::new(
+                                    stream,
+                                    Some(send),
+                                    &self.handle,
+                                    NewStreamHandle::new(
+                                        self.con.get_new_stream_handle(),
+                                        self.new_con_handle.clone(),
+                                        &self.handle,
+                                    ),
+                                    self.new_con_handle.clone(),
+                                ))));
+                            }
+                        }
+                    }
+
+                    ConnectionState::Authenticated
+                }
+            };
+
+            self.state = state;
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct NewStreamHandle {
     new_stream_handle: strategies::NewStreamHandle,
+    new_con_handle: NewConnectionHandle,
     handle: Handle,
 }
 
 impl NewStreamHandle {
-    fn new(new_stream_handle: strategies::NewStreamHandle, handle: &Handle) -> NewStreamHandle {
+    fn new(
+        new_stream_handle: strategies::NewStreamHandle,
+        new_con_handle: NewConnectionHandle,
+        handle: &Handle,
+    ) -> NewStreamHandle {
         NewStreamHandle {
             new_stream_handle,
+            new_con_handle,
             handle: handle.clone(),
         }
     }
 
-    fn nw_stream<P>(&mut self) -> NewStreamFuture<P> {
-        NewStreamFuture::new(self.new_stream_handle.new_stream(), &self.handle)
+    pub fn new_stream<P>(&mut self) -> NewStreamFuture<P> {
+        NewStreamFuture::new(
+            self.new_stream_handle.new_stream(),
+            self.clone(),
+            self.new_con_handle.clone(),
+            &self.handle,
+        )
     }
 }
 
 pub struct NewStreamFuture<P> {
     new_stream: strategies::NewStreamFuture,
+    new_stream_handle: NewStreamHandle,
+    new_con_handle: NewConnectionHandle,
     handle: Handle,
     _marker: PhantomData<P>,
 }
 
 impl<P> NewStreamFuture<P> {
-    fn new(new_stream: strategies::NewStreamFuture, handle: &Handle) -> NewStreamFuture<P> {
+    fn new(
+        new_stream: strategies::NewStreamFuture,
+        new_stream_handle: NewStreamHandle,
+        new_con_handle: NewConnectionHandle,
+        handle: &Handle,
+    ) -> NewStreamFuture<P> {
         NewStreamFuture {
             new_stream,
+            new_stream_handle,
+            new_con_handle,
             handle: handle.clone(),
             _marker: Default::default(),
         }
@@ -272,66 +426,17 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.new_stream
-            .poll()
-            .map(|r| r.map(|v| Stream::new(v, &self.handle)))
-    }
-}
-
-impl<P> FStream for Connection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = P;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        loop {
-            let state = match self.state {
-                ConnectionState::Authenticated => {
-                    return self.poll()
-                        .map(|r| r.map(|v| Stream::new(v, None, &self.handle)))
-                }
-                ConnectionState::UnAuthenticated {
-                    ref mut auth_recv,
-                    ref mut auth_send,
-                } => {
-                    loop {
-                        let auth = match auth_recv.poll() {
-                            Ok(Ready(Some(auth))) => {
-                                assert!(auth);
-                                auth
-                            }
-                            _ => false,
-                        };
-
-                        if auth {
-                            break;
-                        } else {
-                            let stream = match try_ready!(self.poll()) {
-                                Some(stream) => stream,
-                                None => return Ok(Ready(None)),
-                            };
-
-                            // Take `auth_send` and return the new `Stream`.
-                            // If `auth_send` is None, we don't propagate any longer `Stream`s,
-                            // because only one `Stream` is allowed for unauthorized `Connection`s.
-                            if let Some(send) = auth_send.take() {
-                                return Ok(Ready(Some(Stream::new(
-                                    stream,
-                                    Some(send),
-                                    &self.handle,
-                                ))));
-                            }
-                        }
-                    }
-
-                    ConnectionState::Authenticated
-                }
-            };
-
-            self.state = state;
-        }
+        self.new_stream.poll().map(|r| {
+            r.map(|v| {
+                Stream::new(
+                    v,
+                    None,
+                    &self.handle,
+                    self.new_stream_handle.clone(),
+                    self.new_con_handle.clone(),
+                )
+            })
+        })
     }
 }
 
@@ -391,19 +496,17 @@ where
     /// This allows the `Connection` to accept multiple `Stream`s and the `Stream`s can execute
     /// the full protocol, e.g. opening a connection to a different device.
     pub fn upgrade_to_authenticated(&mut self) {
-        match self.state {
+        match mem::replace(&mut self.state, StreamState::Authenticated){
             StreamState::Authenticated => {}
-            StreamState::UnAuthenticated(mut auth) => {
+            StreamState::UnAuthenticated(auth) => {
                 let _ = auth.send(true);
             }
         };
-
-        self.state = StreamState::Authenticated;
     }
 
     fn poll_authenticated(&mut self) -> Poll<Option<P>, Error> {
         loop {
-            let msg = match try_ready!(self.con.poll()) {
+            let msg = match try_ready!(self.stream.poll()) {
                 Some(msg) => msg,
                 None => return Ok(Ready(None)),
             };
@@ -412,7 +515,7 @@ where
                 Protocol::Embedded(msg) => return Ok(Ready(Some(msg))),
                 Protocol::RequestPeerConnection(connection_id, msg) => {
                     self.incoming_con_requests.insert(connection_id);
-                    return Ok(Ready(msg));
+                    return Ok(Ready(Some(msg)));
                 }
                 Protocol::RequestPrivateAdressInformation(connection_id) => {
                     let addresses = interfaces()
@@ -422,7 +525,7 @@ where
                         .iter()
                         .map(|v| v.ip())
                         .filter(|ip| !ip.is_loopback())
-                        .map(|ip| (ip, self.local_addr().port()).into())
+                        .map(|ip| (ip, self.stream.get_ref().get_ref().local_addr().port()).into())
                         .collect_vec();
 
                     self.direct_send(Protocol::PrivateAdressInformation(connection_id, addresses));
@@ -432,9 +535,7 @@ where
                         handler.send_address_information(addresses);
                     }
                 }
-                Protocol::Connect(addresses, _, connection_id) => {
-                    
-                }
+                Protocol::Connect(addresses, _, connection_id) => {}
                 _ => {}
             };
         }
@@ -442,7 +543,7 @@ where
 
     fn poll_unauthenticated(&mut self) -> Poll<Option<P>, Error> {
         loop {
-            let msg = match try_ready!(self.con.poll()) {
+            let msg = match try_ready!(self.stream.poll()) {
                 Some(msg) => msg,
                 None => return Ok(Ready(None)),
             };
@@ -462,7 +563,7 @@ where
     }
 
     pub(crate) fn direct_send(&mut self, item: Protocol<P>) -> Result<()> {
-        if self.stream.start_send(item).is_error() || self.stream.poll_complete().is_error() {
+        if self.stream.start_send(item).is_err() || self.stream.poll_complete().is_err() {
             bail!("error at `direct_send`");
         }
 
@@ -485,9 +586,9 @@ where
             other.remote_msg.0.clone(),
         );
 
-        self.incoming_con_requests.insert(connection_id, master);
+        self.con_requests.insert(connection_id, master);
         //TODO, the other `Stream` could already contain a connection request with the same id
-        other.incoming_con_requests.insert(connection_id, slave);
+        other.con_requests.insert(connection_id, slave);
 
         Ok(())
     }

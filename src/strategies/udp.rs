@@ -1,23 +1,12 @@
 use errors::*;
 use strategies::{AddressInformation, Connection, NewConnection, NewConnectionFuture,
-                 NewConnectionHandle, NewStream, NewStreamFuture, Strategy, Stream};
+                 NewConnectionHandle, NewStream, NewStreamFuture, Strategy, Stream, NewStreamHandle};
 use config::Config;
 
-use std::marker::PhantomData;
 use std::net::SocketAddr;
-use std::collections::{BinaryHeap, HashMap};
-use std::collections::hash_map::Entry::{Occupied, Vacant};
-use std::cmp::Ordering;
-use std::time::Duration;
-use std::io::{self, Cursor};
-use std::cmp::min;
 use std::path::Path;
 
-use futures::Async::{NotReady, Ready};
-use futures::{self, AsyncSink, Future, Poll, Sink, StartSend, Stream as FStream};
-use futures::sync::mpsc::{channel, unbounded, Receiver, SendError, Sender, UnboundedReceiver,
-                          UnboundedSender};
-use futures::sync::oneshot;
+use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_core::reactor::Handle;
 
@@ -59,7 +48,8 @@ impl FStream for StrategyWrapper {
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.context
             .poll()
-            .map(|r| r.map(|v| ConnectionWrapper::new))
+            .map(|r| r.map(|o| o.map(|v| Connection::new(ConnectionWrapper::new(v)))))
+            .map_err(|e| e.into())
     }
 }
 
@@ -68,15 +58,14 @@ impl NewConnection for StrategyWrapper {
         NewConnectionFuture::new(
             self.context
                 .new_connection(addr)
-                .map(|v| ConnectionWrapper::new),
+                .map(|v| Connection::new(ConnectionWrapper::new(v)))
+                .map_err(|e| e.into()),
         )
     }
 
     fn get_new_connection_handle(&self) -> NewConnectionHandle {
         NewConnectionHandle::new(NewConnectionHandleWrapper::new(
             self.context.get_new_connection_handle(),
-            self.handle.clone(),
-            self.new_con.0.clone(),
         ))
     }
 }
@@ -96,19 +85,33 @@ impl FStream for ConnectionWrapper {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.con.poll().map(|r| {
-            r.map(|v| Stream::new(StreamWrapper::new(v, self.con.get_new_stream_handle())))
-        })
+        self.con
+            .poll()
+            .map(|r| {
+                r.map(|o| {
+                    o.map(|v| Stream::new(StreamWrapper::new(v, self.con.get_new_stream_handle())))
+                })
+            })
+            .map_err(|e| e.into())
     }
 }
 
 impl NewStream for ConnectionWrapper {
     fn new_stream(&mut self) -> NewStreamFuture {
+        let handle = self.con.get_new_stream_handle();
+
         NewStreamFuture::new(
             self.con
                 .new_bidirectional_stream()
-                .map(|v| StreamWrapper::new(v, self.con.get_new_stream_handle())),
+                .map(move |v| Stream::new(StreamWrapper::new(v, handle)))
+                .map_err(|e| e.into()),
         )
+    }
+
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
+        NewStreamHandle::new(NewStreamHandleWrapper::new(
+            self.con.get_new_stream_handle(),
+        ))
     }
 }
 
@@ -128,8 +131,8 @@ struct StreamWrapper {
 }
 
 impl StreamWrapper {
-    fn new(stream: picoquic::Stream, new_stream: picoquic::NewStreamHandle) -> ConnectionWrapper {
-        ConnectionWrapper { stream, new_stream }
+    fn new(stream: picoquic::Stream, new_stream: picoquic::NewStreamHandle) -> StreamWrapper {
+        StreamWrapper { stream, new_stream }
     }
 }
 
@@ -167,13 +170,17 @@ impl AddressInformation for StreamWrapper {
 
 impl NewStream for StreamWrapper {
     fn new_stream(&mut self) -> NewStreamFuture {
-        let handle = self.new_session.clone();
-        let new_con = self.new_session
+        let handle = self.new_stream.clone();
+        let new_con = self.new_stream
             .new_bidirectional_stream()
             .map(move |s| Stream::new(StreamWrapper::new(s, handle)))
             .map_err(|e| e.into());
 
         NewStreamFuture::new(new_con)
+    }
+
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
+        NewStreamHandle::new(NewStreamHandleWrapper::new(self.new_stream.clone()))
     }
 }
 
@@ -193,7 +200,8 @@ impl NewConnection for NewConnectionHandleWrapper {
         NewConnectionFuture::new(
             self.new_con
                 .new_connection(addr)
-                .map(|v| ConnectionWrapper::new),
+                .map(|v| Connection::new(ConnectionWrapper::new(v)))
+                .map_err(|e| e.into()),
         )
     }
 
@@ -215,11 +223,18 @@ impl NewStreamHandleWrapper {
 
 impl NewStream for NewStreamHandleWrapper {
     fn new_stream(&mut self) -> NewStreamFuture {
+        let handle = self.new_stream.clone();
+
         NewStreamFuture::new(
             self.new_stream
                 .new_bidirectional_stream()
-                .map(|v| StreamWrapper::new(v, self.new_stream.clone())),
+                .map(|v| Stream::new(StreamWrapper::new(v, handle)))
+                .map_err(|e| e.into()),
         )
+    }
+
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
+        NewStreamHandle::new(self.clone())
     }
 }
 

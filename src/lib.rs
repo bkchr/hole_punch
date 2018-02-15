@@ -15,12 +15,12 @@ extern crate serde_json;
 #[macro_use]
 extern crate state_machine_future;
 extern crate tokio_core;
-#[macro_use]
 extern crate tokio_io;
 extern crate tokio_serde_json;
 extern crate tokio_timer;
 extern crate rand;
 extern crate either;
+extern crate objekt;
 
 mod protocol;
 pub mod errors;
