@@ -1,4 +1,5 @@
 extern crate env_logger;
+#[macro_use]
 extern crate futures;
 extern crate hole_punch;
 #[macro_use]
@@ -17,11 +18,9 @@ use std::thread;
 use std::time::Duration;
 use std::env;
 
-use hyper::{Request, Response};
-use hyper::header::ContentLength;
-use hyper::server::Http;
-
-use futures::{Future, Stream};
+use futures::{Future, Stream, Sink, Poll};
+use futures::Async::{NotReady, Ready };
+use futures::stream::{StreamFuture, FuturesUnordered };
 
 #[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
@@ -34,81 +33,94 @@ enum CarrierProtocol {
 
 struct CarrierConnection {
     stream: context::Stream<CarrierProtocol>,
+    name: String,
 }
 
-struct CarrierService {
-    control: ServiceControl<CarrierProtocol>,
+impl Future for CarrierConnection {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+       loop {
+           let msg = try_ready!(self.stream.poll()) {
+               Some(msg) => msg,
+               None => {
+                   println!("stream closed!");
+                   return Ok(Ready(()));
+               }
+           };
+
+           match msg {
+               CarrierProtocol::Registered => {
+                   println!("REGISTERED");
+               }
+               CarrierProtocol::RequestDevice { name } => {
+                   println!("REQUEST: {}", name);
+                   if name == self.name {
+                       self.stream.start_send(CarrierProtocol::AlreadyConnected);
+                       self.stream.poll_complete();
+                   }
+               }
+               _ => {},
+           };
+       } 
+    }
 }
 
-impl Service for CarrierService {
-    type Message = CarrierProtocol;
+struct Carrier {
+    cons: FuturesUnordered<StreamFuture<context::Connection<CarrierProtocol>>>,
+    handle: Handle,
+    name: String,
+}
 
-    fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>> {
-        match msg {
-            &CarrierProtocol::Registered => {
-                println!("REGISTERED");
-                Ok(None)
-            }
-            &CarrierProtocol::RequestDevice { ref name } => {
-                println!("REQUEST: {}", name);
-                if name == "nice" {
-                    Ok(Some(CarrierProtocol::AlreadyConnected))
-                } else {
-                    Ok(None)
+impl Future for Rc<RefCell<Carrier>> {
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            let stream = match try_ready!(self.borrow_mut().cons.poll()) {
+                Some((Some(stream), con)) =>  {
+                    self.cons.push(con.into_future());
+                    stream
+                },
+                // yeah, we should not do that, but we will manually poll, when we add new cons
+                None => return Ok(NotReady),
+                Some((None, con)) => {
+                    println!("connection closed");
+                    continue;
                 }
-            }
-            _ => Ok(None),
+            };
+
+            handle.spawn(CarrierConnection {stream, name: self.borrow().name.clone()}.map_err(|e| println!("connection error {:?}", e)));
         }
-    }
-
-    fn inform(&mut self, evt: ServiceInformEvent) {
-        match evt {
-            ServiceInformEvent::Connecting => println!("CONNECTING"),
-        }
-    }
-}
-
-struct NewCarrierService {}
-
-impl NewService<CarrierProtocol> for NewCarrierService {
-    type Service = CarrierService;
-
-    fn new_service(
-        &mut self,
-        mut control: ServiceControl<CarrierProtocol>,
-        addr: SocketAddr,
-    ) -> Self::Service {
-        println!("new connection to: {}", addr);
-
-        control.send_message(CarrierProtocol::Register {
-            name: "nice".to_owned(),
-        });
-        CarrierService { control }
     }
 }
 
 fn main() {
     env_logger::init();
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
     // let server_addr = ([176, 9, 73, 99], 22222).into();
-    let server_addr = ([127, 0, 0, 1], 22222).into();
+    let server_addr: SocketAddr = ([127, 0, 0, 1], 22222).into();
 
     let mut evt_loop = Core::new().unwrap();
 
-    let new_service = NewCarrierService {};
+    let config = config::Config {
+        udp_listen_address: ([0, 0, 0, 0], 0).into(),
+        cert_file: PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
+        key_file: PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
+    };
 
-    let mut client = Client::new(evt_loop.handle().clone(), new_service, false).expect("client");
-    let addr: SocketAddr = server_addr;
-    client.connect_to(&addr).expect("connect");
+    let context = context::Context::new(evt_loop.handle(), config).unwrap();
+
+    let server_con = context.create_connection_to_server(server_addr);
 
     let handle = evt_loop.handle();
     evt_loop
         .run(client.for_each(move |con| {
             let handle = handle.clone();
-            if h2 {
-                do_http2(con, handle);
-            } else {
-                do_http(con, handle);
-            }
+            
             Ok(())
         }))
         .unwrap();
