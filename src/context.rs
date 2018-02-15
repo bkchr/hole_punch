@@ -3,7 +3,7 @@ use strategies;
 use config::Config;
 use incoming;
 use protocol::Protocol;
-use connect::{ConnectToPeerCoordinator, ConnectToPeerHandle};
+use connect::{ConnectToPeerCoordinator, ConnectToPeerHandle, ConnectWithStrategies};
 
 use std::time::Duration;
 use std::net::SocketAddr;
@@ -35,6 +35,7 @@ pub struct Context<P> {
     requested_connections:
         HashMap<ConnectionId, oneshot::Sender<Either<(Connection<P>, Stream<P>), Stream<P>>>>,
     handle: Handle,
+    new_connection_handles: Vec<NewConnectionHandle>,
 }
 
 impl<P> Context<P> {
@@ -42,10 +43,14 @@ impl<P> Context<P> {
         let strats =
             strategies::init(handle, &config).chain_err(|| "error initializing the strategies")?;
 
+        let new_connection_handles = strats.map(|s| s.get_new_connection_handle()).collect();
+
         Ok(Context {
             strategies: futures_unordered(strats.into_iter().map(|s| s.into_future())),
             incoming: FuturesUnordered::new(),
             handle,
+            new_connection_handles,
+            requested_connections: HashMap::new(),
         })
     }
 
@@ -99,7 +104,9 @@ impl<P> Context<P> {
         NewPeerConnection::new(receiver)
     }
 
-    pub fn create_connection_to_server(&mut self, addr: &SocketAddr) {}
+    pub fn create_connection_to_server(&mut self, addr: &SocketAddr) -> ConnectWithStrategies<P> {
+        ConnectWithStrategies::new(self.new_connection_handles.clone(), &self.handle(), addr)
+    }
 }
 
 struct NewPeerConnection<P> {
@@ -137,20 +144,39 @@ where
 
 pub struct NewConnectionHandle {
     new_con: strategies::NewConnectionHandle,
+    handle: Handle,
 }
 
 impl NewConnectionHandle {
-    pub fn new_connection<P>(&mut self, addr: SocketAddr) -> NewConnectionFuture<P> {
-        NewConnectionFuture {
-            new_con_recv: self.new_con.new_connection(addr),
-            _marker: Default::default(),
+    fn new(new_con: strategies::NewConnectionHandle, handle: &Handle) -> NewConnectionHandle {
+        NewConnectionHandle {
+            new_con,
+            handle: handle.clone(),
         }
+    }
+
+    pub fn new_connection<P>(&mut self, addr: SocketAddr) -> NewConnectionFuture<P> {
+        NewConnectionFuture::new(self.new_con.new_connection(addr), &self.handle)
     }
 }
 
 pub struct NewConnectionFuture<P> {
     new_con_recv: strategies::NewConnectionFuture,
     _marker: PhantomData<P>,
+    handle: Handle,
+}
+
+impl<P> NewConnectionFuture<P> {
+    fn new(
+        new_con_recv: strategies::NewConnectionFuture,
+        handle: &Handle,
+    ) -> NewConnectionFuture<P> {
+        NewConnectionFuture {
+            new_con_recv,
+            _marker: Default::default(),
+            handle: handle.clone(),
+        }
+    }
 }
 
 impl<P> Future for NewConnectionFuture<P>
@@ -161,7 +187,8 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.new_con_recv().map(|r| r.map(|v| Connection::new(v)))
+        self.new_con_recv()
+            .map(|r| r.map(|v| Connection::new(v, &self.handle)))
     }
 }
 
@@ -199,7 +226,7 @@ where
     }
 
     pub fn new_stream(&mut self) -> NewStreamFuture<P> {
-        self.con.new_stream()
+        NewStreamFuture::new(self.con.new_stream(), &self.handle)
     }
 }
 
@@ -262,7 +289,8 @@ where
         loop {
             let state = match self.state {
                 ConnectionState::Authenticated => {
-                    return self.poll().map(|r| r.map(|v| Stream::new(v, None)))
+                    return self.poll()
+                        .map(|r| r.map(|v| Stream::new(v, None, &self.handle)))
                 }
                 ConnectionState::UnAuthenticated {
                     ref mut auth_recv,
@@ -289,7 +317,11 @@ where
                             // If `auth_send` is None, we don't propagate any longer `Stream`s,
                             // because only one `Stream` is allowed for unauthorized `Connection`s.
                             if let Some(send) = auth_send.take() {
-                                return Ok(Ready(Some(Stream::new(stream, Some(send)))));
+                                return Ok(Ready(Some(Stream::new(
+                                    stream,
+                                    Some(send),
+                                    &self.handle,
+                                ))));
                             }
                         }
                     }
@@ -321,21 +353,37 @@ where
     con_requests: HashMap<ConnectionId, ConnectToPeerHandle>,
     incoming_con_requests: HashSet<ConnectionId>,
     handle: Handle,
+    new_stream_handle: NewStreamHandle,
+    new_connection_handle: NewConnectionHandle,
 }
 
 impl<P> Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    fn new(stream: strategies::Stream, auth_con: Option<oneshot::Sender<bool>>) -> Stream<P> {
+    fn new(
+        stream: strategies::Stream,
+        auth_con: Option<oneshot::Sender<bool>>,
+        handle: &Handle,
+        new_stream_handle: NewStreamHandle,
+        new_connection_handle: NewConnectionHandle,
+    ) -> Stream<P> {
         let state = match auth_con {
             Some(auth) => StreamState::UnAuthenticated(auth),
             None => StreamState::Authenticated,
         };
 
+        let remote_msg = mpsc::unbounded();
+
         Stream {
             stream: WriteJson::new(ReadJson::new(stream)),
             state,
+            remote_msg,
+            con_requests: HashMap::new(),
+            incoming_con_requests: HashSet::new(),
+            handle: handle.clone(),
+            new_stream_handle,
+            new_connection_handle,
         }
     }
 
@@ -384,7 +432,9 @@ where
                         handler.send_address_information(addresses);
                     }
                 }
-                Protocol::Connect(addresses, _, connection_id) => {}
+                Protocol::Connect(addresses, _, connection_id) => {
+                    
+                }
                 _ => {}
             };
         }

@@ -126,9 +126,9 @@ impl<P> ConnectWithStrategies<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    fn new(
+    pub(crate) fn new(
         mut strategies: Vec<NewConnectionHandle>,
-        handle: Handle,
+        handle: &Handle,
         addr: SocketAddr,
     ) -> ConnectWithStrategies<P> {
         let strategy = strategies
@@ -139,7 +139,7 @@ where
             strategies,
             addr,
             connect: ConnectStateMachine::start(strategy, addr, handle.clone()),
-            handle,
+            handle: handle.clone(),
         }
     }
 }
@@ -148,7 +148,7 @@ impl<P> Future for ConnectWithStrategies<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = Connection<P>;
+    type Item = ( Connection<P>, Stream<P> );
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -414,7 +414,7 @@ where
 
         let timeout = Timeout::new(Duration::from_secs(2), &init.handle);
         let connection_id = init.connection_id;
-        let is_controller = init.is_controller;
+        let is_master = init.is_master;
         let new_stream_handle = init.new_stream_handle;
         let new_connection_handle = init.new_connection_handle;
 
@@ -427,7 +427,7 @@ where
             timeout,
             new_stream_handle,
             connection_id,
-            is_controller,
+            is_master,
         })
     }
 
