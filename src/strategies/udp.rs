@@ -1,6 +1,7 @@
 use errors::*;
 use strategies::{AddressInformation, Connection, NewConnection, NewConnectionFuture,
-                 NewConnectionHandle, NewStream, NewStreamFuture, Strategy, Stream, NewStreamHandle};
+                 NewConnectionHandle, NewStream, NewStreamFuture, NewStreamHandle, Strategy,
+                 Stream};
 use config::Config;
 
 use std::net::SocketAddr;

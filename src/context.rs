@@ -496,7 +496,7 @@ where
     /// This allows the `Connection` to accept multiple `Stream`s and the `Stream`s can execute
     /// the full protocol, e.g. opening a connection to a different device.
     pub fn upgrade_to_authenticated(&mut self) {
-        match mem::replace(&mut self.state, StreamState::Authenticated){
+        match mem::replace(&mut self.state, StreamState::Authenticated) {
             StreamState::Authenticated => {}
             StreamState::UnAuthenticated(auth) => {
                 let _ = auth.send(true);

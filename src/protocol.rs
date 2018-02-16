@@ -4,7 +4,7 @@ use std::net::SocketAddr;
 pub enum Protocol<P> {
     /// Represents an incoming connection request
     RequestConnection,
-    /// Represents an incoming poke connection that can be ignored. 
+    /// Represents an incoming poke connection that can be ignored.
     PokeConnection,
     PeerToPeerConnection(u64),
     ConnectionEstablished,
