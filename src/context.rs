@@ -164,7 +164,10 @@ where
                 Some(Some((con, stream, _))) => return Ok(Ready(Some((con, stream)))),
                 // If the incoming handler returns `None`, then the incoming connection
                 // does not need to be propagated.
-                _ => {}
+                Some(None) => {}
+                None => {
+                    return Ok(NotReady);
+                }
             }
         }
     }
