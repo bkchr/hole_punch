@@ -7,7 +7,7 @@ extern crate log;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::{config, context };
+use hole_punch::{config, context};
 use hole_punch::errors::*;
 
 use tokio_core::reactor::{Core, Handle};
@@ -139,23 +139,29 @@ fn main() {
     let handle = evt_loop.handle();
 
     let carrier2 = carrier.clone();
-    evt_loop.handle().spawn(context.for_each(move |(con, stream)| {
-        let carrier = carrier2.clone();
-        carrier.borrow_mut().cons.push(con.into_future());
-        CarrierRc(carrier.clone()).poll();
+    evt_loop.handle().spawn(
+        context
+            .for_each(move |(con, stream)| {
+                println!("NEW CARRIER");
+                let carrier = carrier2.clone();
+                carrier.borrow_mut().cons.push(con.into_future());
+                CarrierRc(carrier.clone()).poll();
 
-        handle.spawn(
-            CarrierConnection {
-                stream,
-                name: carrier.borrow().name.clone(),
-            }.map_err(|e| println!("{:?}", e)),
-        );
+                handle.spawn(
+                    CarrierConnection {
+                        stream,
+                        name: carrier.borrow().name.clone(),
+                    }.map_err(|e| println!("{:?}", e)),
+                );
 
-        Ok(())
-    }).map_err(|e| println!("{:?}", e)));
+                Ok(())
+            })
+            .map_err(|e| println!("{:?}", e)),
+    );
 
-    evt_loop.handle().spawn(CarrierRc(carrier.clone()).map_err(|e| println!("{:?}", e)));
-
+    evt_loop
+        .handle()
+        .spawn(CarrierRc(carrier.clone()).map_err(|e| println!("{:?}", e)));
 
     evt_loop
         .run(server_con.and_then(|(con, stream)| {

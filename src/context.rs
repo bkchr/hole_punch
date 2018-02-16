@@ -616,6 +616,7 @@ where
                     self.direct_send(Protocol::PrivateAdressInformation(connection_id, addresses));
                 }
                 Protocol::PrivateAdressInformation(connection_id, addresses) => {
+                    println!("ADDRESSES: {:?}", addresses);
                     if let Some(handler) = self.con_requests.remove(&connection_id) {
                         handler.send_address_information(addresses);
                     }

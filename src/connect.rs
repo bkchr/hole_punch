@@ -299,16 +299,18 @@ where
         }
 
         loop {
+            println!("POLL");
             let res = self.wait_for_stream.poll()?;
 
             match res {
                 Ready(Some((con, mut stream))) => {
+                    println!("CONNECTION");
                     if self.is_master {
-                        stream.direct_send(Protocol::PokeConnection).unwrap();
-                    } else {
                         stream
                             .direct_send(Protocol::PeerToPeerConnection(self.connection_id))
                             .unwrap();
+                    } else {
+                        stream.direct_send(Protocol::PokeConnection).unwrap();
                     }
 
                     self.wait_for_resp.push(WaitForMessage::new(
@@ -326,7 +328,7 @@ where
                 Ok(Ready(Some((con, stream)))) => return Ok(Ready((con.unwrap(), stream))),
                 Ok(NotReady) => return Ok(NotReady),
                 Ok(Ready(None)) => {
-                    if self.wait_for_stream.is_empty() {
+                    if self.wait_for_stream.is_empty() && self.wait_for_con.is_empty() {
                         bail!("No connections left for connecting to device!");
                     } else {
                         return Ok(NotReady);
@@ -426,7 +428,7 @@ where
     ) -> Poll<AfterInitState<P>, Error> {
         let init = init.take();
 
-        let timeout = Timeout::new(Duration::from_secs(2), &init.handle);
+        let timeout = Timeout::new(Duration::from_secs(20), &init.handle);
         let connection_id = init.connection_id;
         let is_master = init.is_master;
         let new_stream_handle = init.new_stream_handle;

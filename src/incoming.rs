@@ -92,10 +92,12 @@ where
                     transition!(Finished(Some((wait.con, wait.stream, None))))
                 }
                 Some(Protocol::PokeConnection) => {
+                    println!("POKE");
                     wait.stream.direct_send(Protocol::ConnectionEstablished);
                     transition!(Finished(None))
                 }
                 Some(Protocol::PeerToPeerConnection(connection_id)) => {
+                    println!("PEERTOPEER");
                     let mut wait = wait.take();
                     wait.stream.direct_send(Protocol::ConnectionEstablished);
                     transition!(Finished(Some((wait.con, wait.stream, Some(connection_id)))))

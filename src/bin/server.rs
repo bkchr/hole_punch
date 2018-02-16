@@ -20,9 +20,14 @@ use futures::Async::Ready;
 
 #[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
-    Register { name: String },
+    Register {
+        name: String,
+    },
     Registered,
-    RequestDevice { name: String },
+    RequestDevice {
+        name: String,
+        connection_id: context::ConnectionId,
+    },
     DeviceNotFound,
     AlreadyConnected,
 }
@@ -62,19 +67,29 @@ impl Future for CarrierConnection {
                         .borrow_mut()
                         .devices
                         .insert(name, self.stream.clone());
+                    self.stream.borrow_mut().upgrade_to_authenticated();
 
                     self.stream
                         .borrow_mut()
                         .start_send(CarrierProtocol::Registered);
                     self.stream.borrow_mut().poll_complete();
                 }
-                CarrierProtocol::RequestDevice { name } => {
-                    println!("REQUEST: {}", name);
+                CarrierProtocol::RequestDevice {
+                    name,
+                    connection_id,
+                } => {
+                    println!("REQUEST: {} {}", name, connection_id);
 
-                    self.stream
-                        .borrow_mut()
-                        .start_send(CarrierProtocol::DeviceNotFound);
-                    self.stream.borrow_mut().poll_complete();
+                    if let Some(con) = self.carrier.borrow_mut().devices.get_mut(&name) {
+                        self.stream
+                            .borrow_mut()
+                            .create_connection_to(connection_id, &mut con.borrow_mut())?;
+                    } else {
+                        self.stream
+                            .borrow_mut()
+                            .start_send(CarrierProtocol::DeviceNotFound);
+                        self.stream.borrow_mut().poll_complete();
+                    }
                 }
                 _ => {}
             };

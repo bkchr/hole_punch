@@ -1,3 +1,4 @@
+extern crate either;
 extern crate env_logger;
 #[macro_use]
 extern crate error_chain;
@@ -13,223 +14,143 @@ extern crate log;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::dev_client::{Client, NewService, Service, ServiceControl, ServiceInformEvent};
+use hole_punch::{config, context};
 use hole_punch::errors::*;
 
-use tokio_core::reactor::Core;
+use tokio_core::reactor::{Core, Handle};
 
 use std::net::SocketAddr;
 use std::io::{self, Write};
 use std::cell::RefCell;
-use std::env;
+use std::path::PathBuf;
 
-use futures::{Future, IntoFuture, Poll, Stream};
+use futures::{Future, Poll, Sink, Stream};
+use futures::Async::{NotReady, Ready};
+use futures::stream::{FuturesUnordered, StreamFuture};
 
 #[derive(Deserialize, Serialize, Clone)]
 enum CarrierProtocol {
-    Register { name: String },
+    Register {
+        name: String,
+    },
     Registered,
-    RequestDevice { name: String },
+    RequestDevice {
+        name: String,
+        connection_id: context::ConnectionId,
+    },
     DeviceNotFound,
     AlreadyConnected,
 }
 
-struct CarrierService {
-    control: ServiceControl<CarrierProtocol>,
+struct CarrierConnection {
+    con: context::Connection<CarrierProtocol>,
+    stream: context::Stream<CarrierProtocol>,
+    context: context::Context<CarrierProtocol>,
+    name: String,
+    request_name: String,
+    handle: Handle,
 }
 
-impl Service for CarrierService {
-    type Message = CarrierProtocol;
-
-    fn on_message(&mut self, msg: &Self::Message) -> Result<Option<Self::Message>> {
-        match msg {
-            &CarrierProtocol::Registered => {
-                println!("REGISTERED");
-                Ok(None)
-            }
-            &CarrierProtocol::Register { ref name } => {
-                println!("REGISTER: {}", name);
-                Ok(None)
-            }
-            &CarrierProtocol::DeviceNotFound => {
-                println!("DEVICENOTFOUND");
-                bail!("NOT FOUND");
-            }
-            &CarrierProtocol::AlreadyConnected => {
-                println!("ALREADY");
-                self.control.use_as_result();
-                Ok(None)
-            }
-            _ => Ok(None),
-        }
-    }
-
-    fn inform(&mut self, evt: ServiceInformEvent) {
-        match evt {
-            ServiceInformEvent::Connecting => println!("CONNECTING"),
-        }
-    }
-}
-
-struct NewCarrierService {}
-
-impl NewService<CarrierProtocol> for NewCarrierService {
-    type Service = CarrierService;
-
-    fn new_service(
-        &mut self,
-        mut control: ServiceControl<CarrierProtocol>,
-        addr: SocketAddr,
-    ) -> Self::Service {
-        println!("new connection to: {}", addr);
-
-        control.send_message(CarrierProtocol::RequestDevice {
-            name: "nice".to_owned(),
+impl CarrierConnection {
+    fn register(&mut self) {
+        self.stream.start_send(CarrierProtocol::Register {
+            name: self.name.clone(),
         });
-        CarrierService { control }
+        self.stream.poll_complete();
     }
 }
 
-struct HttpConnector {
-    con: RefCell<Option<hole_punch::PureConnection>>,
-}
-
-impl hyper::server::Service for HttpConnector {
-    type Request = hyper::Uri;
-    type Response = hole_punch::PureConnection;
-    type Error = io::Error;
-    type Future = futures::future::FutureResult<Self::Response, io::Error>;
-
-    fn call(&self, _: hyper::Uri) -> Self::Future {
-        futures::future::ok(self.con.borrow_mut().take().unwrap())
-    }
-}
-
-fn do_http(con: hole_punch::PureConnection, mut evt_loop: Core) {
-    println!("DOING HTTP");
-    let client = hyper::Client::configure()
-        .connector(HttpConnector {
-            con: RefCell::new(Some(con)),
-        })
-        .build(&evt_loop.handle());
-
-    let work = client
-        .get("http://hello.carrier".parse().unwrap())
-        .and_then(|res| {
-            println!("Status: {}", res.status());
-            println!("Headers:\n{}", res.headers());
-            res.body().for_each(|chunk| {
-                ::std::io::stdout()
-                    .write_all(&chunk)
-                    .map(|_| ())
-                    .map_err(From::from)
-            })
-        });
-
-    evt_loop.run(work).unwrap();
-}
-
-struct Process {
-    body: h2::RecvStream,
-    trailers: bool,
-}
-
-impl Future for Process {
+impl Future for CarrierConnection {
     type Item = ();
-    type Error = h2::Error;
+    type Error = Error;
 
-    fn poll(&mut self) -> Poll<(), h2::Error> {
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            if self.trailers {
-                let trailers = try_ready!(self.body.poll_trailers());
-
-                println!("GOT TRAILERS: {:?}", trailers);
-
-                return Ok(().into());
-            } else {
-                match try_ready!(self.body.poll()) {
-                    Some(chunk) => {
-                        println!("GOT CHUNK = {:?}", String::from_utf8(chunk.to_vec()));
-                    }
-                    None => {
-                        self.trailers = true;
-                    }
+            match self.context.poll() {
+                Ok(NotReady) => break,
+                Err(e) => {
+                    println!("{:?}", e);
+                    break;
                 }
+                _ => {}
             }
         }
-    }
-}
-
-fn do_http2(con: hole_punch::PureConnection, mut evt_loop: Core) {
-    println!("DOING HTTP2");
-
-    let handle = evt_loop.handle();
-
-    let work = h2::client::handshake(con).into_future().then(|res| {
-        let (mut client, h2) = res.unwrap();
-
-        println!("sending request");
-
-        let request = http::Request::builder()
-            .uri("https://http2.akamai.com/")
-            .body(())
-            .unwrap();
-
-        let mut trailers = http::HeaderMap::new();
-        trailers.insert("zomg", "hello".parse().unwrap());
-
-        let (response, mut stream) = client.send_request(request, false).unwrap();
-
-        // send trailers
-        stream.send_trailers(trailers).unwrap();
-
-        // Spawn a task to run the conn...
-        handle.spawn(h2.map_err(|e| println!("GOT ERR1={:?}", e)));
-
-        println!("{:?}", response);
-
-        response
-            .and_then(|response| {
-                println!("GOT RESPONSE: {:?}", response);
-
-                // Get the body
-                let (_, body) = response.into_parts();
-
-                Process {
-                    body,
-                    trailers: false,
+        loop {
+            let msg = match try_ready!(self.stream.poll()) {
+                Some(msg) => msg,
+                None => {
+                    println!("stream closed!");
+                    return Ok(Ready(()));
                 }
-            })
-            .map_err(|e| {
-                println!("GOT ERR={:?}", e);
-            })
-    });
+            };
 
-    evt_loop.run(work).unwrap();
+            match msg {
+                CarrierProtocol::Registered => {
+                    println!("REGISTERED");
+                    println!("Requesting connection to: {}", self.request_name);
+
+                    let connection_id = self.context.generate_connection_id();
+                    
+                    self.handle.spawn(
+                        self.context
+                            .create_connection_to_peer(
+                                connection_id,
+                                &mut self.stream,
+                                CarrierProtocol::RequestDevice {
+                                    name: self.request_name.clone(),
+                                    connection_id,
+                                },
+                            )
+                            .unwrap()
+                            .and_then(|_| {
+                                println!("CREATED CONNECTION!!!");
+                                Ok(())
+                            })
+                            .map_err(|e| println!("{:?}", e)),
+                    );
+                }
+                CarrierProtocol::DeviceNotFound => {
+                    bail!("device not found");
+                }
+                _ => {}
+            };
+        }
+    }
 }
 
 fn main() {
     env_logger::init();
-    let h2 = env::args().any(|a| a == "h2");
+    let manifest_dir = env!("CARGO_MANIFEST_DIR");
+
     // let server_addr = ([176, 9, 73, 99], 22222).into();
-    let server_addr = ([127, 0, 0, 1], 22222).into();
+    let server_addr: SocketAddr = ([127, 0, 0, 1], 22222).into();
+
     let mut evt_loop = Core::new().unwrap();
 
-    let new_service = NewCarrierService {};
+    let config = config::Config {
+        udp_listen_address: ([0, 0, 0, 0], 0).into(),
+        cert_file: PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
+        key_file: PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
+    };
 
-    let mut client = Client::new(evt_loop.handle(), new_service, true).expect("client");
-    let addr: SocketAddr = server_addr;
-    client.connect_to(&addr).expect("connect");
+    let mut context = context::Context::new(evt_loop.handle(), config).unwrap();
+    let server_con = context.create_connection_to_server(&server_addr);
 
-    let con = evt_loop
-        .run(client.into_future().map_err(|_| ()))
-        .unwrap()
-        .0
+    let handle = evt_loop.handle();
+
+    evt_loop
+        .run(server_con.and_then(|(con, stream)| {
+            let mut con = CarrierConnection {
+                con,
+                stream,
+                handle,
+                context,
+                name: "dev".to_owned(),
+                request_name: "nice".to_owned(),
+            };
+            con.register();
+
+            con
+        }))
         .unwrap();
-
-    if h2 {
-        do_http2(con, evt_loop);
-    } else {
-        do_http(con, evt_loop);
-    }
 }
