@@ -3,7 +3,7 @@ use strategies::{self, AddressInformation, NewConnection, NewStream};
 use config::Config;
 use incoming;
 use protocol::Protocol;
-use connect::{ConnectToPeerCoordinator, ConnectToPeerHandle, ConnectWithStrategies};
+use connect::{self, ConnectToPeerCoordinator, ConnectToPeerHandle, ConnectWithStrategies};
 
 use std::time::Duration;
 use std::net::SocketAddr;
@@ -22,7 +22,7 @@ use tokio_serde_json::{ReadJson, WriteJson};
 
 use serde::{Deserialize, Serialize};
 
-use either::Either;
+use either::{self, Either};
 
 use pnet_datalink::interfaces;
 
@@ -42,6 +42,11 @@ where
         HashMap<ConnectionId, oneshot::Sender<Either<(Connection<P>, Stream<P>), Stream<P>>>>,
     handle: Handle,
     new_connection_handles: Vec<NewConnectionHandle>,
+    device_to_device_callback: (
+        mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
+        mpsc::UnboundedReceiver<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
+    ),
+    outgoing_device_con: FuturesUnordered<connect::DeviceToDeviceConnectionFuture<P>>,
 }
 
 impl<P> Context<P>
@@ -52,9 +57,17 @@ where
         let strats = strategies::init(handle.clone(), &config)
             .chain_err(|| "error initializing the strategies")?;
 
+        let device_to_device_callback = mpsc::unbounded();
+
         let new_connection_handles = strats
             .iter()
-            .map(|s| NewConnectionHandle::new(s.get_new_connection_handle(), &handle))
+            .map(|s| {
+                NewConnectionHandle::new(
+                    s.get_new_connection_handle(),
+                    device_to_device_callback.0.clone(),
+                    &handle,
+                )
+            })
             .collect();
 
         Ok(Context {
@@ -63,6 +76,8 @@ where
             handle,
             new_connection_handles,
             requested_connections: HashMap::new(),
+            device_to_device_callback,
+            outgoing_device_con: FuturesUnordered::new(),
         })
     }
 
@@ -75,10 +90,7 @@ where
                     self.incoming.push(incoming::Handler::new(
                         Connection::new(
                             con,
-                            NewConnectionHandle::new(
-                                strat.get_new_connection_handle(),
-                                &self.handle,
-                            ),
+                            self.device_to_device_callback.0.clone(),
                             &self.handle,
                         ),
                         Duration::from_secs(1),
@@ -92,6 +104,52 @@ where
                 Ok(Ready(None)) => {
                     panic!("strategies empty");
                 }
+            }
+        }
+    }
+
+    fn poll_device_to_device_callback(&mut self) {
+        loop {
+            match self.device_to_device_callback.1.poll() {
+                Ok(Ready(Some((addresses, connection_id, new_stream_handle)))) => {
+                    self.outgoing_device_con
+                        .push(connect::DeviceToDeviceConnection::start(
+                            self.new_connection_handles.get(0).unwrap().clone(),
+                            addresses,
+                            new_stream_handle,
+                            connection_id,
+                            self.requested_connections.contains_key(&connection_id),
+                            self.handle.clone(),
+                        ));
+                }
+                _ => {
+                    break;
+                }
+            }
+        }
+    }
+
+    fn poll_outgoing_device_connections(
+        &mut self,
+    ) -> Poll<Option<(Connection<P>, Stream<P>)>, Error> {
+        loop {
+            let (res, id) = match try_ready!(self.outgoing_device_con.poll()) {
+                Some(res) => res,
+                None => return Ok(NotReady),
+            };
+
+            match self.requested_connections.remove(&id) {
+                Some(cb) => {
+                    cb.send(res);
+                }
+                None => match res {
+                    either::Left((con, stream)) => {
+                        return Ok(Ready(Some((con, stream))));
+                    }
+                    either::Right(stream) => {
+                        unimplemented!();
+                    }
+                },
             }
         }
     }
@@ -149,6 +207,18 @@ where
     }
 }
 
+impl<P> Future for NewPeerConnection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    type Item = Either<(Connection<P>, Stream<P>), Stream<P>>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.recv.poll().map_err(|e| e.into())
+    }
+}
+
 impl<P> FStream for Context<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
@@ -158,6 +228,12 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.poll_strategies()?;
+        self.poll_device_to_device_callback();
+
+        match self.poll_outgoing_device_connections() {
+            Ok(Ready(Some(res))) => return Ok(Ready(Some(res))),
+            _ => {}
+        };
 
         loop {
             match try_ready!(self.incoming.poll()) {
@@ -176,13 +252,19 @@ where
 #[derive(Clone)]
 pub struct NewConnectionHandle {
     new_con: strategies::NewConnectionHandle,
+    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
     handle: Handle,
 }
 
 impl NewConnectionHandle {
-    fn new(new_con: strategies::NewConnectionHandle, handle: &Handle) -> NewConnectionHandle {
+    fn new(
+        new_con: strategies::NewConnectionHandle,
+        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
+        handle: &Handle,
+    ) -> NewConnectionHandle {
         NewConnectionHandle {
             new_con,
+            connect_callback,
             handle: handle.clone(),
         }
     }
@@ -190,7 +272,7 @@ impl NewConnectionHandle {
     pub fn new_connection<P>(&mut self, addr: SocketAddr) -> NewConnectionFuture<P> {
         NewConnectionFuture::new(
             self.new_con.new_connection(addr),
-            self.clone(),
+            self.connect_callback.clone(),
             &self.handle,
         )
     }
@@ -198,7 +280,7 @@ impl NewConnectionHandle {
 
 pub struct NewConnectionFuture<P> {
     new_con_recv: strategies::NewConnectionFuture,
-    new_con_handle: NewConnectionHandle,
+    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
     _marker: PhantomData<P>,
     handle: Handle,
 }
@@ -206,12 +288,12 @@ pub struct NewConnectionFuture<P> {
 impl<P> NewConnectionFuture<P> {
     fn new(
         new_con_recv: strategies::NewConnectionFuture,
-        new_con_handle: NewConnectionHandle,
+        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
         handle: &Handle,
     ) -> NewConnectionFuture<P> {
         NewConnectionFuture {
             new_con_recv,
-            new_con_handle,
+            connect_callback,
             _marker: Default::default(),
             handle: handle.clone(),
         }
@@ -228,7 +310,7 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.new_con_recv
             .poll()
-            .map(|r| r.map(|v| Connection::new(v, self.new_con_handle.clone(), &self.handle)))
+            .map(|r| r.map(|v| Connection::new(v, self.connect_callback.clone(), &self.handle)))
     }
 }
 
@@ -247,7 +329,7 @@ where
     con: strategies::Connection,
     state: ConnectionState,
     handle: Handle,
-    new_con_handle: NewConnectionHandle,
+    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
     _marker: PhantomData<P>,
 }
 
@@ -257,7 +339,7 @@ where
 {
     fn new(
         con: strategies::Connection,
-        new_con_handle: NewConnectionHandle,
+        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
         handle: &Handle,
     ) -> Connection<P> {
         let (send, auth_recv) = oneshot::channel();
@@ -270,7 +352,7 @@ where
             },
             handle: handle.clone(),
             _marker: Default::default(),
-            new_con_handle,
+            connect_callback,
         }
     }
 
@@ -278,7 +360,7 @@ where
         NewStreamFuture::new(
             self.con.new_stream(),
             self.get_new_stream_handle(),
-            self.new_con_handle.clone(),
+            self.connect_callback.clone(),
             &self.handle,
         )
     }
@@ -286,7 +368,7 @@ where
     fn get_new_stream_handle(&self) -> NewStreamHandle {
         NewStreamHandle::new(
             self.con.get_new_stream_handle(),
-            self.new_con_handle.clone(),
+            self.connect_callback.clone(),
             &self.handle,
         )
     }
@@ -311,7 +393,7 @@ where
                                     None,
                                     &self.handle,
                                     self.get_new_stream_handle(),
-                                    self.new_con_handle.clone(),
+                                    self.connect_callback.clone(),
                                 )
                             })
                         })
@@ -348,10 +430,10 @@ where
                                     &self.handle,
                                     NewStreamHandle::new(
                                         self.con.get_new_stream_handle(),
-                                        self.new_con_handle.clone(),
+                                        self.connect_callback.clone(),
                                         &self.handle,
                                     ),
-                                    self.new_con_handle.clone(),
+                                    self.connect_callback.clone(),
                                 ))));
                             }
                         }
@@ -369,19 +451,19 @@ where
 #[derive(Clone)]
 pub struct NewStreamHandle {
     new_stream_handle: strategies::NewStreamHandle,
-    new_con_handle: NewConnectionHandle,
+    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
     handle: Handle,
 }
 
 impl NewStreamHandle {
     fn new(
         new_stream_handle: strategies::NewStreamHandle,
-        new_con_handle: NewConnectionHandle,
+        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
         handle: &Handle,
     ) -> NewStreamHandle {
         NewStreamHandle {
             new_stream_handle,
-            new_con_handle,
+            connect_callback,
             handle: handle.clone(),
         }
     }
@@ -390,7 +472,7 @@ impl NewStreamHandle {
         NewStreamFuture::new(
             self.new_stream_handle.new_stream(),
             self.clone(),
-            self.new_con_handle.clone(),
+            self.connect_callback.clone(),
             &self.handle,
         )
     }
@@ -399,7 +481,7 @@ impl NewStreamHandle {
 pub struct NewStreamFuture<P> {
     new_stream: strategies::NewStreamFuture,
     new_stream_handle: NewStreamHandle,
-    new_con_handle: NewConnectionHandle,
+    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
     handle: Handle,
     _marker: PhantomData<P>,
 }
@@ -408,13 +490,13 @@ impl<P> NewStreamFuture<P> {
     fn new(
         new_stream: strategies::NewStreamFuture,
         new_stream_handle: NewStreamHandle,
-        new_con_handle: NewConnectionHandle,
+        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
         handle: &Handle,
     ) -> NewStreamFuture<P> {
         NewStreamFuture {
             new_stream,
             new_stream_handle,
-            new_con_handle,
+            connect_callback,
             handle: handle.clone(),
             _marker: Default::default(),
         }
@@ -436,7 +518,7 @@ where
                     None,
                     &self.handle,
                     self.new_stream_handle.clone(),
-                    self.new_con_handle.clone(),
+                    self.connect_callback.clone(),
                 )
             })
         })
@@ -462,7 +544,7 @@ where
     incoming_con_requests: HashSet<ConnectionId>,
     handle: Handle,
     new_stream_handle: NewStreamHandle,
-    new_connection_handle: NewConnectionHandle,
+    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
 }
 
 impl<P> Stream<P>
@@ -474,7 +556,7 @@ where
         auth_con: Option<oneshot::Sender<bool>>,
         handle: &Handle,
         new_stream_handle: NewStreamHandle,
-        new_connection_handle: NewConnectionHandle,
+        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
     ) -> Stream<P> {
         let state = match auth_con {
             Some(auth) => StreamState::UnAuthenticated(auth),
@@ -491,7 +573,7 @@ where
             incoming_con_requests: HashSet::new(),
             handle: handle.clone(),
             new_stream_handle,
-            new_connection_handle,
+            connect_callback,
         }
     }
 
@@ -538,7 +620,13 @@ where
                         handler.send_address_information(addresses);
                     }
                 }
-                Protocol::Connect(addresses, _, connection_id) => {}
+                Protocol::Connect(addresses, _, connection_id) => {
+                    self.connect_callback.unbounded_send((
+                        addresses,
+                        connection_id,
+                        self.new_stream_handle.clone(),
+                    ));
+                }
                 _ => {}
             };
         }

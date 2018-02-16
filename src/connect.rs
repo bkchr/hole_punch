@@ -409,9 +409,10 @@ where
     RelayConnection {
         relay: RelayDeviceToDeviceConnectionFuture<P>,
         timeout: Timeout,
+        connection_id: ConnectionId,
     },
     #[state_machine_future(ready)]
-    ConnectionEstablished(Either<(Connection<P>, Stream<P>), Stream<P>>),
+    ConnectionEstablished((Either<(Connection<P>, Stream<P>), Stream<P>>, ConnectionId)),
     #[state_machine_future(error)]
     ErrorState(Error),
 }
@@ -465,6 +466,7 @@ where
                         try.connection_id,
                     ),
                     timeout,
+                    connection_id: try.connection_id,
                 })
             } else {
                 // The controller will create a relay connection via the server
@@ -473,7 +475,10 @@ where
         } else {
             let res = try_ready!(res);
 
-            transition!(ConnectionEstablished(either::Left(res)))
+            transition!(ConnectionEstablished((
+                either::Left(res),
+                try.connection_id
+            )))
         }
     }
 
@@ -487,7 +492,10 @@ where
 
         let stream = try_ready!(relay.relay.poll());
 
-        transition!(ConnectionEstablished(either::Right(stream)))
+        transition!(ConnectionEstablished((
+            either::Right(stream),
+            relay.connection_id
+        )))
     }
 }
 
