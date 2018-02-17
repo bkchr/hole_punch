@@ -299,12 +299,10 @@ where
         }
 
         loop {
-            println!("POLL");
             let res = self.wait_for_stream.poll()?;
 
             match res {
                 Ready(Some((con, mut stream))) => {
-                    println!("CONNECTION");
                     if self.is_master {
                         stream
                             .direct_send(Protocol::PeerToPeerConnection(self.connection_id))
@@ -428,7 +426,7 @@ where
     ) -> Poll<AfterInitState<P>, Error> {
         let init = init.take();
 
-        let timeout = Timeout::new(Duration::from_secs(20), &init.handle);
+        let timeout = Timeout::new(Duration::from_secs(if init.is_master { 20 } else { 1 }), &init.handle);
         let connection_id = init.connection_id;
         let is_master = init.is_master;
         let new_stream_handle = init.new_stream_handle;

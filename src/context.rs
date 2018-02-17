@@ -372,6 +372,10 @@ where
             &self.handle,
         )
     }
+
+    pub(crate) fn peer_addr(&self) -> SocketAddr {
+        self.con.peer_addr()
+    }
 }
 
 impl<P> FStream for Connection<P>

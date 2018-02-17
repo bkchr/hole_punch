@@ -73,6 +73,16 @@ impl Connection {
     }
 }
 
+impl AddressInformation for Connection {
+    fn peer_addr(&self) -> SocketAddr {
+        self.inner.peer_addr()
+    }
+
+    fn local_addr(&self) -> SocketAddr {
+        self.inner.local_addr()
+    }
+}
+
 impl NewStream for Connection {
     fn new_stream(&mut self) -> NewStreamFuture {
         self.inner.new_stream()
