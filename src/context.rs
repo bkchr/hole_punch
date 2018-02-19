@@ -619,8 +619,9 @@ where
 
                     self.direct_send(Protocol::PrivateAdressInformation(connection_id, addresses));
                 }
-                Protocol::PrivateAdressInformation(connection_id, addresses) => {
+                Protocol::PrivateAdressInformation(connection_id, mut addresses) => {
                     println!("ADDRESSES: {:?}", addresses);
+                    addresses.push(self.stream.get_ref().get_ref().peer_addr());
                     if let Some(handler) = self.con_requests.remove(&connection_id) {
                         handler.send_address_information(addresses);
                     }
