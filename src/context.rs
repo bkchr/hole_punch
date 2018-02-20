@@ -22,8 +22,6 @@ use tokio_serde_json::{ReadJson, WriteJson};
 
 use serde::{Deserialize, Serialize};
 
-use either::{self, Either};
-
 use pnet_datalink::interfaces;
 
 use rand::{self, Rng};
@@ -38,8 +36,7 @@ where
 {
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
     incoming: FuturesUnordered<incoming::HandlerFuture<P>>,
-    requested_connections:
-        HashMap<ConnectionId, oneshot::Sender<Either<(Connection<P>, Stream<P>), Stream<P>>>>,
+    requested_connections: HashMap<ConnectionId, oneshot::Sender<Stream<P>>>,
     handle: Handle,
     new_connection_handles: Vec<NewConnectionHandle>,
     device_to_device_callback: (
@@ -47,6 +44,11 @@ where
         mpsc::UnboundedReceiver<(Vec<SocketAddr>, ConnectionId, NewStreamHandle)>,
     ),
     outgoing_device_con: FuturesUnordered<connect::DeviceToDeviceConnectionFuture<P>>,
+    connections: FuturesUnordered<StreamFuture<Connection<P>>>,
+    new_connection: (
+        mpsc::UnboundedSender<Connection<P>>,
+        mpsc::UnboundedReceiver<Connection<P>>,
+    ),
 }
 
 impl<P> Context<P>
@@ -78,6 +80,8 @@ where
             requested_connections: HashMap::new(),
             device_to_device_callback,
             outgoing_device_con: FuturesUnordered::new(),
+            connections: FuturesUnordered::new(),
+            new_connection: mpsc::unbounded(),
         })
     }
 
@@ -129,27 +133,35 @@ where
         }
     }
 
-    fn poll_outgoing_device_connections(
-        &mut self,
-    ) -> Poll<Option<(Connection<P>, Stream<P>)>, Error> {
+    fn poll_outgoing_device_connections(&mut self) -> Poll<Option<Stream<P>>, Error> {
         loop {
-            let (res, id) = match try_ready!(self.outgoing_device_con.poll()) {
+            let (con, stream, id) = match try_ready!(self.outgoing_device_con.poll()) {
                 Some(res) => res,
                 None => return Ok(NotReady),
             };
 
+            if let Some(con) = con {
+                self.connections.push(con.into_future());
+            }
+
             match self.requested_connections.remove(&id) {
                 Some(cb) => {
-                    cb.send(res);
+                    cb.send(stream);
                 }
-                None => match res {
-                    either::Left((con, stream)) => {
-                        return Ok(Ready(Some((con, stream))));
-                    }
-                    either::Right(stream) => {
-                        unimplemented!();
-                    }
-                },
+                None => return Ok(Ready(Some(stream))),
+            }
+        }
+    }
+
+    fn poll_new_connection(&mut self) {
+        loop {
+            match self.new_connection.1.poll() {
+                Ok(Ready(Some(con))) => {
+                    self.connections.push(con.into_future());
+                }
+                _ => {
+                    return;
+                }
             }
         }
     }
@@ -184,8 +196,50 @@ where
         Ok(NewPeerConnection::new(receiver))
     }
 
-    pub fn create_connection_to_server(&mut self, addr: &SocketAddr) -> ConnectWithStrategies<P> {
-        ConnectWithStrategies::new(self.new_connection_handles.clone(), &self.handle, *addr)
+    pub fn create_connection_to_server(&mut self, addr: &SocketAddr) -> NewConnectionToServer<P> {
+        NewConnectionToServer::new(
+            ConnectWithStrategies::new(self.new_connection_handles.clone(), &self.handle, *addr),
+            self.new_connection.0.clone(),
+        )
+    }
+}
+
+pub struct NewConnectionToServer<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    connect: ConnectWithStrategies<P>,
+    new_con_send: mpsc::UnboundedSender<Connection<P>>,
+}
+
+impl<P> NewConnectionToServer<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    fn new(
+        connect: ConnectWithStrategies<P>,
+        new_con_send: mpsc::UnboundedSender<Connection<P>>,
+    ) -> NewConnectionToServer<P> {
+        NewConnectionToServer {
+            connect,
+            new_con_send,
+        }
+    }
+}
+
+impl<P> Future for NewConnectionToServer<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    type Item = Stream<P>;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let (con, stream) = try_ready!(self.connect.poll());
+
+        let _ = self.new_con_send.unbounded_send(con);
+
+        Ok(Ready(stream))
     }
 }
 
@@ -193,16 +247,14 @@ pub struct NewPeerConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    recv: oneshot::Receiver<Either<(Connection<P>, Stream<P>), Stream<P>>>,
+    recv: oneshot::Receiver<Stream<P>>,
 }
 
 impl<P> NewPeerConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    fn new(
-        recv: oneshot::Receiver<Either<(Connection<P>, Stream<P>), Stream<P>>>,
-    ) -> NewPeerConnection<P> {
+    fn new(recv: oneshot::Receiver<Stream<P>>) -> NewPeerConnection<P> {
         NewPeerConnection { recv }
     }
 }
@@ -211,7 +263,7 @@ impl<P> Future for NewPeerConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = Either<(Connection<P>, Stream<P>), Stream<P>>;
+    type Item = Stream<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -223,21 +275,36 @@ impl<P> FStream for Context<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = (Connection<P>, Stream<P>);
+    type Item = Stream<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.poll_strategies()?;
         self.poll_device_to_device_callback();
+        self.poll_new_connection();
 
         match self.poll_outgoing_device_connections() {
             Ok(Ready(Some(res))) => return Ok(Ready(Some(res))),
             _ => {}
         };
 
+        match self.connections.poll() {
+            Ok(Ready(Some((stream, con)))) => match stream {
+                Some(stream) => {
+                    self.connections.push(con.into_future());
+                    return Ok(Ready(Some(stream)));
+                }
+                _ => {}
+            },
+            _ => {}
+        };
+
         loop {
             match try_ready!(self.incoming.poll()) {
-                Some(Some((con, stream, _))) => return Ok(Ready(Some((con, stream)))),
+                Some(Some((con, stream, _))) => {
+                    self.connections.push(con.into_future());
+                    return Ok(Ready(Some(stream)));
+                }
                 // If the incoming handler returns `None`, then the incoming connection
                 // does not need to be propagated.
                 Some(None) => {}
@@ -613,7 +680,7 @@ where
                         .concat()
                         .iter()
                         .map(|v| v.ip())
-                        .filter(|ip| !ip.is_loopback())
+                        // .filter(|ip| !ip.is_loopback())
                         .map(|ip| (ip, self.stream.get_ref().get_ref().local_addr().port()).into())
                         .collect_vec();
 

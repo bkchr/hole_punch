@@ -43,7 +43,6 @@ enum CarrierProtocol {
 }
 
 struct CarrierConnection {
-    con: context::Connection<CarrierProtocol>,
     stream: context::Stream<CarrierProtocol>,
     context: context::Context<CarrierProtocol>,
     name: String,
@@ -139,9 +138,8 @@ fn main() {
     let handle = evt_loop.handle();
 
     evt_loop
-        .run(server_con.and_then(|(con, stream)| {
+        .run(server_con.and_then(|stream| {
             let mut con = CarrierConnection {
-                con,
                 stream,
                 handle,
                 context,

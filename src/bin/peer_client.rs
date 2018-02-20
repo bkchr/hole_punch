@@ -75,45 +75,9 @@ impl Future for CarrierConnection {
     }
 }
 
-struct CarrierRc(Rc<RefCell<Carrier>>);
-
-struct Carrier {
-    cons: FuturesUnordered<StreamFuture<context::Connection<CarrierProtocol>>>,
-    handle: Handle,
-    name: String,
-}
-
-impl Future for CarrierRc {
-    type Item = ();
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let stream = match try_ready!(self.0.borrow_mut().cons.poll().map_err(|e| e.0)) {
-                Some((Some(stream), con)) => {
-                    self.0.borrow_mut().cons.push(con.into_future());
-                    stream
-                }
-                // yeah, we should not do that, but we will manually poll, when we add new cons
-                None => return Ok(NotReady),
-                Some((None, _con)) => {
-                    println!("connection closed");
-                    continue;
-                }
-            };
-
-            self.0.borrow().handle.spawn(
-                CarrierConnection {
-                    stream,
-                    name: self.0.borrow().name.clone(),
-                }.map_err(|e| println!("connection error {:?}", e)),
-            );
-        }
-    }
-}
-
 fn main() {
     env_logger::init();
+    let name: String = "nice".into();
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
 
     // let server_addr = ([176, 9, 73, 99], 22222).into();
@@ -121,15 +85,11 @@ fn main() {
 
     let mut evt_loop = Core::new().unwrap();
 
-    let carrier = Rc::new(RefCell::new(Carrier {
-        cons: FuturesUnordered::new(),
-        handle: evt_loop.handle(),
-        name: "nice".to_owned(),
-    }));
-
     let config = config::Config {
         udp_listen_address: ([0, 0, 0, 0], 0).into(),
         cert_file: PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
+        // cert_file: PathBuf::from("cert.pem"),
+        // key_file: PathBuf::from("key.pem"),
         key_file: PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
     };
 
@@ -138,19 +98,17 @@ fn main() {
 
     let handle = evt_loop.handle();
 
-    let carrier2 = carrier.clone();
+    let name2 = name.clone();
     evt_loop.handle().spawn(
         context
-            .for_each(move |(con, stream)| {
+            .for_each(move |stream| {
+                let name = name2.clone();
                 println!("NEW CARRIER");
-                let carrier = carrier2.clone();
-                carrier.borrow_mut().cons.push(con.into_future());
-                CarrierRc(carrier.clone()).poll();
 
                 handle.spawn(
                     CarrierConnection {
                         stream,
-                        name: carrier.borrow().name.clone(),
+                        name: name.clone(),
                     }.map_err(|e| println!("{:?}", e)),
                 );
 
@@ -160,17 +118,10 @@ fn main() {
     );
 
     evt_loop
-        .handle()
-        .spawn(CarrierRc(carrier.clone()).map_err(|e| println!("{:?}", e)));
-
-    evt_loop
-        .run(server_con.and_then(|(con, stream)| {
-            carrier.borrow_mut().cons.push(con.into_future());
-            CarrierRc(carrier.clone()).poll();
-
+        .run(server_con.and_then(|stream| {
             let mut stream = CarrierConnection {
                 stream,
-                name: carrier.borrow().name.clone(),
+                name: name.clone(),
             };
 
             stream.register();

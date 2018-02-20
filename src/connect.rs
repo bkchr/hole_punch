@@ -19,8 +19,6 @@ use serde::{Deserialize, Serialize};
 
 use state_machine_future::RentToOwn;
 
-use either::{self, Either};
-
 #[derive(StateMachineFuture)]
 pub enum ConnectStateMachine<P>
 where
@@ -412,7 +410,7 @@ where
         connection_id: ConnectionId,
     },
     #[state_machine_future(ready)]
-    ConnectionEstablished((Either<(Connection<P>, Stream<P>), Stream<P>>, ConnectionId)),
+    ConnectionEstablished((Option<Connection<P>>, Stream<P>, ConnectionId)),
     #[state_machine_future(error)]
     ErrorState(Error),
 }
@@ -426,7 +424,10 @@ where
     ) -> Poll<AfterInitState<P>, Error> {
         let init = init.take();
 
-        let timeout = Timeout::new(Duration::from_secs(if init.is_master { 20 } else { 1 }), &init.handle);
+        let timeout = Timeout::new(
+            Duration::from_secs(if init.is_master { 20 } else { 1 }),
+            &init.handle,
+        );
         let connection_id = init.connection_id;
         let is_master = init.is_master;
         let new_stream_handle = init.new_stream_handle;
@@ -473,10 +474,11 @@ where
                 bail!("direct device to device connection timeout")
             }
         } else {
-            let res = try_ready!(res);
+            let (con, stream) = try_ready!(res);
 
             transition!(ConnectionEstablished((
-                either::Left(res),
+                Some(con),
+                stream,
                 try.connection_id
             )))
         }
@@ -492,10 +494,7 @@ where
 
         let stream = try_ready!(relay.relay.poll());
 
-        transition!(ConnectionEstablished((
-            either::Right(stream),
-            relay.connection_id
-        )))
+        transition!(ConnectionEstablished((None, stream, relay.connection_id)))
     }
 }
 

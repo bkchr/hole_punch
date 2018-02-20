@@ -37,7 +37,6 @@ struct Carrier {
 }
 
 struct CarrierConnection {
-    con: context::Connection<CarrierProtocol>,
     stream: Rc<RefCell<context::Stream<CarrierProtocol>>>,
     name: Option<String>,
     carrier: Rc<RefCell<Carrier>>,
@@ -114,10 +113,9 @@ fn main() {
     let server = context::Context::new(evt_loop.handle(), config).unwrap();
 
     let handle = evt_loop.handle();
-    let server = server.for_each(|(con, stream)| {
+    let server = server.for_each(|stream| {
         handle.spawn(
             CarrierConnection {
-                con,
                 stream: Rc::new(RefCell::new(stream)),
                 name: None,
                 carrier: carrier.clone(),
