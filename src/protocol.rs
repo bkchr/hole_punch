@@ -7,17 +7,18 @@ pub enum Protocol<P> {
     /// Represents an incoming poke connection that can be ignored.
     PokeConnection,
     PeerToPeerConnection(u64),
+    RelayConnection(u64),
     ConnectionEstablished,
 
     Connect(Vec<SocketAddr>, u32, u64),
     Embedded(P),
-    RequestPeerConnection(u64, P),
+    RequestPeerConnection(u64, P, Vec<SocketAddr>),
+    RequestRelayPeerConnection(u64),
 
-    RequestPrivateAdressInformation(u64),
-    PrivateAdressInformation(u64, Vec<SocketAddr>),
+    RequestPrivateAdressInformation,
+    PrivateAdressInformation(Vec<SocketAddr>),
 
     ReUseConnection,
     AckReUseConnection,
-    RelayConnection(u64),
     RelayModeActivated,
 }

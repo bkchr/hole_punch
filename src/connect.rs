@@ -10,10 +10,10 @@ use std::mem::discriminant;
 
 use tokio_core::reactor::Handle;
 
-use futures::{Future, Join, Poll, Stream as FStream};
+use futures::{Future, Poll, Stream as FStream};
 use futures::Async::{NotReady, Ready};
 use futures::stream::{futures_unordered, FuturesUnordered};
-use futures::sync::{mpsc, oneshot};
+use futures::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ where
 {
     #[state_machine_future(start, transitions(WaitForConnection))]
     InitConnect {
-        strat: NewConnectionHandle,
+        strat: NewConnectionHandle<P>,
         addr: SocketAddr,
         handle: Handle,
     },
@@ -57,7 +57,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     fn poll_init_connect<'a>(
-        init: &'a mut RentToOwn<'a, InitConnect>,
+        init: &'a mut RentToOwn<'a, InitConnect<P>>,
     ) -> Poll<AfterInitConnect<P>, Error> {
         let mut init = init.take();
 
@@ -113,7 +113,7 @@ pub struct ConnectWithStrategies<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    strategies: Vec<NewConnectionHandle>,
+    strategies: Vec<NewConnectionHandle<P>>,
     connect: ConnectStateMachineFuture<P>,
     addr: SocketAddr,
     handle: Handle,
@@ -124,7 +124,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub(crate) fn new(
-        mut strategies: Vec<NewConnectionHandle>,
+        mut strategies: Vec<NewConnectionHandle<P>>,
         handle: &Handle,
         addr: SocketAddr,
     ) -> ConnectWithStrategies<P> {
@@ -262,7 +262,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(
-        mut strat: NewConnectionHandle,
+        mut strat: NewConnectionHandle<P>,
         addresses: &[SocketAddr],
         handle: &Handle,
         is_master: bool,
@@ -287,6 +287,7 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        bail!("test");
         loop {
             let con = self.wait_for_con.poll()?;
 
@@ -339,78 +340,31 @@ where
 }
 
 #[derive(StateMachineFuture)]
-pub enum RelayDeviceToDeviceConnection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    #[state_machine_future(start, transitions(WaitForRelayMode))]
-    WaitForStream {
-        wait: NewStreamFuture<P>,
-        other_device_id: u64,
-    },
-    #[state_machine_future(transitions(RelayModeActivated))]
-    WaitForRelayMode { wait: WaitForMessage<P> },
-    #[state_machine_future(ready)]
-    RelayModeActivated(Stream<P>),
-    #[state_machine_future(error)]
-    RelayModeError(Error),
-}
-
-impl<P> PollRelayDeviceToDeviceConnection<P> for RelayDeviceToDeviceConnection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn poll_wait_for_stream<'a>(
-        wait: &'a mut RentToOwn<'a, WaitForStream<P>>,
-    ) -> Poll<AfterWaitForStream<P>, Error> {
-        let mut stream = try_ready!(wait.wait.poll());
-
-        stream.direct_send(Protocol::RelayConnection(wait.other_device_id));
-
-        let wait = WaitForMessage::new(None, stream, Protocol::RelayModeActivated);
-
-        transition!(WaitForRelayMode { wait })
-    }
-
-    fn poll_wait_for_relay_mode<'a>(
-        wait: &'a mut RentToOwn<'a, WaitForRelayMode<P>>,
-    ) -> Poll<AfterWaitForRelayMode<P>, Error> {
-        let (_, stream) = try_ready!(wait.wait.poll());
-
-        transition!(RelayModeActivated(stream))
-    }
-}
-
-#[derive(StateMachineFuture)]
 pub enum DeviceToDeviceConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     #[state_machine_future(start, transitions(TryDirectConnection))]
     InitState {
-        new_connection_handle: NewConnectionHandle,
+        new_connection_handle: NewConnectionHandle<P>,
         addresses: Vec<SocketAddr>,
-        new_stream_handle: NewStreamHandle,
+        new_stream_handle: NewStreamHandle<P>,
         connection_id: ConnectionId,
         is_master: bool,
         handle: Handle,
+        remote_send: mpsc::UnboundedSender<Protocol<P>>,
     },
-    #[state_machine_future(transitions(ConnectionEstablished, RelayConnection))]
+    #[state_machine_future(transitions(ConnectionEstablished))]
     TryDirectConnection {
         connect: DirectDeviceToDeviceConnection<P>,
         timeout: Timeout,
-        new_stream_handle: NewStreamHandle,
+        new_stream_handle: NewStreamHandle<P>,
         connection_id: ConnectionId,
         is_master: bool,
-    },
-    #[state_machine_future(transitions(ConnectionEstablished))]
-    RelayConnection {
-        relay: RelayDeviceToDeviceConnectionFuture<P>,
-        timeout: Timeout,
-        connection_id: ConnectionId,
+        remote_send: mpsc::UnboundedSender<Protocol<P>>,
     },
     #[state_machine_future(ready)]
-    ConnectionEstablished((Option<Connection<P>>, Stream<P>, ConnectionId)),
+    ConnectionEstablished((Option<Connection<P>>, Option<Stream<P>>, ConnectionId)),
     #[state_machine_future(error)]
     ErrorState(Error),
 }
@@ -420,7 +374,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     fn poll_init_state<'a>(
-        init: &'a mut RentToOwn<'a, InitState>,
+        init: &'a mut RentToOwn<'a, InitState<P>>,
     ) -> Poll<AfterInitState<P>, Error> {
         let init = init.take();
 
@@ -445,6 +399,7 @@ where
             new_stream_handle,
             connection_id,
             is_master,
+            remote_send: init.remote_send,
         })
     }
 
@@ -456,19 +411,11 @@ where
 
         if timeout.is_err() || res.is_err() {
             if try.is_master {
-                unimplemented!();
-                let mut try = try.take();
+                let try = try.take();
+                try.remote_send
+                    .unbounded_send(Protocol::RequestRelayPeerConnection(try.connection_id));
 
-                let timeout = try.timeout.new_reset();
-
-                transition!(RelayConnection {
-                    relay: RelayDeviceToDeviceConnection::start(
-                        try.new_stream_handle.new_stream(),
-                        try.connection_id,
-                    ),
-                    timeout,
-                    connection_id: try.connection_id,
-                })
+                transition!(ConnectionEstablished((None, None, try.connection_id)))
             } else {
                 // The controller will create a relay connection via the server
                 bail!("direct device to device connection timeout")
@@ -478,102 +425,9 @@ where
 
             transition!(ConnectionEstablished((
                 Some(con),
-                stream,
+                Some(stream),
                 try.connection_id
             )))
         }
-    }
-
-    fn poll_relay_connection<'a>(
-        relay: &'a mut RentToOwn<'a, RelayConnection<P>>,
-    ) -> Poll<AfterRelayConnection<P>, Error> {
-        relay
-            .timeout
-            .poll()
-            .map_err(|_| "relay connection timeout")?;
-
-        let stream = try_ready!(relay.relay.poll());
-
-        transition!(ConnectionEstablished((None, stream, relay.connection_id)))
-    }
-}
-
-pub struct ConnectToPeerCoordinator<P> {
-    connection_id: ConnectionId,
-    recv: Join<oneshot::Receiver<Vec<SocketAddr>>, oneshot::Receiver<Vec<SocketAddr>>>,
-    master: mpsc::UnboundedSender<Protocol<P>>,
-    slave: mpsc::UnboundedSender<Protocol<P>>,
-}
-
-impl<P> ConnectToPeerCoordinator<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    pub fn spawn(
-        handle: &Handle,
-        connection_id: ConnectionId,
-        master: mpsc::UnboundedSender<Protocol<P>>,
-        slave: mpsc::UnboundedSender<Protocol<P>>,
-    ) -> (ConnectToPeerHandle, ConnectToPeerHandle) {
-        let (master_send, master_recv) = oneshot::channel();
-        let (slave_send, slave_recv) = oneshot::channel();
-
-        let mut coordinator = ConnectToPeerCoordinator {
-            connection_id,
-            recv: master_recv.join(slave_recv),
-            master,
-            slave,
-        };
-        coordinator.send_address_request();
-        handle.spawn(coordinator.map_err(|e| error!("{:?}", e)));
-
-        (
-            ConnectToPeerHandle {
-                sender: master_send,
-            },
-            ConnectToPeerHandle { sender: slave_send },
-        )
-    }
-
-    fn send_address_request(&mut self) {
-        self.master
-            .unbounded_send(Protocol::RequestPrivateAdressInformation(
-                self.connection_id,
-            ));
-        self.slave
-            .unbounded_send(Protocol::RequestPrivateAdressInformation(
-                self.connection_id,
-            ));
-    }
-}
-
-impl<P> Future for ConnectToPeerCoordinator<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = ();
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (master, slave) = try_ready!(
-            self.recv.poll() //.map_err(|_| "error polling master and slave".into())
-        );
-
-        self.master
-            .unbounded_send(Protocol::Connect(slave, 0, self.connection_id));
-        self.slave
-            .unbounded_send(Protocol::Connect(master, 0, self.connection_id));
-
-        Ok(Ready(()))
-    }
-}
-
-pub struct ConnectToPeerHandle {
-    sender: oneshot::Sender<Vec<SocketAddr>>,
-}
-
-impl ConnectToPeerHandle {
-    pub fn send_address_information(self, info: Vec<SocketAddr>) {
-        self.sender.send(info);
     }
 }
