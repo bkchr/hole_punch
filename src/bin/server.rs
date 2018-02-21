@@ -5,8 +5,7 @@ extern crate hole_punch;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::{config, context};
-use hole_punch::errors::*;
+use hole_punch::{Config, Stream, StreamHandle, Context, Error, ConnectionId};
 
 use tokio_core::reactor::Core;
 
@@ -15,7 +14,7 @@ use std::rc::Rc;
 use std::cell::RefCell;
 use std::path::PathBuf;
 
-use futures::{Future, Poll, Sink, Stream};
+use futures::{Future, Poll, Sink, Stream as FStream};
 use futures::Async::Ready;
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -26,18 +25,18 @@ enum CarrierProtocol {
     Registered,
     RequestDevice {
         name: String,
-        connection_id: context::ConnectionId,
+        connection_id: ConnectionId,
     },
     DeviceNotFound,
     AlreadyConnected,
 }
 
 struct Carrier {
-    devices: HashMap<String, context::StreamHandle<CarrierProtocol>>,
+    devices: HashMap<String, StreamHandle<CarrierProtocol>>,
 }
 
 struct CarrierConnection {
-    stream: context::Stream<CarrierProtocol>,
+    stream: Stream<CarrierProtocol>,
     name: Option<String>,
     carrier: Rc<RefCell<Carrier>>,
 }
@@ -102,13 +101,13 @@ fn main() {
         devices: HashMap::new(),
     }));
 
-    let config = config::Config {
+    let config = Config {
         udp_listen_address: ([0, 0, 0, 0], 22222).into(),
         cert_file: PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
         key_file: PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
     };
 
-    let server = context::Context::new(evt_loop.handle(), config).unwrap();
+    let server = Context::new(evt_loop.handle(), config).unwrap();
 
     let handle = evt_loop.handle();
     let server = server.for_each(|stream| {

@@ -23,11 +23,19 @@ extern crate tokio_serde_json;
 extern crate tokio_timer;
 
 mod protocol;
-pub mod errors;
+mod errors;
 mod strategies;
 mod connect;
 mod timeout;
-pub mod config;
-pub mod context;
+mod config;
+mod context;
 mod incoming;
 mod connection_request;
+
+pub use errors::{Error, ErrorKind};
+pub use context::{Context, Stream, StreamHandle, ConnectionId};
+pub use config::Config;
+
+pub mod plain {
+    pub use strategies::Stream;
+}

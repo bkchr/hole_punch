@@ -930,10 +930,6 @@ where
         let _ = self.send.unbounded_send(HandleProtocol::AddressInfoRequest(handle));
     }
 
-    pub(crate) fn get_new_stream_handle(&self) -> NewStreamHandle<P> {
-        self.new_stream_handle.clone()
-    }
-
     pub(crate) fn new_stream(&mut self) -> NewStreamFuture<P> {
         self.new_stream_handle.new_stream()
     }
