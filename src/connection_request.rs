@@ -1,5 +1,5 @@
 use errors::*;
-use context::{ConnectionId, NewStreamFuture, NewStreamHandle};
+use context::{ConnectionId, NewStreamFuture, StreamHandle};
 use protocol::Protocol;
 use timeout::Timeout;
 
@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use tokio_core::reactor::Handle;
 
-use futures::{Future, Poll, Stream as FStream, Sink};
+use futures::{Future, Poll, Sink, Stream as FStream};
 use futures::future::Join;
-use futures::sync::{mpsc, oneshot};
+use futures::sync::oneshot;
 
 use serde::{Deserialize, Serialize};
 
@@ -24,21 +24,19 @@ where
     #[state_machine_future(start, transitions(WaitForRelayRequest))]
     WaitForSlaveAddressInfo {
         connection_id: ConnectionId,
-        master: mpsc::UnboundedSender<Protocol<P>>,
-        slave: mpsc::UnboundedSender<Protocol<P>>,
+        master: StreamHandle<P>,
+        slave: StreamHandle<P>,
         master_address_info: Vec<SocketAddr>,
         slave_address_info_recv: oneshot::Receiver<Vec<SocketAddr>>,
         master_relay_con_recv: oneshot::Receiver<()>,
-        slave_new_stream: NewStreamHandle<P>,
-        master_new_stream: NewStreamHandle<P>,
         timeout: Timeout,
         handle: Handle,
     },
     #[state_machine_future(transitions(WaitForNewStreams, Finished))]
     WaitForRelayRequest {
         connection_id: ConnectionId,
-        slave_new_stream: NewStreamHandle<P>,
-        master_new_stream: NewStreamHandle<P>,
+        master: StreamHandle<P>,
+        slave: StreamHandle<P>,
         master_relay_con_recv: oneshot::Receiver<()>,
         timeout: Timeout,
         handle: Handle,
@@ -63,26 +61,22 @@ where
     pub fn new(
         connection_id: ConnectionId,
         handle: &Handle,
-        master: mpsc::UnboundedSender<Protocol<P>>,
-        slave: mpsc::UnboundedSender<Protocol<P>>,
-        master_new_stream: NewStreamHandle<P>,
-        slave_new_stream: NewStreamHandle<P>,
+        master: StreamHandle<P>,
+        mut slave: StreamHandle<P>,
         master_address_info: Vec<SocketAddr>,
     ) -> (ConnectionRequestMasterHandle, ConnectionRequestSlaveHandle) {
         let (slave_send, slave_address_info_recv) = oneshot::channel();
         let (master_send, master_recv) = oneshot::channel();
 
-        slave.unbounded_send(Protocol::RequestPrivateAdressInformation);
+        slave.send_msg(Protocol::RequestPrivateAdressInformation);
 
-        let mut req = ConnectionRequest::start(
+        let req = ConnectionRequest::start(
             connection_id,
             master,
             slave,
             master_address_info,
             slave_address_info_recv,
             master_recv,
-            slave_new_stream,
-            master_new_stream,
             Timeout::new(Duration::from_secs(120), handle),
             handle.clone(),
         );
@@ -108,19 +102,19 @@ where
 
         let address_info = try_ready!(state.slave_address_info_recv.poll());
 
-        let state = state.take();
-        state.slave.unbounded_send(Protocol::Connect(
+        let mut state = state.take();
+        state.slave.send_msg(Protocol::Connect(
             state.master_address_info,
             0,
             state.connection_id,
         ));
         state
             .master
-            .unbounded_send(Protocol::Connect(address_info, 0, state.connection_id));
+            .send_msg(Protocol::Connect(address_info, 0, state.connection_id));
 
         transition!(WaitForRelayRequest {
-            slave_new_stream: state.slave_new_stream,
-            master_new_stream: state.master_new_stream,
+            master: state.master,
+            slave: state.slave,
             connection_id: state.connection_id,
             master_relay_con_recv: state.master_relay_con_recv,
             timeout: state.timeout,
@@ -139,10 +133,7 @@ where
 
         let mut state = state.take();
 
-        let new_streams = state
-            .master_new_stream
-            .new_stream()
-            .join(state.slave_new_stream.new_stream());
+        let new_streams = state.master.new_stream().join(state.slave.new_stream());
         transition!(WaitForNewStreams {
             connection_id: state.connection_id,
             new_streams,
@@ -167,8 +158,12 @@ where
         let (sink0, fstream0) = stream0.split();
         let (sink1, fstream1) = stream1.split();
 
-        state.handle.spawn(sink0.send_all(fstream1).map_err(|_| ()).map(|_| ()));
-        state.handle.spawn(sink1.send_all(fstream0).map_err(|_| ()).map(|_| ()));
+        state
+            .handle
+            .spawn(sink0.send_all(fstream1).map_err(|_| ()).map(|_| ()));
+        state
+            .handle
+            .spawn(sink1.send_all(fstream0).map_err(|_| ()).map(|_| ()));
 
         transition!(Finished(()))
     }

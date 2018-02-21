@@ -1,7 +1,7 @@
 use errors::*;
 use protocol::Protocol;
 use context::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle, NewStreamFuture,
-              NewStreamHandle, Stream};
+              Stream, StreamHandle};
 use timeout::Timeout;
 
 use std::net::SocketAddr;
@@ -13,7 +13,6 @@ use tokio_core::reactor::Handle;
 use futures::{Future, Poll, Stream as FStream};
 use futures::Async::{NotReady, Ready};
 use futures::stream::{futures_unordered, FuturesUnordered};
-use futures::sync::mpsc;
 
 use serde::{Deserialize, Serialize};
 
@@ -287,7 +286,6 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        bail!("test");
         loop {
             let con = self.wait_for_con.poll()?;
 
@@ -348,20 +346,18 @@ where
     InitState {
         new_connection_handle: NewConnectionHandle<P>,
         addresses: Vec<SocketAddr>,
-        new_stream_handle: NewStreamHandle<P>,
+        stream_handle: StreamHandle<P>,
         connection_id: ConnectionId,
         is_master: bool,
         handle: Handle,
-        remote_send: mpsc::UnboundedSender<Protocol<P>>,
     },
     #[state_machine_future(transitions(ConnectionEstablished))]
     TryDirectConnection {
         connect: DirectDeviceToDeviceConnection<P>,
         timeout: Timeout,
-        new_stream_handle: NewStreamHandle<P>,
+        stream_handle: StreamHandle<P>,
         connection_id: ConnectionId,
         is_master: bool,
-        remote_send: mpsc::UnboundedSender<Protocol<P>>,
     },
     #[state_machine_future(ready)]
     ConnectionEstablished((Option<Connection<P>>, Option<Stream<P>>, ConnectionId)),
@@ -384,7 +380,6 @@ where
         );
         let connection_id = init.connection_id;
         let is_master = init.is_master;
-        let new_stream_handle = init.new_stream_handle;
         let new_connection_handle = init.new_connection_handle;
 
         transition!(TryDirectConnection {
@@ -396,10 +391,9 @@ where
                 connection_id,
             ),
             timeout,
-            new_stream_handle,
+            stream_handle: init.stream_handle,
             connection_id,
             is_master,
-            remote_send: init.remote_send,
         })
     }
 
@@ -411,9 +405,9 @@ where
 
         if timeout.is_err() || res.is_err() {
             if try.is_master {
-                let try = try.take();
-                try.remote_send
-                    .unbounded_send(Protocol::RequestRelayPeerConnection(try.connection_id));
+                let mut try = try.take();
+                try.stream_handle
+                    .send_msg(Protocol::RequestRelayPeerConnection(try.connection_id));
 
                 transition!(ConnectionEstablished((None, None, try.connection_id)))
             } else {
