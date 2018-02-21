@@ -33,11 +33,11 @@ enum CarrierProtocol {
 }
 
 struct Carrier {
-    devices: HashMap<String, Rc<RefCell<context::Stream<CarrierProtocol>>>>,
+    devices: HashMap<String, context::StreamHandle<CarrierProtocol>>,
 }
 
 struct CarrierConnection {
-    stream: Rc<RefCell<context::Stream<CarrierProtocol>>>,
+    stream: context::Stream<CarrierProtocol>,
     name: Option<String>,
     carrier: Rc<RefCell<Carrier>>,
 }
@@ -48,7 +48,7 @@ impl Future for CarrierConnection {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            let msg = match try_ready!(self.stream.borrow_mut().poll()) {
+            let msg = match try_ready!(self.stream.poll()) {
                 Some(msg) => msg,
                 None => {
                     println!("stream closed: {:?}", self.name);
@@ -58,6 +58,7 @@ impl Future for CarrierConnection {
                     return Ok(Ready(()));
                 }
             };
+
             match msg {
                 CarrierProtocol::Register { name } => {
                     self.name = Some(name.clone());
@@ -65,13 +66,12 @@ impl Future for CarrierConnection {
                     self.carrier
                         .borrow_mut()
                         .devices
-                        .insert(name, self.stream.clone());
-                    self.stream.borrow_mut().upgrade_to_authenticated();
+                        .insert(name, self.stream.get_stream_handle());
+                    self.stream.upgrade_to_authenticated();
 
                     self.stream
-                        .borrow_mut()
                         .start_send(CarrierProtocol::Registered);
-                    self.stream.borrow_mut().poll_complete();
+                    self.stream.poll_complete();
                 }
                 CarrierProtocol::RequestDevice {
                     name,
@@ -79,15 +79,13 @@ impl Future for CarrierConnection {
                 } => {
                     println!("REQUEST: {} {}", name, connection_id);
 
-                    if let Some(con) = self.carrier.borrow_mut().devices.get_mut(&name) {
+                    if let Some(mut handle) = self.carrier.borrow_mut().devices.get_mut(&name) {
                         self.stream
-                            .borrow_mut()
-                            .create_connection_to(connection_id, &mut con.borrow_mut())?;
+                            .create_connection_to(connection_id, &mut handle)?;
                     } else {
                         self.stream
-                            .borrow_mut()
                             .start_send(CarrierProtocol::DeviceNotFound);
-                        self.stream.borrow_mut().poll_complete();
+                        self.stream.poll_complete();
                     }
                 }
                 _ => {}
@@ -116,7 +114,7 @@ fn main() {
     let server = server.for_each(|stream| {
         handle.spawn(
             CarrierConnection {
-                stream: Rc::new(RefCell::new(stream)),
+                stream: stream,
                 name: None,
                 carrier: carrier.clone(),
             }.map_err(|e| println!("error: {:?}", e)),

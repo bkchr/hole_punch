@@ -826,7 +826,7 @@ where
     pub fn create_connection_to(
         &mut self,
         connection_id: ConnectionId,
-        other: &mut Self,
+        other: &mut StreamHandle<P>,
     ) -> Result<()> {
         let addresses = match self.incoming_con_requests.remove(&connection_id) {
             Some(addresses) => addresses,
@@ -837,15 +837,18 @@ where
             connection_id,
             &self.handle,
             self.stream_handle.clone(),
-            other.stream_handle.clone(),
+            other.clone(),
             addresses,
         );
 
         self.con_requests.insert(connection_id, master);
-        //TODO, the other `Stream` could already contain a connection request with the same id
-        other.address_info_requests.push(slave);
+        other.register_address_info_handle(slave);
 
         Ok(())
+    }
+
+    pub fn get_stream_handle(&self) -> StreamHandle<P> {
+        self.stream_handle.clone()
     }
 }
 
@@ -921,6 +924,10 @@ where
 
     pub(crate) fn send_msg(&mut self, msg: Protocol<P>) {
         let _ = self.send.unbounded_send(HandleProtocol::Send(msg));
+    }
+
+    pub(crate) fn register_address_info_handle(&mut self, handle: connection_request::ConnectionRequestSlaveHandle) {
+        let _ = self.send.unbounded_send(HandleProtocol::AddressInfoRequest(handle));
     }
 
     pub(crate) fn get_new_stream_handle(&self) -> NewStreamHandle<P> {
