@@ -1,4 +1,4 @@
-use errors::*;
+use error::*;
 use context;
 use protocol::Protocol;
 use timeout::Timeout;

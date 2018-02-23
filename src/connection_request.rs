@@ -1,4 +1,4 @@
-use errors::*;
+use error::*;
 use context::{ConnectionId, NewStreamFuture, StreamHandle};
 use protocol::Protocol;
 use timeout::Timeout;

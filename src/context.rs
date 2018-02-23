@@ -1,4 +1,4 @@
-use errors::*;
+use error::*;
 use strategies::{self, AddressInformation, NewConnection, NewStream};
 use config::Config;
 use incoming;
@@ -98,8 +98,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(handle: Handle, config: Config) -> Result<Context<P>> {
-        let strats = strategies::init(handle.clone(), &config)
-            .chain_err(|| "error initializing the strategies")?;
+        let strats = strategies::init(handle.clone(), &config)?;
 
         let device_to_device_callback = mpsc::unbounded();
 
@@ -926,8 +925,12 @@ where
         let _ = self.send.unbounded_send(HandleProtocol::Send(msg));
     }
 
-    pub(crate) fn register_address_info_handle(&mut self, handle: connection_request::ConnectionRequestSlaveHandle) {
-        let _ = self.send.unbounded_send(HandleProtocol::AddressInfoRequest(handle));
+    pub(crate) fn register_address_info_handle(
+        &mut self,
+        handle: connection_request::ConnectionRequestSlaveHandle,
+    ) {
+        let _ = self.send
+            .unbounded_send(HandleProtocol::AddressInfoRequest(handle));
     }
 
     pub(crate) fn new_stream(&mut self) -> NewStreamFuture<P> {

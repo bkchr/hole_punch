@@ -1,7 +1,7 @@
 extern crate bytes;
 extern crate either;
 #[macro_use]
-extern crate error_chain;
+extern crate failure;
 #[macro_use]
 extern crate futures;
 extern crate itertools;
@@ -23,7 +23,8 @@ extern crate tokio_serde_json;
 extern crate tokio_timer;
 
 mod protocol;
-mod errors;
+#[macro_use]
+mod error;
 mod strategies;
 mod connect;
 mod timeout;
@@ -32,8 +33,8 @@ mod context;
 mod incoming;
 mod connection_request;
 
-pub use errors::{Error, ErrorKind};
-pub use context::{Context, Stream, StreamHandle, ConnectionId};
+pub use error::Error;
+pub use context::{ConnectionId, Context, Stream, StreamHandle};
 pub use config::Config;
 
 pub mod plain {

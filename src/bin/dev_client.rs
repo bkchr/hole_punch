@@ -14,7 +14,7 @@ extern crate log;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::{Config, Stream, Context, Error, ConnectionId};
+use hole_punch::{Config, ConnectionId, Context, Error, Stream};
 
 use tokio_core::reactor::{Core, Handle};
 
@@ -88,7 +88,7 @@ impl Future for CarrierConnection {
                     println!("Requesting connection to: {}", self.request_name);
 
                     let connection_id = self.context.generate_connection_id();
-                    
+
                     self.handle.spawn(
                         self.context
                             .create_connection_to_peer(

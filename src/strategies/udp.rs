@@ -1,4 +1,4 @@
-use errors::*;
+use error::*;
 use strategies::{AddressInformation, Connection, NewConnection, NewConnectionFuture,
                  NewConnectionHandle, NewStream, NewStreamFuture, NewStreamHandle, Strategy,
                  Stream};

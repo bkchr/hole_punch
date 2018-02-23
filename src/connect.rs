@@ -1,4 +1,4 @@
-use errors::*;
+use error::*;
 use protocol::Protocol;
 use context::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle, NewStreamFuture,
               Stream, StreamHandle};

@@ -5,7 +5,7 @@ extern crate hole_punch;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::{Config, Stream, StreamHandle, Context, Error, ConnectionId};
+use hole_punch::{Config, ConnectionId, Context, Error, Stream, StreamHandle};
 
 use tokio_core::reactor::Core;
 
@@ -68,8 +68,7 @@ impl Future for CarrierConnection {
                         .insert(name, self.stream.get_stream_handle());
                     self.stream.upgrade_to_authenticated();
 
-                    self.stream
-                        .start_send(CarrierProtocol::Registered);
+                    self.stream.start_send(CarrierProtocol::Registered);
                     self.stream.poll_complete();
                 }
                 CarrierProtocol::RequestDevice {
@@ -82,8 +81,7 @@ impl Future for CarrierConnection {
                         self.stream
                             .create_connection_to(connection_id, &mut handle)?;
                     } else {
-                        self.stream
-                            .start_send(CarrierProtocol::DeviceNotFound);
+                        self.stream.start_send(CarrierProtocol::DeviceNotFound);
                         self.stream.poll_complete();
                     }
                 }

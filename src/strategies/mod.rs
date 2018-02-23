@@ -1,4 +1,4 @@
-use errors::*;
+use error::*;
 use config::Config;
 
 use std::net::SocketAddr;

@@ -7,7 +7,7 @@ extern crate log;
 extern crate serde_derive;
 extern crate tokio_core;
 
-use hole_punch::{Stream, Context, Error, Config};
+use hole_punch::{Config, Context, Error, Stream};
 
 use tokio_core::reactor::{Core, Handle};
 
