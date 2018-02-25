@@ -853,6 +853,11 @@ where
     pub fn send_and_poll(&mut self, item: P) -> Result<()> {
         self.direct_send(Protocol::Embedded(item))
     }
+
+
+    pub fn into_plain(self) -> strategies::Stream {
+        self.stream.into_inner().into_inner()
+    }
 }
 
 impl<P> FStream for Stream<P>
