@@ -849,6 +849,10 @@ where
     pub fn get_stream_handle(&self) -> StreamHandle<P> {
         self.stream_handle.clone()
     }
+
+    pub fn send_and_poll(&mut self, item: P) -> Result<()> {
+        self.direct_send(Protocol::Embedded(item))
+    }
 }
 
 impl<P> FStream for Stream<P>
