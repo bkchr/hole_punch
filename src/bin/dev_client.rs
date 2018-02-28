@@ -1,8 +1,6 @@
 extern crate either;
 extern crate env_logger;
 #[macro_use]
-extern crate error_chain;
-#[macro_use]
 extern crate futures;
 extern crate h2;
 extern crate hole_punch;
@@ -108,7 +106,7 @@ impl Future for CarrierConnection {
                     );
                 }
                 CarrierProtocol::DeviceNotFound => {
-                    bail!("device not found");
+                    panic!("device not found");
                 }
                 _ => {}
             };

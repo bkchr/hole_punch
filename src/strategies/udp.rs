@@ -6,6 +6,7 @@ use config::Config;
 
 use std::net::SocketAddr;
 use std::path::Path;
+use std::time::Duration;
 
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
@@ -27,7 +28,7 @@ impl StrategyWrapper {
         key_file: &Path,
         handle: Handle,
     ) -> Result<StrategyWrapper> {
-        let config = picoquic::Config::server(
+        let mut config = picoquic::Config::server(
             cert_file
                 .to_str()
                 .expect("cert filename contains illegal characters"),
@@ -35,6 +36,8 @@ impl StrategyWrapper {
                 .to_str()
                 .expect("key filename contains illegal characters"),
         );
+
+        config.enable_keep_alive(Duration::from_secs(15));
 
         let context = picoquic::Context::new(&listen_address, &handle, config)?;
 
