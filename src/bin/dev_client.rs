@@ -2,10 +2,7 @@ extern crate either;
 extern crate env_logger;
 #[macro_use]
 extern crate futures;
-extern crate h2;
 extern crate hole_punch;
-extern crate http;
-extern crate hyper;
 #[macro_use]
 extern crate log;
 #[macro_use]
