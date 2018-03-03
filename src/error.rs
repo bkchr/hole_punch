@@ -10,6 +10,8 @@ use serde_json;
 
 use futures;
 
+use bincode;
+
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug, Fail)]
@@ -59,6 +61,12 @@ impl From<futures::Canceled> for Error {
 impl From<failure::Error> for Error {
     fn from(err: failure::Error) -> Error {
         Error::Custom(err)
+    }
+}
+
+impl From<bincode::Error> for Error {
+    fn from(err: bincode::Error) -> Error {
+        Error::Custom(err.into())
     }
 }
 
