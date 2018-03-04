@@ -107,14 +107,16 @@ trait StreamTrait
     : FStream<Item = BytesMut, Error = Error>
     + AddressInformation
     + Sink<SinkItem = BytesMut, SinkError = Error>
-    + NewStream {
+    + NewStream
+    + Send {
 }
 
 impl<
     T: FStream<Item = BytesMut, Error = Error>
         + AddressInformation
         + Sink<SinkItem = BytesMut, SinkError = Error>
-        + NewStream,
+        + NewStream
+        + Send,
 > StreamTrait for T
 {
 }
