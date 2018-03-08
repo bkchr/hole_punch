@@ -21,6 +21,8 @@ use tokio_core::reactor::Handle;
 
 use tokio_serde_json::{ReadJson, WriteJson};
 
+use tokio_io::codec::length_delimited;
+
 use serde::{Deserialize, Serialize};
 
 use pnet_datalink::interfaces;
@@ -232,7 +234,7 @@ where
             bail!("connection with the same id was already requested");
         }
 
-        let addresses = get_interface_addresses(server.stream.get_ref().get_ref().local_addr());
+        let addresses = get_interface_addresses(server.stream.get_ref().get_ref().get_ref().local_addr());
         server.direct_send(Protocol::RequestPeerConnection(
             connection_id,
             msg,
@@ -695,7 +697,8 @@ pub struct Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    stream: WriteJson<ReadJson<strategies::Stream, Protocol<P>>, Protocol<P>>,
+    stream:
+        WriteJson<ReadJson<length_delimited::Framed<strategies::Stream>, Protocol<P>>, Protocol<P>>,
     state: StreamState,
     stream_handle: StreamHandle<P>,
     stream_handle_recv: mpsc::UnboundedReceiver<HandleProtocol<P>>,
@@ -726,7 +729,7 @@ where
         let stream_handle = StreamHandle::new(stream_handle_send, new_stream_handle);
 
         Stream {
-            stream: WriteJson::new(ReadJson::new(stream)),
+            stream: WriteJson::new(ReadJson::new(length_delimited::Framed::new(stream))),
             state,
             con_requests: HashMap::new(),
             incoming_con_requests: HashMap::new(),
@@ -760,17 +763,17 @@ where
             match msg {
                 Protocol::Embedded(msg) => return Ok(Ready(Some(msg))),
                 Protocol::RequestPeerConnection(connection_id, msg, mut addresses) => {
-                    addresses.push(self.stream.get_ref().get_ref().peer_addr());
+                    addresses.push(self.stream.get_ref().get_ref().get_ref().peer_addr());
                     self.incoming_con_requests.insert(connection_id, addresses);
                     return Ok(Ready(Some(msg)));
                 }
                 Protocol::RequestPrivateAdressInformation => {
                     let addresses =
-                        get_interface_addresses(self.stream.get_ref().get_ref().local_addr());
+                        get_interface_addresses(self.stream.get_ref().get_ref().get_ref().local_addr());
                     self.direct_send(Protocol::PrivateAdressInformation(addresses));
                 }
                 Protocol::PrivateAdressInformation(mut addresses) => {
-                    addresses.push(self.stream.get_ref().get_ref().peer_addr());
+                    addresses.push(self.stream.get_ref().get_ref().get_ref().peer_addr());
 
                     for req in self.address_info_requests.drain(..).into_iter() {
                         req.add_address_info(addresses.clone());
@@ -811,7 +814,7 @@ where
     /// Can be used to poll the underlying `strategies::Stream` directly. This enables handlers to
     /// to process protocol messages.
     pub(crate) fn direct_poll(&mut self) -> Poll<Option<Protocol<P>>, Error> {
-        self.stream.poll()
+        self.stream.poll().map_err(|e| e.into())
     }
 
     pub(crate) fn direct_send(&mut self, item: Protocol<P>) -> Result<()> {
@@ -854,9 +857,8 @@ where
         self.direct_send(Protocol::Embedded(item))
     }
 
-
     pub fn into_plain(self) -> strategies::Stream {
-        self.stream.into_inner().into_inner()
+        self.stream.into_inner().into_inner().into_inner()
     }
 }
 
@@ -902,11 +904,11 @@ where
                 Protocol::Embedded(item) => item,
                 _ => unreachable!(),
             })
-        })
+        }).map_err(|e| e.into())
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        self.stream.poll_complete()
+        self.stream.poll_complete().map_err(|e| e.into())
     }
 }
 
