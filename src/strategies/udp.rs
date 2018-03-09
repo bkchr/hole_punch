@@ -1,7 +1,7 @@
 use error::*;
-use strategies::{AddressInformation, Connection, NewConnection, NewConnectionFuture,
-                 NewConnectionHandle, NewStream, NewStreamFuture, NewStreamHandle, Strategy,
-                 Stream};
+use strategies::{AddressInformation, Connection, ConnectionId, GetConnectionId, NewConnection,
+                 NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture,
+                 NewStreamHandle, Strategy, Stream};
 use config::Config;
 
 use std::net::SocketAddr;
@@ -18,7 +18,6 @@ use bytes::BytesMut;
 
 struct StrategyWrapper {
     context: picoquic::Context,
-    handle: Handle,
 }
 
 impl StrategyWrapper {
@@ -41,7 +40,7 @@ impl StrategyWrapper {
 
         let context = picoquic::Context::new(&listen_address, &handle, config)?;
 
-        Ok(StrategyWrapper { context, handle })
+        Ok(StrategyWrapper { context })
     }
 }
 
@@ -93,7 +92,7 @@ impl FStream for ConnectionWrapper {
             .poll()
             .map(|r| {
                 r.map(|o| {
-                    o.map(|v| Stream::new(StreamWrapper::new(v, self.con.get_new_stream_handle())))
+                    o.map(|v| Stream::new(StreamWrapper::new(v, self.con.get_new_stream_handle(), self.con.id())))
                 })
             })
             .map_err(|e| e.into())
@@ -103,11 +102,12 @@ impl FStream for ConnectionWrapper {
 impl NewStream for ConnectionWrapper {
     fn new_stream(&mut self) -> NewStreamFuture {
         let handle = self.con.get_new_stream_handle();
+        let id = self.con.id();
 
         NewStreamFuture::new(
             self.con
                 .new_bidirectional_stream()
-                .map(move |v| Stream::new(StreamWrapper::new(v, handle)))
+                .map(move |v| Stream::new(StreamWrapper::new(v, handle, id)))
                 .map_err(|e| e.into()),
         )
     }
@@ -115,6 +115,7 @@ impl NewStream for ConnectionWrapper {
     fn get_new_stream_handle(&self) -> NewStreamHandle {
         NewStreamHandle::new(NewStreamHandleWrapper::new(
             self.con.get_new_stream_handle(),
+            self.con.id(),
         ))
     }
 }
@@ -129,14 +130,29 @@ impl AddressInformation for ConnectionWrapper {
     }
 }
 
+impl GetConnectionId for ConnectionWrapper {
+    fn connection_id(&self) -> ConnectionId {
+        self.con.id()
+    }
+}
+
 struct StreamWrapper {
     stream: picoquic::Stream,
     new_stream: picoquic::NewStreamHandle,
+    con_id: ConnectionId,
 }
 
 impl StreamWrapper {
-    fn new(stream: picoquic::Stream, new_stream: picoquic::NewStreamHandle) -> StreamWrapper {
-        StreamWrapper { stream, new_stream }
+    fn new(
+        stream: picoquic::Stream,
+        new_stream: picoquic::NewStreamHandle,
+        con_id: ConnectionId,
+    ) -> StreamWrapper {
+        StreamWrapper {
+            stream,
+            new_stream,
+            con_id,
+        }
     }
 }
 
@@ -172,19 +188,30 @@ impl AddressInformation for StreamWrapper {
     }
 }
 
+impl GetConnectionId for StreamWrapper {
+    fn connection_id(&self) -> ConnectionId {
+        self.con_id
+    }
+}
+
 impl NewStream for StreamWrapper {
     fn new_stream(&mut self) -> NewStreamFuture {
         let handle = self.new_stream.clone();
+        let id = self.con_id;
+
         let new_con = self.new_stream
             .new_bidirectional_stream()
-            .map(move |s| Stream::new(StreamWrapper::new(s, handle)))
+            .map(move |s| Stream::new(StreamWrapper::new(s, handle, id)))
             .map_err(|e| e.into());
 
         NewStreamFuture::new(new_con)
     }
 
     fn get_new_stream_handle(&self) -> NewStreamHandle {
-        NewStreamHandle::new(NewStreamHandleWrapper::new(self.new_stream.clone()))
+        NewStreamHandle::new(NewStreamHandleWrapper::new(
+            self.new_stream.clone(),
+            self.con_id,
+        ))
     }
 }
 
@@ -217,22 +244,24 @@ impl NewConnection for NewConnectionHandleWrapper {
 #[derive(Clone)]
 struct NewStreamHandleWrapper {
     new_stream: picoquic::NewStreamHandle,
+    con_id: ConnectionId,
 }
 
 impl NewStreamHandleWrapper {
-    fn new(new_stream: picoquic::NewStreamHandle) -> NewStreamHandleWrapper {
-        NewStreamHandleWrapper { new_stream }
+    fn new(new_stream: picoquic::NewStreamHandle, con_id: ConnectionId) -> NewStreamHandleWrapper {
+        NewStreamHandleWrapper { new_stream, con_id }
     }
 }
 
 impl NewStream for NewStreamHandleWrapper {
     fn new_stream(&mut self) -> NewStreamFuture {
         let handle = self.new_stream.clone();
+        let id = self.con_id;
 
         NewStreamFuture::new(
             self.new_stream
                 .new_bidirectional_stream()
-                .map(|v| Stream::new(StreamWrapper::new(v, handle)))
+                .map(move |v| Stream::new(StreamWrapper::new(v, handle, id)))
                 .map_err(|e| e.into()),
         )
     }

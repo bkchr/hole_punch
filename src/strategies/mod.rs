@@ -54,13 +54,15 @@ impl NewConnection for Strategy {
 /// The super `Connection` trait. We need this hack, to store the `inner` of the connection
 /// in a `Box`.
 trait ConnectionTrait
-    : FStream<Item = Stream, Error = Error> + AddressInformation + NewStream {
+    : FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId {
 }
 
-impl<T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream> ConnectionTrait
+impl<T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId> ConnectionTrait
     for T
 {
 }
+
+pub type ConnectionId = u64;
 
 pub struct Connection {
     inner: Box<ConnectionTrait<Item = Stream, Error = Error>>,
@@ -108,7 +110,7 @@ trait StreamTrait
     + AddressInformation
     + Sink<SinkItem = BytesMut, SinkError = Error>
     + NewStream
-    + Send {
+    + Send + GetConnectionId{
 }
 
 impl<
@@ -116,7 +118,7 @@ impl<
         + AddressInformation
         + Sink<SinkItem = BytesMut, SinkError = Error>
         + NewStream
-        + Send,
+        + Send + GetConnectionId,
 > StreamTrait for T
 {
 }
@@ -251,6 +253,12 @@ impl AsyncWrite for Stream {
     }
 }
 
+impl GetConnectionId for Stream {
+    fn connection_id(&self) -> ConnectionId {
+        self.inner.connection_id()
+    }
+}
+
 pub trait NewStream {
     fn new_stream(&mut self) -> NewStreamFuture;
     fn get_new_stream_handle(&self) -> NewStreamHandle;
@@ -350,4 +358,8 @@ impl NewStream for NewStreamHandle {
 
 pub fn init(handle: Handle, config: &Config) -> Result<Vec<Strategy>> {
     Ok(vec![udp::init(handle, config)?])
+}
+
+pub trait GetConnectionId {
+    fn connection_id(&self) -> ConnectionId;
 }

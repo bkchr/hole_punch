@@ -1,4 +1,5 @@
 use error::*;
+use strategies::GetConnectionId;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -111,8 +112,8 @@ impl Authenticator {
     /// Returns a public key for a client connection.
     /// This requires client authentication to be activated, or otherwise no public key will be
     /// found for a connection.
-    pub fn client_pub_key(&mut self, id: &ConnectionId) -> Option<PubKey> {
-        self.inner.lock().unwrap().client_pub_key(id)
+    pub fn client_pub_key<C: GetConnectionId>(&mut self, con: &C) -> Option<PubKey> {
+        self.inner.lock().unwrap().client_pub_key(&con.connection_id())
     }
 }
 

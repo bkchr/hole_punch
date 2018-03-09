@@ -1,5 +1,5 @@
 use error::*;
-use strategies::{self, AddressInformation, NewConnection, NewStream};
+use strategies::{self, AddressInformation, GetConnectionId, NewConnection, NewStream};
 use config::Config;
 use incoming;
 use protocol::Protocol;
@@ -234,7 +234,8 @@ where
             bail!("connection with the same id was already requested");
         }
 
-        let addresses = get_interface_addresses(server.stream.get_ref().get_ref().get_ref().local_addr());
+        let addresses =
+            get_interface_addresses(server.stream.get_ref().get_ref().get_ref().local_addr());
         server.direct_send(Protocol::RequestPeerConnection(
             connection_id,
             msg,
@@ -768,8 +769,9 @@ where
                     return Ok(Ready(Some(msg)));
                 }
                 Protocol::RequestPrivateAdressInformation => {
-                    let addresses =
-                        get_interface_addresses(self.stream.get_ref().get_ref().get_ref().local_addr());
+                    let addresses = get_interface_addresses(
+                        self.stream.get_ref().get_ref().get_ref().local_addr(),
+                    );
                     self.direct_send(Protocol::PrivateAdressInformation(addresses));
                 }
                 Protocol::PrivateAdressInformation(mut addresses) => {
@@ -862,6 +864,15 @@ where
     }
 }
 
+impl<P> GetConnectionId for Stream<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    fn connection_id(&self) -> ConnectionId {
+        self.stream.get_ref().get_ref().get_ref().connection_id()
+    }
+}
+
 impl<P> FStream for Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
@@ -899,12 +910,15 @@ where
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        self.stream.start_send(Protocol::Embedded(item)).map(|r| {
-            r.map(|v| match v {
-                Protocol::Embedded(item) => item,
-                _ => unreachable!(),
+        self.stream
+            .start_send(Protocol::Embedded(item))
+            .map(|r| {
+                r.map(|v| match v {
+                    Protocol::Embedded(item) => item,
+                    _ => unreachable!(),
+                })
             })
-        }).map_err(|e| e.into())
+            .map_err(|e| e.into())
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
