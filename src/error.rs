@@ -12,6 +12,8 @@ use futures;
 
 use bincode;
 
+use openssl;
+
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug, Fail)]
@@ -19,13 +21,15 @@ pub enum Error {
     #[fail(display = "Picoquic Error {}", _0)]
     Picoquic(#[cause] picoquic::Error),
     #[fail(display = "IO Error {}", _0)]
-    IoError(#[cause] io::Error),
+    Io(#[cause] io::Error),
     #[fail(display = "Json Error {}", _0)]
     Json(#[cause] serde_json::Error),
     #[fail(display = "Channel canceled Error {}", _0)]
     ChannelCanceled(#[cause] futures::Canceled),
     #[fail(display = "Error {}", _0)]
     Custom(failure::Error),
+    #[fail(display = "Certificate parse error {}", _0)]
+    Openssl(#[cause] openssl::error::ErrorStack),
 }
 
 impl From<Error> for io::Error {
@@ -36,7 +40,7 @@ impl From<Error> for io::Error {
 
 impl From<io::Error> for Error {
     fn from(err: io::Error) -> Error {
-        Error::IoError(err)
+        Error::Io(err)
     }
 }
 
@@ -67,6 +71,12 @@ impl From<failure::Error> for Error {
 impl From<bincode::Error> for Error {
     fn from(err: bincode::Error) -> Error {
         Error::Custom(err.into())
+    }
+}
+
+impl From<openssl::error::ErrorStack> for Error {
+    fn from(err: openssl::error::ErrorStack) -> Error {
+        Error::Openssl(err.into())
     }
 }
 
