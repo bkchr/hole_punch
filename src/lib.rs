@@ -10,6 +10,7 @@ extern crate itertools;
 extern crate log;
 extern crate objekt;
 extern crate openssl;
+extern crate openssl_sys;
 extern crate picoquic;
 extern crate pnet_datalink;
 extern crate rand;

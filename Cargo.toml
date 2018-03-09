@@ -25,3 +25,4 @@ either = "1.4"
 objekt = "0.1"
 failure = "0.1"
 openssl = { git = "https://github.com/bkchr/rust-openssl.git", branch = "picoquic_rs" }
+openssl-sys = { git = "https://github.com/bkchr/rust-openssl.git", branch = "picoquic_rs" }

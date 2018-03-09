@@ -15,29 +15,54 @@ use openssl::x509::{X509, X509Ref};
 use openssl::stack::StackRef;
 use openssl::x509::store::{X509Store, X509StoreBuilder};
 use openssl::pkey::{PKey, Public};
-use openssl::hash::{DigestBytes, Hasher, MessageDigest};
+use openssl::hash::{Hasher, MessageDigest};
+
+use openssl_sys;
 
 /// A public key.
 #[derive(Copy, Clone)]
 pub struct PubKey {
-    inner: DigestBytes,
+    buf: [u8; openssl_sys::EVP_MAX_MD_SIZE as usize],
+    len: usize,
 }
 
 impl PartialEq for PubKey {
     fn eq(&self, other: &PubKey) -> bool {
-        *self.inner == *other.inner
+        if self.len == other.len {
+            self.buf[..self.len] == other.buf[..other.len]
+        } else {
+            false
+        }
     }
 }
 
 impl Eq for PubKey {}
 
 impl PubKey {
-    fn try_from(key: PKey<Public>) -> result::Result<PubKey, ErrorStack> {
+    pub fn from_pkey(key: PKey<Public>) -> result::Result<PubKey, ErrorStack> {
         let mut hasher = Hasher::new(MessageDigest::sha256())?;
         hasher.update(&key.public_key_to_der()?)?;
-        let inner = hasher.finish()?;
+        let bytes = hasher.finish()?;
 
-        Ok(PubKey { inner })
+        Ok(Self::from_checked_hashed(&bytes))
+    }
+
+    pub fn from_hashed(hashed: &[u8]) -> Result<PubKey> {
+        if hashed.len() > openssl_sys::EVP_MAX_MD_SIZE as usize {
+            bail!("Size is too long for a hashed value!");
+        }
+
+        Ok(Self::from_checked_hashed(hashed))
+    }
+
+    fn from_checked_hashed(hashed: &[u8]) -> PubKey {
+        let mut buf = [0; openssl_sys::EVP_MAX_MD_SIZE as usize];
+        buf[..hashed.len()].copy_from_slice(hashed);
+
+        PubKey {
+            buf,
+            len: hashed.len(),
+        }
     }
 }
 
@@ -113,7 +138,10 @@ impl Authenticator {
     /// This requires client authentication to be activated, or otherwise no public key will be
     /// found for a connection.
     pub fn client_pub_key<C: GetConnectionId>(&mut self, con: &C) -> Option<PubKey> {
-        self.inner.lock().unwrap().client_pub_key(&con.connection_id())
+        self.inner
+            .lock()
+            .unwrap()
+            .client_pub_key(&con.connection_id())
     }
 }
 
@@ -136,7 +164,7 @@ impl VerifyCertificate for Authenticator {
                 };
 
                 if res.is_ok() {
-                    inner.add_client_pub_key(connection_id, PubKey::try_from(cert.public_key()?)?);
+                    inner.add_client_pub_key(connection_id, PubKey::from_pkey(cert.public_key()?)?);
                 }
 
                 res
