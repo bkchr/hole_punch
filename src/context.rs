@@ -102,8 +102,13 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(handle: Handle, config: Config) -> Result<Context<P>> {
-        let authenticator = if config.trusted_client_certificates.is_some() || config.trusted_server_certificates.is_some() {
-            Some(Authenticator::new(config.trusted_server_certificates.as_ref().cloned(), config.trusted_client_certificates.as_ref().cloned())?)
+        let authenticator = if config.trusted_client_certificates.is_some()
+            || config.trusted_server_certificates.is_some()
+        {
+            Some(Authenticator::new(
+                config.trusted_server_certificates.as_ref().cloned(),
+                config.trusted_client_certificates.as_ref().cloned(),
+            )?)
         } else {
             None
         };
@@ -134,8 +139,15 @@ where
             connections: FuturesUnordered::new(),
             new_connection: mpsc::unbounded(),
             incoming_stream: FuturesUnordered::new(),
-            authenticator
+            authenticator,
         })
+    }
+
+    /// Returns the `Authenticator`.
+    /// The authenticator is only created, if the `Config` contained trusted client/server
+    /// certificates.
+    pub fn authenticator(&self) -> Option<Authenticator> {
+        self.authenticator.as_ref().cloned()
     }
 
     fn poll_strategies(&mut self) -> Result<()> {

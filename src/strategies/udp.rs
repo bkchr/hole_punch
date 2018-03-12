@@ -24,13 +24,15 @@ impl StrategyWrapper {
     fn new(
         hconfig: &Config,
         handle: Handle,
-        authenticator: Option<&Authenticator>
+        authenticator: Option<&Authenticator>,
     ) -> Result<StrategyWrapper> {
         let mut config = picoquic::Config::server(
-            hconfig.cert_file
+            hconfig
+                .cert_file
                 .to_str()
                 .expect("cert filename contains illegal characters"),
-            hconfig.key_file
+            hconfig
+                .key_file
                 .to_str()
                 .expect("key filename contains illegal characters"),
         );
@@ -99,7 +101,13 @@ impl FStream for ConnectionWrapper {
             .poll()
             .map(|r| {
                 r.map(|o| {
-                    o.map(|v| Stream::new(StreamWrapper::new(v, self.con.get_new_stream_handle(), self.con.id())))
+                    o.map(|v| {
+                        Stream::new(StreamWrapper::new(
+                            v,
+                            self.con.get_new_stream_handle(),
+                            self.con.id(),
+                        ))
+                    })
                 })
             })
             .map_err(|e| e.into())
@@ -278,7 +286,11 @@ impl NewStream for NewStreamHandleWrapper {
     }
 }
 
-pub fn init(handle: Handle, config: &Config, authenticator: Option<&Authenticator>) -> Result<Strategy> {
+pub fn init(
+    handle: Handle,
+    config: &Config,
+    authenticator: Option<&Authenticator>,
+) -> Result<Strategy> {
     Ok(Strategy::new(StrategyWrapper::new(
         config,
         handle,
