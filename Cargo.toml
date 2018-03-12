@@ -19,7 +19,7 @@ bincode = "0.8"
 bytes = "0.4"
 env_logger = "0.4.3"
 log = "0.4"
-picoquic = { path = "../picoquic"  }
+picoquic = { git = "https://github.com/bkchr/picoquic-rs.git" }
 rand = "0.4"
 either = "1.4"
 objekt = "0.1"
