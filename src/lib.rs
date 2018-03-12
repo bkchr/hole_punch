@@ -37,11 +37,13 @@ mod context;
 mod incoming;
 mod connection_request;
 mod authenticator;
+mod pubkey;
 
 pub use error::Error;
 pub use context::{ConnectionId, Context, Stream, StreamHandle};
 pub use config::Config;
-pub use authenticator::{Authenticator, PubKey};
+pub use authenticator::Authenticator;
+pub use pubkey::PubKey;
 
 pub mod plain {
     pub use strategies::Stream;
