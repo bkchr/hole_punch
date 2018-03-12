@@ -22,11 +22,43 @@ use openssl_sys;
 
 use hex;
 
+use serde::{Deserialize, Deserializer, Serializer};
+use serde::de::Error;
+
 /// A public key.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Serialize, Deserialize)]
 pub struct PubKey {
+    #[serde(serialize_with = "serialize_pubkey_array")]
+    #[serde(deserialize_with = "deserialize_pubkey_array")]
     buf: [u8; openssl_sys::EVP_MAX_MD_SIZE as usize],
     len: usize,
+}
+
+fn serialize_pubkey_array<S>(buf: &[u8], serializer: S) -> result::Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_bytes(buf)
+}
+
+fn deserialize_pubkey_array<'de, D>(
+    deserializer: D,
+) -> result::Result<[u8; openssl_sys::EVP_MAX_MD_SIZE as usize], D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let vec = Vec::<u8>::deserialize(deserializer)?;
+
+    if vec.len() > openssl_sys::EVP_MAX_MD_SIZE as usize {
+        Err(D::Error::invalid_length(
+            vec.len(),
+            &"buf is too long",
+        ))
+    } else {
+        let mut buf = [0; openssl_sys::EVP_MAX_MD_SIZE as usize];
+        buf[..vec.len()].copy_from_slice(&vec);
+        Ok(buf)
+    }
 }
 
 impl PartialEq for PubKey {
