@@ -1,5 +1,6 @@
 use error::*;
 use config::Config;
+use authenticator::Authenticator;
 
 use std::net::SocketAddr;
 use std::io::{self, Read, Write};
@@ -356,8 +357,8 @@ impl NewStream for NewStreamHandle {
     }
 }
 
-pub fn init(handle: Handle, config: &Config) -> Result<Vec<Strategy>> {
-    Ok(vec![udp::init(handle, config)?])
+pub fn init(handle: Handle, config: &Config, authenticator: Option<&Authenticator>) -> Result<Vec<Strategy>> {
+    Ok(vec![udp::init(handle, config, authenticator)?])
 }
 
 pub trait GetConnectionId {

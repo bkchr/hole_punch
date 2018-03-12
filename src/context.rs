@@ -5,6 +5,7 @@ use incoming;
 use protocol::Protocol;
 use connect::{self, ConnectWithStrategies};
 use connection_request;
+use authenticator::Authenticator;
 
 use std::time::Duration;
 use std::net::SocketAddr;
@@ -93,6 +94,7 @@ where
         mpsc::UnboundedReceiver<Connection<P>>,
     ),
     incoming_stream: FuturesUnordered<GetMessage<P>>,
+    authenticator: Option<Authenticator>,
 }
 
 impl<P> Context<P>
@@ -100,7 +102,13 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(handle: Handle, config: Config) -> Result<Context<P>> {
-        let strats = strategies::init(handle.clone(), &config)?;
+        let authenticator = if config.trusted_client_certificates.is_some() || config.trusted_server_certificates.is_some() {
+            Some(Authenticator::new(config.trusted_server_certificates.as_ref().cloned(), config.trusted_client_certificates.as_ref().cloned())?)
+        } else {
+            None
+        };
+
+        let strats = strategies::init(handle.clone(), &config, authenticator.as_ref())?;
 
         let device_to_device_callback = mpsc::unbounded();
 
@@ -126,6 +134,7 @@ where
             connections: FuturesUnordered::new(),
             new_connection: mpsc::unbounded(),
             incoming_stream: FuturesUnordered::new(),
+            authenticator
         })
     }
 

@@ -84,13 +84,11 @@ fn main() {
 
     let mut evt_loop = Core::new().unwrap();
 
-    let config = Config {
-        udp_listen_address: ([0, 0, 0, 0], 0).into(),
-        cert_file: PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
-        // cert_file: PathBuf::from("cert.pem"),
-        // key_file: PathBuf::from("key.pem"),
-        key_file: PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
-    };
+    let config = Config::new(
+        ([0, 0, 0, 0], 0).into(),
+        PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
+        PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
+    );
 
     let mut context = Context::new(evt_loop.handle(), config).unwrap();
     let server_con = context.create_connection_to_server(&server_addr);

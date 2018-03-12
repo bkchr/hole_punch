@@ -125,7 +125,7 @@ pub struct Authenticator {
 }
 
 impl Authenticator {
-    fn new(
+    pub(crate) fn new(
         server_certs: Option<Vec<PathBuf>>,
         client_certs: Option<Vec<PathBuf>>,
     ) -> Result<Authenticator> {

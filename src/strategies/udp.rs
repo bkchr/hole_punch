@@ -3,9 +3,9 @@ use strategies::{AddressInformation, Connection, ConnectionId, GetConnectionId, 
                  NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture,
                  NewStreamHandle, Strategy, Stream};
 use config::Config;
+use authenticator::Authenticator;
 
 use std::net::SocketAddr;
-use std::path::Path;
 use std::time::Duration;
 
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
@@ -22,23 +22,30 @@ struct StrategyWrapper {
 
 impl StrategyWrapper {
     fn new(
-        listen_address: SocketAddr,
-        cert_file: &Path,
-        key_file: &Path,
+        hconfig: &Config,
         handle: Handle,
+        authenticator: Option<&Authenticator>
     ) -> Result<StrategyWrapper> {
         let mut config = picoquic::Config::server(
-            cert_file
+            hconfig.cert_file
                 .to_str()
                 .expect("cert filename contains illegal characters"),
-            key_file
+            hconfig.key_file
                 .to_str()
                 .expect("key filename contains illegal characters"),
         );
 
         config.enable_keep_alive(Duration::from_secs(15));
 
-        let context = picoquic::Context::new(&listen_address, &handle, config)?;
+        if hconfig.trusted_client_certificates.is_some() {
+            config.enable_client_authentication();
+        }
+
+        if let Some(auth) = authenticator {
+            config.set_verify_certificate_handler(auth.clone());
+        }
+
+        let context = picoquic::Context::new(&hconfig.udp_listen_address, &handle, config)?;
 
         Ok(StrategyWrapper { context })
     }
@@ -271,11 +278,10 @@ impl NewStream for NewStreamHandleWrapper {
     }
 }
 
-pub fn init(handle: Handle, config: &Config) -> Result<Strategy> {
+pub fn init(handle: Handle, config: &Config, authenticator: Option<&Authenticator>) -> Result<Strategy> {
     Ok(Strategy::new(StrategyWrapper::new(
-        config.udp_listen_address,
-        &config.cert_file,
-        &config.key_file,
+        config,
         handle,
+        authenticator,
     )?))
 }

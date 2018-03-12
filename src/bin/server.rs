@@ -99,11 +99,11 @@ fn main() {
         devices: HashMap::new(),
     }));
 
-    let config = Config {
-        udp_listen_address: ([0, 0, 0, 0], 22222).into(),
-        cert_file: PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
-        key_file: PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
-    };
+    let config = Config::new(
+        ([0, 0, 0, 0], 22222).into(),
+        PathBuf::from(format!("{}/src/bin/cert.pem", manifest_dir)),
+        PathBuf::from(format!("{}/src/bin/key.pem", manifest_dir)),
+    );
 
     let server = Context::new(evt_loop.handle(), config).unwrap();
 
