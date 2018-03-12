@@ -8,6 +8,7 @@ use std::result;
 use std::fs::File;
 use std::io::Read;
 use std::fmt;
+use std::hash::{Hash, Hasher as StdHasher};
 
 use picoquic::{default_verify_certificate, ConnectionId, ConnectionType, VerifyCertificate};
 
@@ -34,6 +35,12 @@ pub struct PubKey {
     len: usize,
 }
 
+impl Hash for PubKey {
+    fn hash<H: StdHasher>(&self, state: &mut H) {
+        (&self.buf).hash(state);
+    }
+}
+
 fn serialize_pubkey_array<S>(buf: &[u8], serializer: S) -> result::Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -50,10 +57,7 @@ where
     let vec = Vec::<u8>::deserialize(deserializer)?;
 
     if vec.len() > openssl_sys::EVP_MAX_MD_SIZE as usize {
-        Err(D::Error::invalid_length(
-            vec.len(),
-            &"buf is too long",
-        ))
+        Err(D::Error::invalid_length(vec.len(), &"buf is too long"))
     } else {
         let mut buf = [0; openssl_sys::EVP_MAX_MD_SIZE as usize];
         buf[..vec.len()].copy_from_slice(&vec);
