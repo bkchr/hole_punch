@@ -40,6 +40,7 @@ mod authenticator;
 pub use error::Error;
 pub use context::{ConnectionId, Context, Stream, StreamHandle};
 pub use config::Config;
+pub use authenticator::{Authenticator, PubKey};
 
 pub mod plain {
     pub use strategies::Stream;
