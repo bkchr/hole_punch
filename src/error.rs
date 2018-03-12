@@ -14,6 +14,8 @@ use bincode;
 
 use openssl;
 
+use hex;
+
 pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Debug, Fail)]
@@ -28,8 +30,10 @@ pub enum Error {
     ChannelCanceled(#[cause] futures::Canceled),
     #[fail(display = "Error {}", _0)]
     Custom(failure::Error),
-    #[fail(display = "Certificate parse error {}", _0)]
+    #[fail(display = "Openssl error {}", _0)]
     Openssl(#[cause] openssl::error::ErrorStack),
+    #[fail(display = "Hex error {}", _0)]
+    Hex(#[cause] hex::FromHexError),
 }
 
 impl From<Error> for io::Error {
@@ -77,6 +81,12 @@ impl From<bincode::Error> for Error {
 impl From<openssl::error::ErrorStack> for Error {
     fn from(err: openssl::error::ErrorStack) -> Error {
         Error::Openssl(err.into())
+    }
+}
+
+impl From<hex::FromHexError> for Error {
+    fn from(err: hex::FromHexError) -> Error {
+        Error::Hex(err.into())
     }
 }
 

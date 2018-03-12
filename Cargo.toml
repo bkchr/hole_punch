@@ -13,7 +13,7 @@ futures = "0.1.17"
 tokio-io = "0.1"
 tokio-timer = { "git" = "https://github.com/bkchr/tokio-timer.git", "branch" = "interval_range" }
 tokio-serde-json = { git = "https://github.com/bkchr/tokio-serde-json.git", branch = "do_not_require_io_error" }
-itertools = "0.7.1"
+itertools = "0.7"
 state_machine_future = "^0.1.6"
 bincode = "0.8"
 bytes = "0.4"
@@ -26,3 +26,4 @@ objekt = "0.1"
 failure = "0.1"
 openssl = { git = "https://github.com/bkchr/rust-openssl.git", branch = "picoquic_rs" }
 openssl-sys = { git = "https://github.com/bkchr/rust-openssl.git", branch = "picoquic_rs" }
+hex = "0.3"

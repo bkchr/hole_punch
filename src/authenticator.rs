@@ -7,6 +7,7 @@ use std::path::PathBuf;
 use std::result;
 use std::fs::File;
 use std::io::Read;
+use std::fmt;
 
 use picoquic::{default_verify_certificate, ConnectionId, ConnectionType, VerifyCertificate};
 
@@ -18,6 +19,8 @@ use openssl::pkey::{PKey, Public};
 use openssl::hash::{Hasher, MessageDigest};
 
 use openssl_sys;
+
+use hex;
 
 /// A public key.
 #[derive(Copy, Clone)]
@@ -38,6 +41,12 @@ impl PartialEq for PubKey {
 
 impl Eq for PubKey {}
 
+impl fmt::Display for PubKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", hex::encode_upper(&self.buf[..self.len]))
+    }
+}
+
 impl PubKey {
     pub fn from_pkey(key: PKey<Public>) -> result::Result<PubKey, ErrorStack> {
         let mut hasher = Hasher::new(MessageDigest::sha256())?;
@@ -53,6 +62,12 @@ impl PubKey {
         }
 
         Ok(Self::from_checked_hashed(hashed))
+    }
+
+    pub fn from_hashed_hex(hashed: &str) -> Result<PubKey> {
+        let buf = hex::decode(hashed)?;
+
+        Self::from_hashed(&buf)
     }
 
     fn from_checked_hashed(hashed: &[u8]) -> PubKey {

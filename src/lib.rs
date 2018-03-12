@@ -5,6 +5,7 @@ extern crate either;
 extern crate failure;
 #[macro_use]
 extern crate futures;
+extern crate hex;
 extern crate itertools;
 #[macro_use]
 extern crate log;
