@@ -72,6 +72,10 @@ fn create_certificate_store(certs: Option<Vec<PathBuf>>) -> Result<Option<X509St
         None => return Ok(None),
     };
 
+    if certs.is_empty() {
+        bail!("Certificates list must not be empty!");
+    }
+
     let mut builder = X509StoreBuilder::new()?;
 
     for cert in certs {
