@@ -23,22 +23,14 @@ use futures::Async::{NotReady, Ready};
 use futures::stream::{FuturesUnordered, StreamFuture};
 
 #[derive(Deserialize, Serialize, Clone)]
-enum CarrierProtocol {
-    Register {
-        name: String,
-    },
-    Registered,
-    RequestDevice {
-        name: String,
-        connection_id: ConnectionId,
-    },
-    DeviceNotFound,
-    AlreadyConnected,
-}
+enum Protocol {
+    SendMessage(String),
+    ReceiveMessage(String),
+    }
 
 struct CarrierConnection {
-    stream: Stream<CarrierProtocol>,
-    context: Context<CarrierProtocol>,
+    stream: Stream<Protocol>,
+    context: Context<Protocol>,
     name: String,
     request_name: String,
     handle: Handle,
@@ -46,7 +38,7 @@ struct CarrierConnection {
 
 impl CarrierConnection {
     fn register(&mut self) {
-        self.stream.start_send(CarrierProtocol::Register {
+        self.stream.start_send(Protocol::Register {
             name: self.name.clone(),
         });
         self.stream.poll_complete();
@@ -78,7 +70,7 @@ impl Future for CarrierConnection {
             };
 
             match msg {
-                CarrierProtocol::Registered => {
+                Protocol::Registered => {
                     println!("REGISTERED");
                     println!("Requesting connection to: {}", self.request_name);
 
@@ -89,7 +81,7 @@ impl Future for CarrierConnection {
                             .create_connection_to_peer(
                                 connection_id,
                                 &mut self.stream,
-                                CarrierProtocol::RequestDevice {
+                                Protocol::RequestDevice {
                                     name: self.request_name.clone(),
                                     connection_id,
                                 },
@@ -102,7 +94,7 @@ impl Future for CarrierConnection {
                             .map_err(|e| println!("{:?}", e)),
                     );
                 }
-                CarrierProtocol::DeviceNotFound => {
+                Protocol::DeviceNotFound => {
                     panic!("device not found");
                 }
                 _ => {}
@@ -112,10 +104,8 @@ impl Future for CarrierConnection {
 }
 
 fn main() {
-    env_logger::init();
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
 
-    // let server_addr = ([176, 9, 73, 99], 22222).into();
     let server_addr: SocketAddr = ([127, 0, 0, 1], 22222).into();
 
     let mut evt_loop = Core::new().unwrap();
