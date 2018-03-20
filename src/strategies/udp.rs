@@ -26,20 +26,11 @@ impl StrategyWrapper {
         handle: Handle,
         authenticator: Option<&Authenticator>,
     ) -> Result<StrategyWrapper> {
-        let mut config = picoquic::Config::server(
-            hconfig
-                .cert_file
-                .to_str()
-                .expect("cert filename contains illegal characters"),
-            hconfig
-                .key_file
-                .to_str()
-                .expect("key filename contains illegal characters"),
-        );
+        let mut config = picoquic::Config::clone_from(&hconfig.quic_config);
 
         config.enable_keep_alive(Duration::from_secs(15));
 
-        if hconfig.trusted_client_certificates.is_some() {
+        if hconfig.client_ca_certificates.is_some() {
             config.enable_client_authentication();
         }
 
@@ -47,7 +38,7 @@ impl StrategyWrapper {
             config.set_verify_certificate_handler(auth.clone());
         }
 
-        let context = picoquic::Context::new(&hconfig.udp_listen_address, &handle, config)?;
+        let context = picoquic::Context::new(&hconfig.quic_listen_address, &handle, config)?;
 
         Ok(StrategyWrapper { context })
     }

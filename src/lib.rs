@@ -42,6 +42,7 @@ mod pubkey;
 pub use error::Error;
 pub use context::{ConnectionId, Context, Stream, StreamHandle};
 pub use config::Config;
+pub use picoquic::FileFormat;
 pub use authenticator::Authenticator;
 pub use pubkey::PubKey;
 

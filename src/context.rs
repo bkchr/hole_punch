@@ -102,16 +102,15 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(handle: Handle, config: Config) -> Result<Context<P>> {
-        let authenticator = if config.trusted_client_certificates.is_some()
-            || config.trusted_server_certificates.is_some()
-        {
-            Some(Authenticator::new(
-                config.trusted_server_certificates.as_ref().cloned(),
-                config.trusted_client_certificates.as_ref().cloned(),
-            )?)
-        } else {
-            None
-        };
+        let authenticator =
+            if config.client_ca_certificates.is_some() || config.server_ca_certificates.is_some() {
+                Some(Authenticator::new(
+                    config.server_ca_certificates.as_ref().cloned(),
+                    config.client_ca_certificates.as_ref().cloned(),
+                )?)
+            } else {
+                None
+            };
 
         let strats = strategies::init(handle.clone(), &config, authenticator.as_ref())?;
 
