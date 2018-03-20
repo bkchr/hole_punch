@@ -1,11 +1,16 @@
 import <nixpkgs/nixos/tests/make-test.nix> ({ pkgs, lib, ... }:
 let
-  server_bin = pkgs.stdenv.mkDerivation {
-    name = "server";
+  package = name: bin: pkgs.stdenv.mkDerivation {
+    name = name;
     phases = [ "buildPhase" ];
-    server = ./server.sh;
-    buildPhase = "mkdir -p $out/bin && cp $server $out/bin/hole_punch_server";
+    cert = ./runners/certs/cert.pem;
+    key = ./runners/certs/key.pem;
+    buildPhase = "mkdir -p $out/bin && cp $bin $out/bin/$name && cp $cert $out/bin/ && cp $key $out/bin";
   };
+
+  server = package "server" ./runners/target/debug/server;
+  peer = package "peer" ./runners/target/debug/peer;
+  client = package "client" ./runners/target/debug/client;
 in
   {
     name = "P2POverInternet";
@@ -17,6 +22,7 @@ in
             networking.firewall.allowPing = true;
             networking.defaultGateway =
               (pkgs.lib.head nodes.client_router.config.networking.interfaces.eth2.ip4).address;
+            environment.systemPackages = [ client ];
           };
 
         peer =
@@ -25,6 +31,7 @@ in
             networking.firewall.allowPing = true;
             networking.defaultGateway =
               (pkgs.lib.head nodes.peer_router.config.networking.interfaces.eth2.ip4).address;
+            environment.systemPackages = [ peer ];
           };
 
         client_router =
@@ -51,20 +58,18 @@ in
           { config, pkgs, ... }: {
             virtualisation.vlans = [ 2 ];
             networking.firewall.enable = false;
-            environment.systemPackages = [ server_bin ];
+            environment.systemPackages = [ server ];
           };
       };
 
     testScript =
       ''
-        #startAll;
         $server->start;
         #$peer_router->start;
         #$client_router->start;
 
-        # The router should have access to the server.
+        # The server needs a running network.
         $server->waitForUnit("network.target");
-        $server->succeed("hole_punch_server");
 
         # Make sure that the client router reaches the server
         $client_router->waitForUnit("network.target");
@@ -95,6 +100,14 @@ in
 
         # The client should not be able to ping the peer
         $client->fail("ping -c 1 peer >&2");
+
+        $server->execute("server --listen_port 22222&")
+        sleep(5);
+
+        $peer->execute("peer --server_address server:22222&")
+        sleep(5);
+
+        $client->succeed("client --server_address server:22222 --expect_p2p_connection")
       '';
   })
 

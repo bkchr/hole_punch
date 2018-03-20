@@ -490,7 +490,7 @@ where
     state: ConnectionState,
     handle: Handle,
     connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
-    _marker: PhantomData<P>,
+    is_p2p: bool,
 }
 
 impl<P> Connection<P>
@@ -511,9 +511,17 @@ where
                 auth_send: Some(send),
             },
             handle: handle.clone(),
-            _marker: Default::default(),
             connect_callback,
+            is_p2p: false,
         }
+    }
+
+    pub fn set_p2p(&mut self, p2p: bool) {
+        self.is_p2p = p2p;
+    }
+
+    pub fn is_p2p(&self) -> bool {
+        self.is_p2p
     }
 
     pub fn new_stream(&mut self) -> NewStreamFuture<P> {
@@ -521,6 +529,7 @@ where
             self.con.new_stream(),
             self.get_new_stream_handle(),
             self.connect_callback.clone(),
+            self.is_p2p,
             &self.handle,
         )
     }
@@ -529,11 +538,12 @@ where
         NewStreamHandle::new(
             self.con.get_new_stream_handle(),
             self.connect_callback.clone(),
+            self.is_p2p,
             &self.handle,
         )
     }
 
-    pub(crate) fn peer_addr(&self) -> SocketAddr {
+    pub fn peer_addr(&self) -> SocketAddr {
         self.con.peer_addr()
     }
 }
@@ -558,6 +568,7 @@ where
                                     &self.handle,
                                     self.get_new_stream_handle(),
                                     self.connect_callback.clone(),
+                                    self.is_p2p,
                                 )
                             })
                         })
@@ -595,9 +606,11 @@ where
                                     NewStreamHandle::new(
                                         self.con.get_new_stream_handle(),
                                         self.connect_callback.clone(),
+                                        self.is_p2p,
                                         &self.handle,
                                     ),
                                     self.connect_callback.clone(),
+                                    self.is_p2p,
                                 ))));
                             }
                         }
@@ -616,6 +629,7 @@ where
 pub struct NewStreamHandle<P> {
     new_stream_handle: strategies::NewStreamHandle,
     connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+    is_p2p_con: bool,
     handle: Handle,
 }
 
@@ -626,11 +640,13 @@ where
     fn new(
         new_stream_handle: strategies::NewStreamHandle,
         connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        is_p2p_con: bool,
         handle: &Handle,
     ) -> NewStreamHandle<P> {
         NewStreamHandle {
             new_stream_handle,
             connect_callback,
+            is_p2p_con,
             handle: handle.clone(),
         }
     }
@@ -640,6 +656,7 @@ where
             self.new_stream_handle.new_stream(),
             self.clone(),
             self.connect_callback.clone(),
+            self.is_p2p_con,
             &self.handle,
         )
     }
@@ -650,7 +667,7 @@ pub struct NewStreamFuture<P> {
     new_stream_handle: NewStreamHandle<P>,
     connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
     handle: Handle,
-    _marker: PhantomData<P>,
+    is_p2p_con: bool,
 }
 
 impl<P> NewStreamFuture<P> {
@@ -658,14 +675,15 @@ impl<P> NewStreamFuture<P> {
         new_stream: strategies::NewStreamFuture,
         new_stream_handle: NewStreamHandle<P>,
         connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        is_p2p_con: bool,
         handle: &Handle,
     ) -> NewStreamFuture<P> {
         NewStreamFuture {
             new_stream,
             new_stream_handle,
             connect_callback,
+            is_p2p_con,
             handle: handle.clone(),
-            _marker: Default::default(),
         }
     }
 }
@@ -686,6 +704,7 @@ where
                     &self.handle,
                     self.new_stream_handle.clone(),
                     self.connect_callback.clone(),
+                    self.is_p2p_con,
                 )
             })
         })
@@ -728,6 +747,7 @@ where
     address_info_requests: Vec<connection_request::ConnectionRequestSlaveHandle>,
     handle: Handle,
     connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+    is_p2p_con: bool,
 }
 
 impl<P> Stream<P>
@@ -740,6 +760,7 @@ where
         handle: &Handle,
         new_stream_handle: NewStreamHandle<P>,
         connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        is_p2p_con: bool,
     ) -> Stream<P> {
         let state = match auth_con {
             Some(auth) => StreamState::UnAuthenticated(auth),
@@ -759,6 +780,7 @@ where
             connect_callback,
             stream_handle,
             stream_handle_recv,
+            is_p2p_con,
         }
     }
 
@@ -881,6 +903,10 @@ where
 
     pub fn into_plain(self) -> strategies::Stream {
         self.stream.into_inner().into_inner().into_inner()
+    }
+
+    pub fn is_p2p(&self) -> bool {
+        self.is_p2p_con
     }
 }
 

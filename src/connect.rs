@@ -287,10 +287,10 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            let con = self.wait_for_con.poll()?;
+            let mut con = self.wait_for_con.poll()?;
 
             match con {
-                Ready(Some(con)) => self.wait_for_stream.push(WaitForNewStream::new(con)),
+                Ready(Some(mut con)) => { con.set_p2p(true); self.wait_for_stream.push(WaitForNewStream::new(con)); },
                 _ => break,
             }
         }

@@ -5,11 +5,11 @@ authors = ["Bastian Köcher <git@kchr.de>"]
 
 [dependencies]
 pnet_datalink = "0.20.0"
-tokio-core = "0.1.10"
+tokio-core = "0.1"
 serde_json = "1.0"
 serde_derive = "1.0"
 serde = "1.0"
-futures = "0.1.17"
+futures = "0.1"
 tokio-io = "0.1"
 tokio-timer = { "git" = "https://github.com/bkchr/tokio-timer.git", "branch" = "interval_range" }
 tokio-serde-json = { git = "https://github.com/bkchr/tokio-serde-json.git", branch = "do_not_require_io_error" }
