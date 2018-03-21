@@ -13,6 +13,7 @@ use hole_punch::{Config, Context, Error, Stream};
 use tokio_core::reactor::Core;
 
 use std::net::ToSocketAddrs;
+use std::env;
 
 use futures::{Future, Poll, Stream as FStream};
 use futures::Async::Ready;
@@ -63,9 +64,12 @@ fn main() {
 
     let mut evt_loop = Core::new().unwrap();
 
+    let mut bin_path = env::current_exe().unwrap();
+    bin_path.pop();
+
     let mut config = Config::new();
-    config.set_cert_chain_filename("./cert.pem");
-    config.set_key_filename("./key.pem");
+    config.set_cert_chain_filename(bin_path.join("cert.pem"));
+    config.set_key_filename(bin_path.join("key.pem"));
 
     let mut context = Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
     let mut server_con = evt_loop

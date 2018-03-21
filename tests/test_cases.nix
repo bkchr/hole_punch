@@ -5,7 +5,8 @@ let
     phases = [ "buildPhase" ];
     cert = ./runners/certs/cert.pem;
     key = ./runners/certs/key.pem;
-    buildPhase = "mkdir -p $out/bin && cp $bin $out/bin/$name && cp $cert $out/bin/ && cp $key $out/bin";
+    inherit bin;
+    buildPhase = "mkdir -p $out/bin && cp $bin $out/bin/$name && cp $cert $out/bin/cert.pem && cp $key $out/bin/key.pem";
   };
 
   server = package "server" ./runners/target/debug/server;
@@ -101,13 +102,13 @@ in
         # The client should not be able to ping the peer
         $client->fail("ping -c 1 peer >&2");
 
-        $server->execute("server --listen_port 22222&")
+        $server->execute("server --listen_port 22222&");
         sleep(5);
 
-        $peer->execute("peer --server_address server:22222&")
+        $peer->execute("peer --server_address server:22222&");
         sleep(5);
 
-        $client->succeed("client --server_address server:22222 --expect_p2p_connection")
+        $client->succeed("client --server_address server:22222 --expect_p2p_connection");
       '';
   })
 

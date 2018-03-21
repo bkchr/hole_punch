@@ -10,13 +10,14 @@ use runners::protocol::Protocol;
 
 use hole_punch::{Config, Context, Error, Stream};
 
-use tokio_core::reactor::{Core};
+use tokio_core::reactor::Core;
 
-use std::net::{ToSocketAddrs};
+use std::net::ToSocketAddrs;
+use std::env;
+
 use futures::future::Either;
-
 use futures::{Future, Poll, Stream as FStream};
-use futures::Async::{Ready};
+use futures::Async::Ready;
 
 use structopt::StructOpt;
 
@@ -73,9 +74,12 @@ fn main() {
 
     let mut evt_loop = Core::new().unwrap();
 
+    let mut bin_path = env::current_exe().unwrap();
+    bin_path.pop();
+
     let mut config = Config::new();
-    config.set_cert_chain_filename("./cert.pem");
-    config.set_key_filename("./key.pem");
+    config.set_cert_chain_filename(bin_path.join("cert.pem"));
+    config.set_key_filename(bin_path.join("key.pem"));
 
     let mut context = Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
     let mut server_con = evt_loop
@@ -84,11 +88,13 @@ fn main() {
     server_con.upgrade_to_authenticated();
 
     let connection_id = context.generate_connection_id();
-    let peer_con_req = context.create_connection_to_peer(
-        connection_id,
-        &mut server_con,
-        Protocol::RequestPeer("peer".into(), connection_id),
-    ).expect("Create connection to peer future");
+    let peer_con_req = context
+        .create_connection_to_peer(
+            connection_id,
+            &mut server_con,
+            Protocol::RequestPeer("peer".into(), connection_id),
+        )
+        .expect("Create connection to peer future");
 
     // TODO: Remove this complicated thing
     // TODO: Handle PeerNotFound
@@ -97,7 +103,8 @@ fn main() {
         .map_err(|e| match e {
             Either::A((e, _)) => panic!(e),
             Either::B((e, _)) => panic!(e.0),
-        }).unwrap()
+        })
+        .unwrap()
     {
         Either::A((con, _)) => con,
         Either::B(_) => panic!("connection to server closed while waiting for connection to peer"),

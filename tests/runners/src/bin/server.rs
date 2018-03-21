@@ -15,6 +15,7 @@ use tokio_core::reactor::Core;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::cell::RefCell;
+use std::env;
 
 use futures::{Future, Poll, Stream as FStream};
 use futures::Async::Ready;
@@ -90,9 +91,13 @@ fn main() {
         devices: HashMap::new(),
     }));
 
+    let mut bin_path = env::current_exe().unwrap();
+    bin_path.pop();
+
     let mut config = Config::new();
-    config.set_cert_chain_filename("./cert.pem");
-    config.set_key_filename("./key.pem");
+    println!("PATH: {:?} exists {}", bin_path.join("cert.pem"), bin_path.join("cert.pem").exists());
+    config.set_cert_chain_filename(bin_path.join("cert.pem"));
+    config.set_key_filename(bin_path.join("key.pem"));
     config.set_quic_listen_port(options.listen_port);
 
     let server = Context::new(evt_loop.handle(), config).unwrap();
