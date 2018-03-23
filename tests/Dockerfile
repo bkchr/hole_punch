@@ -8,7 +8,7 @@ RUN nix-env -iA \
  nixpkgs.cargo 
 
 # We can not install clang and gcc into the same env
-RUN nix-shell -p llvmPackages.clang-unwrapped --command ""
+RUN nix-shell -p clang llvmPackages.clang-unwrapped --command ""
 
 # Run some simple test, to predownload most of the required packages
 RUN nix-build "<nixpkgs/nixos/tests/containers-tmpfs.nix>"

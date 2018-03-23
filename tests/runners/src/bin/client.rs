@@ -4,6 +4,7 @@ extern crate hole_punch;
 extern crate runners;
 #[macro_use]
 extern crate structopt;
+extern crate timebomb;
 extern crate tokio_core;
 
 use runners::protocol::Protocol;
@@ -64,59 +65,79 @@ struct Options {
 }
 
 fn main() {
-    let options = Options::from_args();
-    let server_addr = options
-        .server_address
-        .to_socket_addrs()
-        .expect("Parses server address")
-        .next()
-        .expect("Resolves server address to ip address");
+    timebomb::timeout_ms(
+        || {
+            let options = Options::from_args();
+            let server_addr = options
+                .server_address
+                .to_socket_addrs()
+                .expect("Parses server address")
+                .next()
+                .expect("Resolves server address to ip address");
 
-    let mut evt_loop = Core::new().unwrap();
+            let mut evt_loop = Core::new().unwrap();
 
-    let mut bin_path = env::current_exe().unwrap();
-    bin_path.pop();
+            let mut bin_path = env::current_exe().unwrap();
+            bin_path.pop();
 
-    let mut config = Config::new();
-    config.set_cert_chain_filename(bin_path.join("cert.pem"));
-    config.set_key_filename(bin_path.join("key.pem"));
+            let mut config = Config::new();
+            config.set_cert_chain_filename(bin_path.join("cert.pem"));
+            config.set_key_filename(bin_path.join("key.pem"));
 
-    let mut context = Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
-    let mut server_con = evt_loop
-        .run(context.create_connection_to_server(&server_addr))
-        .expect("Create connection to server");
-    server_con.upgrade_to_authenticated();
+            let mut context =
+                Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
 
-    let connection_id = context.generate_connection_id();
-    let peer_con_req = context
-        .create_connection_to_peer(
-            connection_id,
-            &mut server_con,
-            Protocol::RequestPeer("peer".into(), connection_id),
-        )
-        .expect("Create connection to peer future");
+            println!("Connecting to server: {}", server_addr);
+            let mut server_con = evt_loop
+                .run(context.create_connection_to_server(&server_addr))
+                .expect("Create connection to server");
+            server_con.upgrade_to_authenticated();
+            server_con.send_and_poll(Protocol::Register("client".into()));
+            println!("Connected");
 
-    // TODO: Remove this complicated thing
-    // TODO: Handle PeerNotFound
-    let peer_con = match evt_loop
-        .run(peer_con_req.select2(&mut context.into_future()))
-        .map_err(|e| match e {
-            Either::A((e, _)) => panic!(e),
-            Either::B((e, _)) => panic!(e.0),
-        })
-        .unwrap()
-    {
-        Either::A((con, _)) => con,
-        Either::B(_) => panic!("connection to server closed while waiting for connection to peer"),
-    };
+            let connection_id = context.generate_connection_id();
+            let peer_con_req = context
+                .create_connection_to_peer(
+                    connection_id,
+                    &mut server_con,
+                    Protocol::RequestPeer("peer".into(), connection_id),
+                )
+                .expect("Create connection to peer future");
 
-    // Check that it is a p2p connection, if that was requested
-    if options.expect_p2p_connection {
-        assert!(!peer_con.is_p2p());
-    }
+            evt_loop.handle().spawn(
+                server_con
+                    .into_future()
+                    .map_err(|e| panic!("{:?}", e.0))
+                    .map(|v| panic!("{:?}", v.0)),
+            );
 
-    // Check that we actually can send messages
-    evt_loop
-        .run(SendAndRecvMessage::new(peer_con, "herp and derp".into()))
-        .expect("Send and receives message");
+            // TODO: Remove this complicated thing
+            // TODO: Handle PeerNotFound
+            let ( peer_con, context ) = match evt_loop
+                .run(peer_con_req.select2(context.into_future()))
+                .map_err(|e| match e {
+                    Either::A((e, _)) => panic!(e),
+                    Either::B((e, _)) => panic!(e.0),
+                })
+                .unwrap()
+            {
+                Either::A((con, context)) => ( con, context ),
+                Either::B(_) => {
+                    panic!("connection to server closed while waiting for connection to peer")
+                }
+            };
+
+            // Check that it is a p2p connection, if that was requested
+            if options.expect_p2p_connection {
+                assert!(peer_con.is_p2p());
+            }
+
+            println!("PEER CONNECTED");
+            // Check that we actually can send messages
+            evt_loop
+                .run(SendAndRecvMessage::new(peer_con, "herp and derp".into()))
+                .expect("Send and receives message");
+        },
+        30 * 1000,
+    );
 }

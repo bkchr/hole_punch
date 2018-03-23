@@ -66,8 +66,8 @@ in
     testScript =
       ''
         $server->start;
-        #$peer_router->start;
-        #$client_router->start;
+        $peer_router->start;
+        $client_router->start;
 
         # The server needs a running network.
         $server->waitForUnit("network.target");

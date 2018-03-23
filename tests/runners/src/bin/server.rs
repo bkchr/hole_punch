@@ -95,15 +95,16 @@ fn main() {
     bin_path.pop();
 
     let mut config = Config::new();
-    println!("PATH: {:?} exists {}", bin_path.join("cert.pem"), bin_path.join("cert.pem").exists());
     config.set_cert_chain_filename(bin_path.join("cert.pem"));
     config.set_key_filename(bin_path.join("key.pem"));
     config.set_quic_listen_port(options.listen_port);
 
     let server = Context::new(evt_loop.handle(), config).unwrap();
+    println!("Server up and running");
 
     let handle = evt_loop.handle();
     let server = server.for_each(|stream| {
+        println!("New connection");
         handle.spawn(
             Connection {
                 stream: stream,

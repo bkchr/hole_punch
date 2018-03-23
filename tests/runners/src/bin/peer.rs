@@ -35,14 +35,19 @@ impl Future for RecvAndSendMessage {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let msg = try_ready!(self.con.poll()).expect("Receive one message");
+        loop {
+            let msg = match try_ready!(self.con.poll()) {
+                Some(msg) => msg,
+                None => {println!("END"); return Ok(Ready(())) },
+            };
 
-        match msg {
-            Protocol::SendMessage(data) => {
-                self.con.send_and_poll(Protocol::ReceiveMessage(data))?;
-                return Ok(Ready(()));
+            match msg {
+                Protocol::SendMessage(data) => {
+                    println!("Received: {}", data);
+                    self.con.send_and_poll(Protocol::ReceiveMessage(data))?;
+                }
+                _ => panic!("Received unknown message"),
             }
-            _ => panic!("Received unknown message"),
         }
     }
 }
@@ -72,6 +77,8 @@ fn main() {
     config.set_key_filename(bin_path.join("key.pem"));
 
     let mut context = Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
+
+    println!("Connecting to server: {}", server_addr);
     let mut server_con = evt_loop
         .run(context.create_connection_to_server(&server_addr))
         .expect("Create connection to server");
@@ -79,17 +86,19 @@ fn main() {
     server_con
         .send_and_poll(Protocol::Register("peer".into()))
         .expect("Registers at server");
+    println!("Connected");
 
     evt_loop.handle().spawn(
         server_con
             .into_future()
             .map_err(|e| panic!(e.0))
-            .map(|_| ()),
+            .map(|v| panic!("{:?}", v.0)),
     );
 
     let handle = evt_loop.handle();
     evt_loop
         .run(context.for_each(|c| {
+            eprintln!("New peer connected");
             handle.spawn(RecvAndSendMessage::new(c).map_err(|e| panic!(e)));
             Ok(())
         }))
