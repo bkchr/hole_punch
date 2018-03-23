@@ -7,6 +7,7 @@ use std::result;
 use openssl::hash::{Hasher, MessageDigest};
 use openssl::pkey::{PKey, Public};
 use openssl::error::ErrorStack;
+use openssl::x509::X509;
 
 use openssl_sys;
 
@@ -93,6 +94,12 @@ impl PubKey {
         let buf = hex::decode(hashed)?;
 
         Self::from_hashed(&buf)
+    }
+
+    pub fn from_x509_pem(cert: &[u8]) -> Result<PubKey> {
+        let cert = X509::from_pem(cert)?;
+
+        Ok(Self::from_pkey(cert.public_key()?)?)
     }
 
     fn from_checked_hashed(hashed: &[u8]) -> PubKey {
