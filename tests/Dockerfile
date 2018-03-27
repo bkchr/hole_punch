@@ -1,14 +1,13 @@
-FROM lnl7/nix:1.11.16
+FROM ubuntu:16.04
 
-RUN nix-env -iA \
- nixpkgs.gcc \
- nixpkgs.openssl \
- nixpkgs.pkgconfig \
- nixpkgs.rustc \
- nixpkgs.cargo 
+RUN apt-get update -y && apt-get install -y libssl-dev clang libclang-dev gcc qemu
 
-# We can not install clang and gcc into the same env
-RUN nix-shell -p clang llvmPackages.clang-unwrapped --command ""
+RUN curl https://sh.rustup.rs -sSf | sh
 
-# Run some simple test, to predownload most of the required packages
-RUN nix-build "<nixpkgs/nixos/tests/containers-tmpfs.nix>"
+RUN mkdir -p /root/.ssh
+
+COPY vm/ssh.key /root/.ssh/id_rsa
+
+RUN mkdir -p /vm_image/
+
+COPY hole_punch_vm.qcow2 /vm_image/

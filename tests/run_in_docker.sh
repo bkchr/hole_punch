@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
 set -e
 
-pushd runners
-nix-shell -E 'with import <nixpkgs> { }; pkgs.mkShell { buildInputs = [ pkgconfig openssl cargo clang ]; LIBCLANG_PATH="${llvmPackages.clang-unwrapped}/lib"; shellHook = "export NIX_CXXSTDLIB_LINK=\"\""; }' --command "cargo build --all"
-popd
-
-nix-build test_cases.nix
+qemu-kvm -drive file=./hole_punch_vm.qcow2 -fsdev local,security_model=passthrough,id=fsdev0,path=$(pwd)/.. -device virtio-9p-pci,id=fs0,fsdev=fsdev0,mount_tag=hostshare -m 1024M -net user,hostfwd=tcp::2222-:22 -net nic -vga none -nographic > test.log < /dev/null &
