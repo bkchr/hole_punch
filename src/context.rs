@@ -382,7 +382,9 @@ where
                         Some(cb) => {
                             cb.send(stream);
                         }
-                        None => {}
+                        None => {
+                            return Ok(Ready(Some(stream)));
+                        }
                     },
                     _ => unimplemented!(),
                 },
