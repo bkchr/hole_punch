@@ -14,14 +14,13 @@ LAN like topology
   client      peer
 """
 
-from mininet.topo import Topo
 from mininet.nodelib import NAT
-from mininet.log import setLogLevel
 
+from topology_base import TopologyBase
 
-class Topology(Topo):
+class Topology(TopologyBase):
     def __init__(self, **opts):
-        Topo.__init__(self, **opts)
+        TopologyBase.__init__(self, **opts)
 
         # set up server switch
         server_switch = self.addSwitch('s0')

@@ -14,12 +14,16 @@ def run_tests(topologies, extra_client_args):
         print("\n---------------------------------------\n")
         print("Running topology: " + topology + "\n")
 
+        # Preload the `topology`_base file
+        imp.load_source("topology_base", "topologies/topology_base.py")
         # Load the topology module
         mod = imp.load_source(topology, "topologies/" + topology + ".py")
         topo = mod.Topology()
 
         # Create the network
         net = Mininet(topo=topo)
+        topo.setup_after_build(net)
+
         net.start()
 
         server = net.get("server")
