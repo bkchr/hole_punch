@@ -18,6 +18,7 @@ from mininet.topo import Topo
 from mininet.nodelib import NAT
 from mininet.log import setLogLevel
 
+
 class Topology(Topo):
     def __init__(self, **opts):
         Topo.__init__(self, **opts)
@@ -32,11 +33,15 @@ class Topology(Topo):
         local_if = 'nat-eth1'
         local_ip = '192.168.0.1'
         local_subnet = '192.168.0.0/24'
-        nat_params = { 'ip' : '%s/24' % local_ip }
+        nat_params = {'ip': '%s/24' % local_ip}
 
         # add NAT to topology
-        nat = self.addNode('nat', cls=NAT, subnet=local_subnet,
-                           inetIntf=inet_if, localIntf=local_if)
+        nat = self.addNode(
+            'nat',
+            cls=NAT,
+            subnet=local_subnet,
+            inetIntf=inet_if,
+            localIntf=local_if)
         switch = self.addSwitch('s1')
 
         # connect NAT to inet and local switches
@@ -48,7 +53,6 @@ class Topology(Topo):
 
     def add_host(self, name, switch, ip, local_ip):
         # add host and connect to local switch
-        host = self.addHost(name,
-                            ip='192.168.0.%d/24' % ip,
-                            defaultRoute='via %s' % local_ip)
+        host = self.addHost(
+            name, ip='192.168.0.%d/24' % ip, defaultRoute='via %s' % local_ip)
         self.addLink(host, switch)

@@ -61,6 +61,9 @@ struct Options {
 
     #[structopt(long = "expect_p2p_connection")]
     expect_p2p_connection: bool,
+
+    #[structopt(long = "expect_relay_connection")]
+    expect_relay_connection: bool,
 }
 
 fn main() {
@@ -126,9 +129,14 @@ fn main() {
                 }
             };
 
-            // Check that it is a p2p connection, if that was requested
+            // Check that it is a p2p connection, if that was expected.
             if options.expect_p2p_connection {
                 assert!(peer_con.is_p2p());
+            }
+
+            // Check that the server relays this connection, if that was expected.
+            if options.expect_relay_connection {
+                assert!(!peer_con.is_p2p());
             }
 
             println!("PEER CONNECTED");

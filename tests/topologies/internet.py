@@ -17,6 +17,7 @@ Internet like topology
 from mininet.topo import Topo
 from mininet.nodelib import NAT
 
+
 class Topology(Topo):
     def __init__(self, **opts):
         Topo.__init__(self, **opts)
@@ -35,11 +36,15 @@ class Topology(Topo):
         local_if = 'nat%d-eth1' % subnet
         local_ip = '192.168.%d.1' % subnet
         local_subnet = '192.168.%d.0/24' % subnet
-        nat_params = { 'ip' : '%s/24' % local_ip }
+        nat_params = {'ip': '%s/24' % local_ip}
 
         # add NAT to topology
-        nat = self.addNode('nat%d' % subnet, cls=NAT, subnet=local_subnet,
-                           inetIntf=inet_if, localIntf=local_if)
+        nat = self.addNode(
+            'nat%d' % subnet,
+            cls=NAT,
+            subnet=local_subnet,
+            inetIntf=inet_if,
+            localIntf=local_if)
         switch = self.addSwitch('s%d' % subnet)
 
         # connect NAT to inet and local switches
@@ -47,7 +52,8 @@ class Topology(Topo):
         self.addLink(nat, switch, intfName1=local_if, params1=nat_params)
 
         # add host and connect to local switch
-        host = self.addHost(name,
-                            ip='192.168.%d.100/24' % subnet,
-                            defaultRoute='via %s' % local_ip)
+        host = self.addHost(
+            name,
+            ip='192.168.%d.100/24' % subnet,
+            defaultRoute='via %s' % local_ip)
         self.addLink(host, switch)

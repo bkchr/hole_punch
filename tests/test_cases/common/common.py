@@ -4,6 +4,7 @@ import imp
 import sys
 import time
 
+
 # Run the given `topologies`.
 # This function will setup each topology, start `server` and `peer` and
 # execute `client` with the given `extra_client_args`.
@@ -31,8 +32,10 @@ def run_tests(topologies, extra_client_args):
         peer.cmd("./bin/peer --server_address " + server_ip + ":22222&")
 
         # Give the peer time to connect
-        time.sleep(1)
-        client_output = client.cmd("RUST_BACKTRACE=full ./bin/client --server_address " + server_ip + ":22222 " + extra_client_args)
+        time.sleep(2)
+        client_output = client.cmd(
+            "RUST_BACKTRACE=full ./bin/client --server_address " + server_ip +
+            ":22222 " + extra_client_args)
 
         print("Client exited with:\n" + client_output)
         if not "Client finished successfully!" in client_output:
