@@ -55,7 +55,7 @@ impl Config {
     /// Sets the private key.
     /// This option will overwrite `set_key_filename`.
     pub fn set_key(&mut self, key: Vec<u8>, format: FileFormat) {
-        self.set_key(key, format);
+        self.quic_config.set_key(key, format);
     }
 
     /// Sets a list of client certificate authorities certificates (in PEM format). These
