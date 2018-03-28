@@ -7,7 +7,7 @@ from common.common import run_tests
 # between the client and the peer.
 
 # The topologies we want to test
-topologies = [ "internet" ]
+topologies = [ "internet", "lan_network" ]
 
 run_tests(topologies, "--expect_p2p_connection")
 

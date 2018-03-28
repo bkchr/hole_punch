@@ -1,21 +1,22 @@
 """
-Internet like topology
+LAN like topology
 
         server
-           |
-           s0
-           |
-    ----------------
-    |              |
-   nat1           nat2
-    |              |
-   s1              s2
-    |              |
-  client          peer
+          |
+         s0
+          |
+         nat
+          |
+         s1
+          |
+    -------------
+    |           |
+  client      peer
 """
 
 from mininet.topo import Topo
 from mininet.nodelib import NAT
+from mininet.log import setLogLevel
 
 class Topology(Topo):
     def __init__(self, **opts):
@@ -27,27 +28,27 @@ class Topology(Topo):
         server = self.addHost('server')
         self.addLink(server_switch, server)
 
-        self.add_host("client", server_switch, 1)
-        self.add_host("peer", server_switch, 2)
-
-    def add_host(self, name, server_switch, subnet):
-        inet_if = 'nat%d-eth0' % subnet
-        local_if = 'nat%d-eth1' % subnet
-        local_ip = '192.168.%d.1' % subnet
-        local_subnet = '192.168.%d.0/24' % subnet
+        inet_if = 'nat-eth0'
+        local_if = 'nat-eth1'
+        local_ip = '192.168.0.1'
+        local_subnet = '192.168.0.0/24'
         nat_params = { 'ip' : '%s/24' % local_ip }
 
         # add NAT to topology
-        nat = self.addNode('nat%d' % subnet, cls=NAT, subnet=local_subnet,
+        nat = self.addNode('nat', cls=NAT, subnet=local_subnet,
                            inetIntf=inet_if, localIntf=local_if)
-        switch = self.addSwitch('s%d' % subnet)
+        switch = self.addSwitch('s1')
 
         # connect NAT to inet and local switches
         self.addLink(nat, server_switch, intfName1=inet_if)
         self.addLink(nat, switch, intfName1=local_if, params1=nat_params)
 
+        self.add_host("client", switch, 100, local_ip)
+        self.add_host("peer", switch, 101, local_ip)
+
+    def add_host(self, name, switch, ip, local_ip):
         # add host and connect to local switch
         host = self.addHost(name,
-                            ip='192.168.%d.100/24' % subnet,
+                            ip='192.168.0.%d/24' % ip,
                             defaultRoute='via %s' % local_ip)
         self.addLink(host, switch)
