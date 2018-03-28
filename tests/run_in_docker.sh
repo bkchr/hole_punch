@@ -26,8 +26,12 @@ echo "Qemu ready"
 # mount the current directory into the vm
 $ssh_cmd "sudo mkdir -p /share && sudo mount -t 9p -o trans=virtio,version=9p2000.L,rw hostshare /share"
 
-for test_case in test_cases/*.py; do
-  echo "Executing test_case: $test_case"
-  # execute the test case in qemu
-  $ssh_cmd "cd /share && sudo python2 $test_case"
+loop=1
+while [ $loop == 1 ]; do
+  for test_case in test_cases/*.py; do
+    echo "Executing test_case: $test_case"
+    # execute the test case in qemu
+    $ssh_cmd "cd /share && sudo python2 $test_case"
+  done
+  loop=${RUN_UNTIL_ERROR:=0}
 done
