@@ -139,4 +139,6 @@ fn main() {
         },
         30 * 1000,
     );
+
+    println!("Client finished successfully!");
 }
