@@ -1,13 +1,13 @@
 FROM ubuntu:16.04
 
-RUN apt-get update -y && apt-get install -y libssl-dev clang libclang-dev gcc qemu-kvm netcat ssh curl
+RUN apt-get update -y && apt-get install -y libssl-dev clang libclang-dev gcc qemu-kvm ssh curl make pkg-config
 
 # Install rust
 ENV RUSTUP_HOME=/rust
 ENV CARGO_HOME=/rust
 RUN curl https://sh.rustup.rs -sSf | sh -s -- --default-toolchain stable -y
 ENV PATH=/rust/bin:$PATH
-ENV CARGO_HOME=$HOME/cargo
+ENV CARGO_HOME=/root/cargo
 
 # Copy the ssh key
 RUN mkdir -p /ssh
