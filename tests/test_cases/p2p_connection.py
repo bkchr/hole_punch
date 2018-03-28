@@ -13,7 +13,7 @@ topologies = [ "internet" ]
 
 for topology in topologies:
     # Load the topology module
-    mod = imp.load_source(topology, "../topologies" + topology ".py")
+    mod = imp.load_source(topology, "topologies/" + topology + ".py")
     topo = mod.Topology()
 
     # Create the network

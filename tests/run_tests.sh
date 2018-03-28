@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -e
 
-cat Dockerfile | docker build -t hole_punch_test -
+tmpdir=$(dirname $(mktemp -u))
+enable_kvm=""
 
-docker run -it -v $PWD/.docker_home:/root -v $PWD/..:/src -w /src/tests hole_punch_test "./run_in_docker.sh"
+if [ -e /dev/kvm ]; then
+  enable_kvm="--device /dev/kvm"
+fi
+
+docker run -it $enable_kvm --rm -v $tmpdir/hole_punch_test_docker_home:/root -v $PWD/..:/src -w /src/tests bkchr/hole_punch_tester "./run_in_docker.sh"
