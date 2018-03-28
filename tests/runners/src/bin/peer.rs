@@ -8,12 +8,11 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{Config, Context, Error, Stream};
+use hole_punch::{FileFormat, Config, Context, Error, Stream};
 
 use tokio_core::reactor::Core;
 
 use std::net::ToSocketAddrs;
-use std::env;
 
 use futures::{Future, Poll, Stream as FStream};
 use futures::Async::Ready;
@@ -69,12 +68,12 @@ fn main() {
 
     let mut evt_loop = Core::new().unwrap();
 
-    let mut bin_path = env::current_exe().unwrap();
-    bin_path.pop();
+    let cert = include_bytes!("../../certs/cert.pem");
+    let key = include_bytes!("../../certs/key.pem");
 
     let mut config = Config::new();
-    config.set_cert_chain_filename(bin_path.join("cert.pem"));
-    config.set_key_filename(bin_path.join("key.pem"));
+    config.set_cert_chain(vec![ cert.to_vec() ], FileFormat::PEM);
+    config.set_key(key.to_vec(), FileFormat::PEM);
 
     let mut context = Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
 
