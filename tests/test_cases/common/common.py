@@ -32,8 +32,8 @@ def run_tests(topologies, extra_client_args):
         client = net.get("client")
         peer = net.get("peer")
 
-        server.cmd("./bin/server --listen_port 22222&")
-        peer.cmd("./bin/peer --server_address " + server_ip + ":22222&")
+        server.cmd("./bin/server --listen_port 22222 2>&1 > server.log &")
+        peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > peer.log &")
 
         # Give the peer time to connect
         time.sleep(2)
@@ -43,6 +43,11 @@ def run_tests(topologies, extra_client_args):
 
         print("Client exited with:\n" + client_output)
         if not "Client finished successfully!" in client_output:
+            print("Server output:")
+            print(open("server.log").read())
+
+            print("Peer output:")
+            print(open("peer.log").read())
             sys.exit(1)
 
         net.stop()
