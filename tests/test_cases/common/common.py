@@ -3,6 +3,7 @@ from mininet.net import Mininet
 import imp
 import sys
 import time
+import os.path
 
 
 # Run the given `topologies`.
@@ -36,7 +37,7 @@ def run_tests(topologies, extra_client_args):
         peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > peer.log &")
 
         # wait until the peer is connected
-        while not "New peer: peer" in open("server.log").read():
+        while not os.path.isfile("server.log") or not "New peer: peer" in open("server.log").read():
             pass
 
         client_output = client.cmd(
