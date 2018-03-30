@@ -8,7 +8,7 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{Config, Context, Error, Stream, FileFormat, StreamHandle};
+use hole_punch::{Config, Context, Error, FileFormat, Stream, StreamHandle};
 
 use tokio_core::reactor::Core;
 
@@ -94,7 +94,7 @@ fn main() {
     let key = include_bytes!("../../certs/key.pem");
 
     let mut config = Config::new();
-    config.set_cert_chain(vec![ cert.to_vec() ], FileFormat::PEM);
+    config.set_cert_chain(vec![cert.to_vec()], FileFormat::PEM);
     config.set_key(key.to_vec(), FileFormat::PEM);
     config.set_quic_listen_port(options.listen_port);
 

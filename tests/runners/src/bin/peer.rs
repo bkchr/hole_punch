@@ -8,7 +8,7 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{FileFormat, Config, Context, Error, Stream};
+use hole_punch::{Config, Context, Error, FileFormat, Stream};
 
 use tokio_core::reactor::Core;
 
@@ -37,7 +37,10 @@ impl Future for RecvAndSendMessage {
         loop {
             let msg = match try_ready!(self.con.poll()) {
                 Some(msg) => msg,
-                None => {println!("END"); return Ok(Ready(())) },
+                None => {
+                    println!("END");
+                    return Ok(Ready(()));
+                }
             };
 
             match msg {
@@ -72,7 +75,7 @@ fn main() {
     let key = include_bytes!("../../certs/key.pem");
 
     let mut config = Config::new();
-    config.set_cert_chain(vec![ cert.to_vec() ], FileFormat::PEM);
+    config.set_cert_chain(vec![cert.to_vec()], FileFormat::PEM);
     config.set_key(key.to_vec(), FileFormat::PEM);
 
     let mut context = Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");

@@ -9,7 +9,7 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{FileFormat, Config, Context, Error, Stream};
+use hole_punch::{Config, Context, Error, FileFormat, Stream};
 
 use tokio_core::reactor::Core;
 
@@ -83,7 +83,7 @@ fn main() {
             let key = include_bytes!("../../certs/key.pem");
 
             let mut config = Config::new();
-            config.set_cert_chain(vec![ cert.to_vec() ], FileFormat::PEM);
+            config.set_cert_chain(vec![cert.to_vec()], FileFormat::PEM);
             config.set_key(key.to_vec(), FileFormat::PEM);
 
             let mut context =
@@ -115,7 +115,7 @@ fn main() {
 
             // TODO: Remove this complicated thing
             // TODO: Handle PeerNotFound
-            let ( peer_con, context ) = match evt_loop
+            let (peer_con, context) = match evt_loop
                 .run(peer_con_req.select2(context.into_future()))
                 .map_err(|e| match e {
                     Either::A((e, _)) => panic!(e),
@@ -123,7 +123,7 @@ fn main() {
                 })
                 .unwrap()
             {
-                Either::A((con, context)) => ( con, context ),
+                Either::A((con, context)) => (con, context),
                 Either::B(_) => {
                     panic!("connection to server closed while waiting for connection to peer")
                 }
