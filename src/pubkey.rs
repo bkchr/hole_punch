@@ -1,8 +1,6 @@
 use error::*;
 
-use std::fmt;
-use std::hash::{Hash, Hasher as StdHasher};
-use std::result;
+use std::{fmt, result, hash::{Hash, Hasher as StdHasher}, ops::Deref};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{Hasher, MessageDigest};
@@ -65,6 +63,14 @@ impl<'de> Deserialize<'de> for PubKey {
                 orig: None,
             })
         }
+    }
+}
+
+impl Deref for PubKey {
+    type Target = [u8];
+
+    fn deref(&self) -> &[u8] {
+        &self.buf[..self.len]
     }
 }
 

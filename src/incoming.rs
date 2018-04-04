@@ -136,7 +136,7 @@ where
                     ))))
                 }
                 None => transition!(Finished(None)),
-                _ => {},
+                _ => {}
             }
         }
     }
