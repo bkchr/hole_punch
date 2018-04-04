@@ -9,6 +9,7 @@ pub enum Protocol<P> {
     PeerToPeerConnection(u64),
     RelayConnection(u64),
     ConnectionEstablished,
+    ConnectionSelected,
 
     Connect(Vec<SocketAddr>, u32, u64),
     Embedded(P),

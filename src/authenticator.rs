@@ -88,7 +88,11 @@ impl Authenticator {
         store_orig_pub_key: bool,
     ) -> Result<Authenticator> {
         Ok(Authenticator {
-            inner: Arc::new(Mutex::new(Inner::new(server_certs, client_certs, store_orig_pub_key)?)),
+            inner: Arc::new(Mutex::new(Inner::new(
+                server_certs,
+                client_certs,
+                store_orig_pub_key,
+            )?)),
         })
     }
 

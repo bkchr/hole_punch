@@ -323,7 +323,10 @@ where
 
         loop {
             match self.wait_for_resp.poll() {
-                Ok(Ready(Some((con, stream)))) => return Ok(Ready((con.unwrap(), stream))),
+                Ok(Ready(Some((con, mut stream)))) => {
+                    stream.direct_send(Protocol::ConnectionSelected).unwrap();
+                    return Ok(Ready((con.unwrap(), stream)));
+                }
                 Ok(NotReady) => return Ok(NotReady),
                 Ok(Ready(None)) => {
                     if self.wait_for_stream.is_empty() && self.wait_for_con.is_empty() {

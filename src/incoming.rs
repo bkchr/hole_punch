@@ -23,11 +23,18 @@ where
         con: context::Connection<P>,
         timeout: Timeout,
     },
-    #[state_machine_future(transitions(Finished))]
+    #[state_machine_future(transitions(WaitForSelectedMessage, Finished))]
     WaitForInitialMessage {
         con: context::Connection<P>,
         stream: context::Stream<P>,
         timeout: Timeout,
+    },
+    #[state_machine_future(transitions(Finished))]
+    WaitForSelectedMessage {
+        con: context::Connection<P>,
+        stream: context::Stream<P>,
+        timeout: Timeout,
+        connection_id: context::ConnectionId,
     },
     #[state_machine_future(ready)]
     Finished(
@@ -98,9 +105,38 @@ where
                     println!("PEERTOPEER");
                     let mut wait = wait.take();
                     wait.stream.direct_send(Protocol::ConnectionEstablished);
-                    transition!(Finished(Some((wait.con, wait.stream, Some(connection_id)))))
+                    transition!(WaitForSelectedMessage {
+                        con: wait.con,
+                        timeout: wait.timeout,
+                        stream: wait.stream,
+                        connection_id
+                    })
                 }
                 _ => {}
+            }
+        }
+    }
+
+    fn poll_wait_for_selected_message<'a>(
+        wait: &'a mut RentToOwn<'a, WaitForSelectedMessage<P>>,
+    ) -> Poll<AfterWaitForSelectedMessage<P>, Error> {
+        loop {
+            if let Err(_) = wait.timeout.poll() {
+                // The other side will no send a message, when a connection is NOT selected.
+                transition!(Finished(None));
+            }
+
+            match try_ready!(wait.stream.direct_poll()) {
+                Some(Protocol::ConnectionSelected) => {
+                    let mut wait = wait.take();
+                    transition!(Finished(Some((
+                        wait.con,
+                        wait.stream,
+                        Some(wait.connection_id)
+                    ))))
+                }
+                None => transition!(Finished(None)),
+                _ => {},
             }
         }
     }

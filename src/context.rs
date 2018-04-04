@@ -102,16 +102,15 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(handle: Handle, config: Config) -> Result<Context<P>> {
-        let authenticator =
-            if config.authenticator_enable {
-                Some(Authenticator::new(
-                    config.server_ca_certificates.as_ref().cloned(),
-                    config.client_ca_certificates.as_ref().cloned(),
-                    config.authenticator_store_orig_pub_key,
-                )?)
-            } else {
-                None
-            };
+        let authenticator = if config.authenticator_enable {
+            Some(Authenticator::new(
+                config.server_ca_certificates.as_ref().cloned(),
+                config.client_ca_certificates.as_ref().cloned(),
+                config.authenticator_store_orig_pub_key,
+            )?)
+        } else {
+            None
+        };
 
         let strats = strategies::init(handle.clone(), &config, authenticator.as_ref())?;
 
@@ -162,7 +161,7 @@ where
                             self.device_to_device_callback.0.clone(),
                             &self.handle,
                         ),
-                        Duration::from_secs(1),
+                        Duration::from_secs(2),
                         &self.handle,
                     ));
                     self.strategies.push(strat.into_future());
