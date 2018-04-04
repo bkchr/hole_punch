@@ -107,6 +107,7 @@ where
                 Some(Authenticator::new(
                     config.server_ca_certificates.as_ref().cloned(),
                     config.client_ca_certificates.as_ref().cloned(),
+                    config.authenticator_store_orig_pub_key,
                 )?)
             } else {
                 None

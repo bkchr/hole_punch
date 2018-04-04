@@ -13,6 +13,9 @@ pub struct Config {
     pub client_ca_certificates: Option<Vec<PathBuf>>,
     /// The list of certificate authorities certificates for servers.
     pub server_ca_certificates: Option<Vec<PathBuf>>,
+    /// The `Authenticator` normally just stores public key hashes. If this option is set, it will
+    /// additionally store the full public key.
+    pub authenticator_store_orig_pub_key: bool,
 }
 
 impl Config {
@@ -23,6 +26,7 @@ impl Config {
             quic_config: picoquic::Config::new(),
             client_ca_certificates: None,
             server_ca_certificates: None,
+            authenticator_store_orig_pub_key: false,
         }
     }
 
@@ -70,5 +74,12 @@ impl Config {
     /// are successfully authenticated.
     pub fn set_server_ca_certificates(&mut self, certs: Vec<PathBuf>) {
         self.server_ca_certificates = Some(certs);
+    }
+
+    /// By default the `Authenticator` just store public key hashes. If this option is enabled, it
+    /// will additionally store the full public key.
+    /// See `PubKey::orig_public_key` to retrieve the stored public key.
+    pub fn enable_authenticator_store_orig_pub_key(&mut self, enable: bool) {
+        self.authenticator_store_orig_pub_key = enable;
     }
 }

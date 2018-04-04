@@ -45,17 +45,20 @@ struct Inner {
     client_pub_keys: HashMap<ConnectionId, PubKey>,
     client_certificates: Option<X509Store>,
     server_certificates: Option<X509Store>,
+    store_orig_pub_key: bool,
 }
 
 impl Inner {
     fn new(
         server_certs: Option<Vec<PathBuf>>,
         client_certs: Option<Vec<PathBuf>>,
+        store_orig_pub_key: bool,
     ) -> Result<Inner> {
         Ok(Inner {
             client_pub_keys: HashMap::new(),
             client_certificates: create_certificate_store(client_certs)?,
             server_certificates: create_certificate_store(server_certs)?,
+            store_orig_pub_key,
         })
     }
 
@@ -82,9 +85,10 @@ impl Authenticator {
     pub(crate) fn new(
         server_certs: Option<Vec<PathBuf>>,
         client_certs: Option<Vec<PathBuf>>,
+        store_orig_pub_key: bool,
     ) -> Result<Authenticator> {
         Ok(Authenticator {
-            inner: Arc::new(Mutex::new(Inner::new(server_certs, client_certs)?)),
+            inner: Arc::new(Mutex::new(Inner::new(server_certs, client_certs, store_orig_pub_key)?)),
         })
     }
 
@@ -118,9 +122,10 @@ impl VerifyCertificate for Authenticator {
                 };
 
                 if res.is_ok() {
+                    let store_orig = (*inner).store_orig_pub_key;
                     inner.add_client_pub_key(
                         connection_id,
-                        PubKey::from_pkey(cert.public_key()?, false)?,
+                        PubKey::from_pkey(cert.public_key()?, store_orig)?,
                     );
                 }
 
