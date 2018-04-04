@@ -16,6 +16,8 @@ pub struct Config {
     /// The `Authenticator` normally just stores public key hashes. If this option is set, it will
     /// additionally store the full public key.
     pub authenticator_store_orig_pub_key: bool,
+    /// Enables the `Authenticator`.
+    pub authenticator_enable: bool,
 }
 
 impl Config {
@@ -27,6 +29,7 @@ impl Config {
             client_ca_certificates: None,
             server_ca_certificates: None,
             authenticator_store_orig_pub_key: false,
+            authenticator_enable: false,
         }
     }
 
@@ -65,15 +68,19 @@ impl Config {
     /// Sets a list of client certificate authorities certificates (in PEM format). These
     /// certificates are used to authenticate clients. If no certificates are given, all clients
     /// are successfully authenticated.
+    /// This implicitly enables the `Authenticator`.
     pub fn set_client_ca_certificates(&mut self, certs: Vec<PathBuf>) {
         self.client_ca_certificates = Some(certs);
+        self.authenticator_enable = true;
     }
 
     /// Sets a list of server certificate authorities certificates (in PEM format). These
     /// certificates are used to authenticate servers. If no certificates are given, all servers
     /// are successfully authenticated.
+    /// This implicitly enables the `Authenticator`.
     pub fn set_server_ca_certificates(&mut self, certs: Vec<PathBuf>) {
         self.server_ca_certificates = Some(certs);
+        self.authenticator_enable = true;
     }
 
     /// By default the `Authenticator` just store public key hashes. If this option is enabled, it
@@ -81,5 +88,10 @@ impl Config {
     /// See `PubKey::orig_public_key` to retrieve the stored public key.
     pub fn enable_authenticator_store_orig_pub_key(&mut self, enable: bool) {
         self.authenticator_store_orig_pub_key = enable;
+    }
+
+    /// Enable the `Authenticator`.
+    pub fn enable_authenticator(&mut self, enable: bool) {
+        self.authenticator_enable = enable;
     }
 }

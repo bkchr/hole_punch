@@ -103,7 +103,7 @@ where
 {
     pub fn new(handle: Handle, config: Config) -> Result<Context<P>> {
         let authenticator =
-            if config.client_ca_certificates.is_some() || config.server_ca_certificates.is_some() {
+            if config.authenticator_enable {
                 Some(Authenticator::new(
                     config.server_ca_certificates.as_ref().cloned(),
                     config.client_ca_certificates.as_ref().cloned(),
