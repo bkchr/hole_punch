@@ -145,7 +145,7 @@ impl PubKey {
     }
 
     /// Returns the original public key, if it was stored.
-    fn orig_public_key(&self) -> Result<Option<PKey<Public>>> {
+    pub fn orig_public_key(&self) -> Result<Option<PKey<Public>>> {
         match self.orig {
             Some(ref data) => Ok(Some(PKey::<Public>::public_key_from_der(&data)?)),
             None => Ok(None),
