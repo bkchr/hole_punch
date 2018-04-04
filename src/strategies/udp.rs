@@ -1,9 +1,9 @@
+use authenticator::Authenticator;
+use config::Config;
 use error::*;
 use strategies::{AddressInformation, Connection, ConnectionId, GetConnectionId, NewConnection,
                  NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture,
                  NewStreamHandle, Strategy, Stream};
-use config::Config;
-use authenticator::Authenticator;
 
 use std::net::SocketAddr;
 use std::time::Duration;

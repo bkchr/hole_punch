@@ -1,18 +1,18 @@
-use error::*;
-use protocol::Protocol;
 use context::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle, NewStreamFuture,
               Stream, StreamHandle};
+use error::*;
+use protocol::Protocol;
 use timeout::Timeout;
 
+use std::mem::discriminant;
 use std::net::SocketAddr;
 use std::time::Duration;
-use std::mem::discriminant;
 
 use tokio_core::reactor::Handle;
 
-use futures::{Future, Poll, Stream as FStream};
 use futures::Async::{NotReady, Ready};
 use futures::stream::{futures_unordered, FuturesUnordered};
+use futures::{Future, Poll, Stream as FStream};
 
 use serde::{Deserialize, Serialize};
 
@@ -287,7 +287,7 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            let mut con = self.wait_for_con.poll()?;
+            let con = self.wait_for_con.poll()?;
 
             match con {
                 Ready(Some(mut con)) => {

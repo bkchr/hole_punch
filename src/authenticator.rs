@@ -1,20 +1,20 @@
+use PubKey;
 use error::*;
 use strategies::GetConnectionId;
-use PubKey;
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
-use std::path::PathBuf;
-use std::result;
 use std::fs::File;
 use std::io::Read;
+use std::path::PathBuf;
+use std::result;
+use std::sync::{Arc, Mutex};
 
 use picoquic::{default_verify_certificate, ConnectionId, ConnectionType, VerifyCertificate};
 
 use openssl::error::ErrorStack;
-use openssl::x509::{X509, X509Ref};
 use openssl::stack::StackRef;
 use openssl::x509::store::{X509Store, X509StoreBuilder};
+use openssl::x509::{X509, X509Ref};
 
 fn create_certificate_store(certs: Option<Vec<PathBuf>>) -> Result<Option<X509Store>> {
     let certs = match certs {
@@ -118,7 +118,10 @@ impl VerifyCertificate for Authenticator {
                 };
 
                 if res.is_ok() {
-                    inner.add_client_pub_key(connection_id, PubKey::from_pkey(cert.public_key()?)?);
+                    inner.add_client_pub_key(
+                        connection_id,
+                        PubKey::from_pkey(cert.public_key()?, false)?,
+                    );
                 }
 
                 res

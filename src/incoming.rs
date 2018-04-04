@@ -1,5 +1,5 @@
-use error::*;
 use context;
+use error::*;
 use protocol::Protocol;
 use timeout::Timeout;
 
@@ -31,13 +31,11 @@ where
     },
     #[state_machine_future(ready)]
     Finished(
-        Option<
-            (
-                context::Connection<P>,
-                context::Stream<P>,
-                Option<context::ConnectionId>,
-            ),
-        >,
+        Option<(
+            context::Connection<P>,
+            context::Stream<P>,
+            Option<context::ConnectionId>,
+        )>,
     ),
     #[state_machine_future(error)]
     ErrorState(Error),

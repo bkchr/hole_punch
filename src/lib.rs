@@ -29,21 +29,21 @@ extern crate tokio_timer;
 mod protocol;
 #[macro_use]
 mod error;
-mod strategies;
-mod connect;
-mod timeout;
+mod authenticator;
 mod config;
+mod connect;
+mod connection_request;
 mod context;
 mod incoming;
-mod connection_request;
-mod authenticator;
 mod pubkey;
+mod strategies;
+mod timeout;
 
-pub use error::Error;
-pub use context::{ConnectionId, Context, Stream, StreamHandle};
-pub use config::Config;
-pub use picoquic::FileFormat;
 pub use authenticator::Authenticator;
+pub use config::Config;
+pub use context::{ConnectionId, Context, Stream, StreamHandle};
+pub use error::Error;
+pub use picoquic::FileFormat;
 pub use pubkey::PubKey;
 
 pub mod plain {

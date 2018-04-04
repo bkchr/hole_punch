@@ -1,22 +1,22 @@
-use error::*;
-use strategies::{self, AddressInformation, GetConnectionId, NewConnection, NewStream};
+use authenticator::Authenticator;
 use config::Config;
-use incoming;
-use protocol::Protocol;
 use connect::{self, ConnectWithStrategies};
 use connection_request;
-use authenticator::Authenticator;
+use error::*;
+use incoming;
+use protocol::Protocol;
+use strategies::{self, AddressInformation, GetConnectionId, NewConnection, NewStream};
 
-use std::time::Duration;
-use std::net::SocketAddr;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::mem;
+use std::net::SocketAddr;
+use std::time::Duration;
 
-use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
-use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 use futures::Async::{NotReady, Ready};
+use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{mpsc, oneshot};
+use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_core::reactor::Handle;
 

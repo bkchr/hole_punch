@@ -1,5 +1,5 @@
-use error::*;
 use context::{ConnectionId, NewStreamFuture, StreamHandle};
+use error::*;
 use protocol::Protocol;
 use timeout::Timeout;
 
@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use tokio_core::reactor::Handle;
 
-use futures::{Future, Poll, Sink, Stream as FStream};
 use futures::future::Join;
 use futures::sync::oneshot;
+use futures::{Future, Poll, Sink, Stream as FStream};
 
 use serde::{Deserialize, Serialize};
 

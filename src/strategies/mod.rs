@@ -1,10 +1,10 @@
-use error::*;
-use config::Config;
 use authenticator::Authenticator;
+use config::Config;
+use error::*;
 
-use std::net::SocketAddr;
-use std::io::{self, Read, Write};
 use std::cmp::min;
+use std::io::{self, Read, Write};
+use std::net::SocketAddr;
 
 use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
@@ -54,14 +54,14 @@ impl NewConnection for Strategy {
 
 /// The super `Connection` trait. We need this hack, to store the `inner` of the connection
 /// in a `Box`.
-trait ConnectionTrait
-    : FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId
-    {
+trait ConnectionTrait:
+    FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId
+{
 }
 
 impl<
-    T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId,
-> ConnectionTrait for T
+        T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId,
+    > ConnectionTrait for T
 {
 }
 
@@ -108,23 +108,24 @@ impl FStream for Connection {
 }
 
 /// The super `Stream` trait. We need this hack, to store the `inner` of the stream in a `Box`.
-trait StreamTrait
-    : FStream<Item = BytesMut, Error = Error>
+trait StreamTrait:
+    FStream<Item = BytesMut, Error = Error>
     + AddressInformation
     + Sink<SinkItem = BytesMut, SinkError = Error>
     + NewStream
     + Send
-    + GetConnectionId {
+    + GetConnectionId
+{
 }
 
 impl<
-    T: FStream<Item = BytesMut, Error = Error>
-        + AddressInformation
-        + Sink<SinkItem = BytesMut, SinkError = Error>
-        + NewStream
-        + Send
-        + GetConnectionId,
-> StreamTrait for T
+        T: FStream<Item = BytesMut, Error = Error>
+            + AddressInformation
+            + Sink<SinkItem = BytesMut, SinkError = Error>
+            + NewStream
+            + Send
+            + GetConnectionId,
+    > StreamTrait for T
 {
 }
 
