@@ -157,4 +157,9 @@ impl PubKey {
             None => Ok(None),
         }
     }
+
+    /// Returns the original public key in `DER` format, if it was stored.
+    pub fn orig_public_key_der(&self) -> Option<&[u8]> {
+        self.orig.as_ref().map(|v| v.as_ref())
+    }
 }
