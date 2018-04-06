@@ -59,7 +59,7 @@ impl<'de> Deserialize<'de> for PubKeyHash {
 
             Ok(PubKeyHash {
                 buf,
-                len: buf.len(),
+                len: vec.len(),
                 pub_key: None,
             })
         }
@@ -161,5 +161,23 @@ impl PubKeyHash {
     /// Returns the public key in `DER` format, if it was stored.
     pub fn public_key_der(&self) -> Option<&[u8]> {
         self.pub_key.as_ref().map(|v| v.as_ref())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{from_str, to_string};
+
+    #[test]
+    fn serialize_deserialize_pubkey_hash() {
+        let hash = PubKeyHash::from_hashed_hex(
+            "A9106DC0EE32264A045CF96B15DD25069B2A112FA5A464DA2F4F9FE5755DA23D",
+        ).unwrap();
+
+        let json = to_string(&hash).unwrap();
+        let des_hash: PubKeyHash = from_str(&json).unwrap();
+
+        assert!(hash == des_hash);
     }
 }
