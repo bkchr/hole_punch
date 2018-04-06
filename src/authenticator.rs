@@ -114,7 +114,7 @@ impl VerifyCertificate for Authenticator {
         connection_type: ConnectionType,
         cert: &X509Ref,
         chain: &StackRef<X509>,
-    ) -> result::Result<(), ErrorStack> {
+    ) -> result::Result<bool, ErrorStack> {
         let mut inner = self.inner.lock().unwrap();
 
         match connection_type {
@@ -141,7 +141,7 @@ impl VerifyCertificate for Authenticator {
                 } else {
                     // We are the client and have no trusted certificates for servers, so we trust
                     // any server.
-                    Ok(())
+                    Ok(true)
                 }
             }
         }
