@@ -522,10 +522,6 @@ where
         self.is_p2p = p2p;
     }
 
-    pub fn is_p2p(&self) -> bool {
-        self.is_p2p
-    }
-
     pub fn new_stream(&mut self) -> NewStreamFuture<P> {
         NewStreamFuture::new(
             self.con.new_stream(),
@@ -543,10 +539,6 @@ where
             self.is_p2p,
             &self.handle,
         )
-    }
-
-    pub fn peer_addr(&self) -> SocketAddr {
-        self.con.peer_addr()
     }
 }
 
@@ -816,7 +808,7 @@ where
                     let addresses = get_interface_addresses(
                         self.stream.get_ref().get_ref().get_ref().local_addr(),
                     );
-                    self.direct_send(Protocol::PrivateAdressInformation(addresses));
+                    self.direct_send(Protocol::PrivateAdressInformation(addresses))?;
                 }
                 Protocol::PrivateAdressInformation(mut addresses) => {
                     addresses.push(self.stream.get_ref().get_ref().get_ref().peer_addr());
@@ -933,7 +925,7 @@ where
             match self.stream_handle_recv.poll() {
                 Ok(Ready(Some(msg))) => match msg {
                     HandleProtocol::Send(msg) => {
-                        self.direct_send(msg);
+                        self.direct_send(msg)?;
                     }
                     HandleProtocol::AddressInfoRequest(req) => {
                         self.address_info_requests.push(req);

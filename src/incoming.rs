@@ -93,18 +93,18 @@ where
             match try_ready!(wait.stream.direct_poll()) {
                 Some(Protocol::RequestConnection) => {
                     let mut wait = wait.take();
-                    wait.stream.direct_send(Protocol::ConnectionEstablished);
+                    wait.stream.direct_send(Protocol::ConnectionEstablished)?;
                     transition!(Finished(Some((wait.con, wait.stream, None))))
                 }
                 Some(Protocol::PokeConnection) => {
                     println!("POKE");
-                    wait.stream.direct_send(Protocol::ConnectionEstablished);
+                    wait.stream.direct_send(Protocol::ConnectionEstablished)?;
                     transition!(Finished(None))
                 }
                 Some(Protocol::PeerToPeerConnection(connection_id)) => {
                     println!("PEERTOPEER");
                     let mut wait = wait.take();
-                    wait.stream.direct_send(Protocol::ConnectionEstablished);
+                    wait.stream.direct_send(Protocol::ConnectionEstablished)?;
                     transition!(WaitForSelectedMessage {
                         con: wait.con,
                         timeout: wait.timeout,

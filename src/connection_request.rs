@@ -151,8 +151,8 @@ where
 
         let (mut stream0, mut stream1) = try_ready!(state.new_streams.poll());
 
-        stream0.direct_send(Protocol::RelayConnection(state.connection_id));
-        stream1.direct_send(Protocol::RelayConnection(state.connection_id));
+        stream0.direct_send(Protocol::RelayConnection(state.connection_id))?;
+        stream1.direct_send(Protocol::RelayConnection(state.connection_id))?;
         println!("RELAY");
 
         let (sink0, fstream0) = stream0.split();
@@ -179,7 +179,7 @@ impl ConnectionRequestSlaveHandle {
     }
 
     pub fn add_address_info(self, info: Vec<SocketAddr>) {
-        self.send.send(info);
+        let _ = self.send.send(info);
     }
 }
 
@@ -193,6 +193,6 @@ impl ConnectionRequestMasterHandle {
     }
 
     pub fn relay_connection(self) {
-        self.send.send(());
+        let _ = self.send.send(());
     }
 }

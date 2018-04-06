@@ -88,7 +88,7 @@ where
 
         let mut stream = try_ready!(wait.wait.poll());
 
-        stream.direct_send(Protocol::RequestConnection);
+        stream.direct_send(Protocol::RequestConnection)?;
 
         let wait = wait.take();
         let timeout = wait.timeout.new_reset();

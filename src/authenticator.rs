@@ -42,6 +42,7 @@ fn create_certificate_store(certs: Option<Vec<PathBuf>>) -> Result<Option<X509St
 }
 
 struct Inner {
+    ///TODO: we never remove added hashes. That is not good!
     client_pub_keys: HashMap<ConnectionId, PubKeyHash>,
     client_certificates: Option<X509Store>,
     server_certificates: Option<X509Store>,
