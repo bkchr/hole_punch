@@ -44,7 +44,7 @@ pub use config::Config;
 pub use context::{ConnectionId, Context, Stream, StreamHandle};
 pub use error::Error;
 pub use picoquic::FileFormat;
-pub use pubkey::PubKey;
+pub use pubkey::PubKeyHash;
 
 pub mod plain {
     pub use strategies::Stream;

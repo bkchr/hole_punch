@@ -15,27 +15,27 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
 
 use bytes::Bytes;
 
-/// A public key.
+/// A hashed public key.
 /// We store the public key as `sha256` hash. If original public key is available at
-/// construction and on user request, the original public key is stored in `DER` format.
+/// construction and the user requests it, the original public key is also stored in `DER` format.
 #[derive(Clone)]
-pub struct PubKey {
+pub struct PubKeyHash {
     /// The hashed public key.
     buf: [u8; openssl_sys::EVP_MAX_MD_SIZE as usize],
     /// The length of the hash.
     len: usize,
     /// The complete public key in DER format.
     /// This value will only be set, if requested. It will also not be serialized.
-    orig: Option<Bytes>,
+    pub_key: Option<Bytes>,
 }
 
-impl Hash for PubKey {
+impl Hash for PubKeyHash {
     fn hash<H: StdHasher>(&self, state: &mut H) {
         (&self.buf).hash(state);
     }
 }
 
-impl Serialize for PubKey {
+impl Serialize for PubKeyHash {
     fn serialize<S>(&self, serializer: S) -> result::Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -44,7 +44,7 @@ impl Serialize for PubKey {
     }
 }
 
-impl<'de> Deserialize<'de> for PubKey {
+impl<'de> Deserialize<'de> for PubKeyHash {
     fn deserialize<D>(deserializer: D) -> result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -57,16 +57,16 @@ impl<'de> Deserialize<'de> for PubKey {
             let mut buf = [0; openssl_sys::EVP_MAX_MD_SIZE as usize];
             buf[..vec.len()].copy_from_slice(&vec);
 
-            Ok(PubKey {
+            Ok(PubKeyHash {
                 buf,
                 len: buf.len(),
-                orig: None,
+                pub_key: None,
             })
         }
     }
 }
 
-impl Deref for PubKey {
+impl Deref for PubKeyHash {
     type Target = [u8];
 
     fn deref(&self) -> &[u8] {
@@ -74,8 +74,8 @@ impl Deref for PubKey {
     }
 }
 
-impl PartialEq for PubKey {
-    fn eq(&self, other: &PubKey) -> bool {
+impl PartialEq for PubKeyHash {
+    fn eq(&self, other: &PubKeyHash) -> bool {
         if self.len == other.len {
             self.buf[..self.len] == other.buf[..other.len]
         } else {
@@ -84,21 +84,21 @@ impl PartialEq for PubKey {
     }
 }
 
-impl Eq for PubKey {}
+impl Eq for PubKeyHash {}
 
-impl fmt::Display for PubKey {
+impl fmt::Display for PubKeyHash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", hex::encode_upper(&self.buf[..self.len]))
     }
 }
 
-impl PubKey {
-    /// Create the public key from a openssl `PKey<Public>`.
+impl PubKeyHash {
+    /// Create the public key hash from a openssl `PKey<Public>`.
     /// If `store_orig` is set, the public key will be stored internally.
     pub fn from_pkey(
         orig_key: PKey<Public>,
         store_orig: bool,
-    ) -> result::Result<PubKey, ErrorStack> {
+    ) -> result::Result<PubKeyHash, ErrorStack> {
         let mut hasher = Hasher::new(MessageDigest::sha256())?;
         hasher.update(&orig_key.public_key_to_der()?)?;
         let bytes = hasher.finish()?;
@@ -106,15 +106,15 @@ impl PubKey {
         let mut key = Self::from_hashed_checked(&bytes);
 
         if store_orig {
-            key.orig = Some(Bytes::from(orig_key.public_key_to_der()?));
+            key.pub_key = Some(Bytes::from(orig_key.public_key_to_der()?));
         }
 
         Ok(key)
     }
 
-    /// Construct the public key from a public key hash.
+    /// Construct the public key hash from a public key hash.
     /// The function does not checks, if the hash is `sha256`!
-    pub fn from_hashed(hashed: &[u8]) -> Result<PubKey> {
+    pub fn from_hashed(hashed: &[u8]) -> Result<PubKeyHash> {
         if hashed.len() > openssl_sys::EVP_MAX_MD_SIZE as usize {
             bail!("Size is too long for a hashed value!");
         }
@@ -122,44 +122,44 @@ impl PubKey {
         Ok(Self::from_hashed_checked(hashed))
     }
 
-    /// Constructs the public key from a public key hash in hex format.
+    /// Constructs the public key hash from a public key hash in hex format.
     /// The function does not checks, if the hash is `sha256`!
-    pub fn from_hashed_hex(hashed: &str) -> Result<PubKey> {
+    pub fn from_hashed_hex(hashed: &str) -> Result<PubKeyHash> {
         let buf = hex::decode(hashed)?;
 
         Self::from_hashed(&buf)
     }
 
-    /// Constructs the public key from a `x509` certificate.
+    /// Constructs the public key hash from a `x509` certificate.
     /// If `store_orig` is set, the public key will be stored internally.
-    pub fn from_x509_pem(cert: &[u8], store_orig: bool) -> Result<PubKey> {
+    pub fn from_x509_pem(cert: &[u8], store_orig: bool) -> Result<PubKeyHash> {
         let cert = X509::from_pem(cert)?;
 
         Ok(Self::from_pkey(cert.public_key()?, store_orig)?)
     }
 
-    /// The hash length is checked and we can safely construct the public key.
-    fn from_hashed_checked(hashed: &[u8]) -> PubKey {
+    /// The hash length is checked and we can safely construct the public key hash.
+    fn from_hashed_checked(hashed: &[u8]) -> PubKeyHash {
         let mut buf = [0; openssl_sys::EVP_MAX_MD_SIZE as usize];
         buf[..hashed.len()].copy_from_slice(hashed);
 
-        PubKey {
+        PubKeyHash {
             buf,
             len: hashed.len(),
-            orig: None,
+            pub_key: None,
         }
     }
 
-    /// Returns the original public key, if it was stored.
-    pub fn orig_public_key(&self) -> Result<Option<PKey<Public>>> {
-        match self.orig {
+    /// Returns the public key, if it was stored.
+    pub fn public_key(&self) -> Result<Option<PKey<Public>>> {
+        match self.pub_key {
             Some(ref data) => Ok(Some(PKey::<Public>::public_key_from_der(&data)?)),
             None => Ok(None),
         }
     }
 
-    /// Returns the original public key in `DER` format, if it was stored.
-    pub fn orig_public_key_der(&self) -> Option<&[u8]> {
-        self.orig.as_ref().map(|v| v.as_ref())
+    /// Returns the public key in `DER` format, if it was stored.
+    pub fn public_key_der(&self) -> Option<&[u8]> {
+        self.pub_key.as_ref().map(|v| v.as_ref())
     }
 }
