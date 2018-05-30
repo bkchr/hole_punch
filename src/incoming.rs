@@ -1,4 +1,5 @@
 use context;
+use stream;
 use error::*;
 use protocol::Protocol;
 use timeout::Timeout;
@@ -26,13 +27,13 @@ where
     #[state_machine_future(transitions(WaitForSelectedMessage, Finished))]
     WaitForInitialMessage {
         con: context::Connection<P>,
-        stream: context::Stream<P>,
+        stream: stream::Stream<P>,
         timeout: Timeout,
     },
     #[state_machine_future(transitions(Finished))]
     WaitForSelectedMessage {
         con: context::Connection<P>,
-        stream: context::Stream<P>,
+        stream: stream::Stream<P>,
         timeout: Timeout,
         connection_id: context::ConnectionId,
     },
@@ -40,7 +41,7 @@ where
     Finished(
         Option<(
             context::Connection<P>,
-            context::Stream<P>,
+            stream::Stream<P>,
             Option<context::ConnectionId>,
         )>,
     ),

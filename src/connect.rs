@@ -1,5 +1,5 @@
-use context::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle, NewStreamFuture,
-              Stream, StreamHandle};
+use context::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle};
+use stream::{Stream, StreamHandle, NewStreamFuture};
 use error::*;
 use protocol::Protocol;
 use timeout::Timeout;

@@ -38,10 +38,12 @@ mod incoming;
 mod pubkey;
 mod strategies;
 mod timeout;
+mod stream;
 
 pub use authenticator::Authenticator;
 pub use config::Config;
-pub use context::{ConnectionId, Context, Stream, StreamHandle};
+pub use context::{ConnectionId, Context};
+pub use stream::{Stream, StreamHandle};
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;
