@@ -1,7 +1,7 @@
-use context::{ConnectionId};
-use stream::{NewStreamFuture, StreamHandle};
+use context::ConnectionId;
 use error::*;
 use protocol::Protocol;
+use stream::{NewStreamFuture, StreamHandle};
 use timeout::Timeout;
 
 use std::net::SocketAddr;

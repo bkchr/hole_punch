@@ -1,7 +1,7 @@
 use context::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle};
-use stream::{Stream, StreamHandle, NewStreamFuture};
 use error::*;
 use protocol::Protocol;
+use stream::{NewStreamFuture, Stream, StreamHandle};
 use timeout::Timeout;
 
 use std::mem::discriminant;
@@ -10,8 +10,8 @@ use std::time::Duration;
 
 use tokio_core::reactor::Handle;
 
-use futures::Async::{NotReady, Ready};
 use futures::stream::{futures_unordered, FuturesUnordered};
+use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Stream as FStream};
 
 use serde::{Deserialize, Serialize};

@@ -1,6 +1,6 @@
-use PubKeyHash;
 use error::*;
 use strategies::GetConnectionId;
+use PubKeyHash;
 
 use std::collections::HashMap;
 use std::fs::File;

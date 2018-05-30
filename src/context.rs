@@ -6,7 +6,7 @@ use error::*;
 use incoming;
 use protocol::Protocol;
 use strategies::{self, AddressInformation, GetConnectionId, NewConnection, NewStream};
-use stream::{Stream, StreamHandle, NewStreamFuture, NewStreamHandle, get_interface_addresses};
+use stream::{get_interface_addresses, NewStreamFuture, NewStreamHandle, Stream, StreamHandle};
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -14,9 +14,9 @@ use std::mem;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use futures::Async::{NotReady, Ready};
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{mpsc, oneshot};
+use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_core::reactor::Handle;
@@ -255,8 +255,7 @@ where
             bail!("connection with the same id was already requested");
         }
 
-        let addresses =
-            get_interface_addresses(server.local_addr());
+        let addresses = get_interface_addresses(server.local_addr());
         server.direct_send(Protocol::RequestPeerConnection(
             connection_id,
             msg,
@@ -619,5 +618,3 @@ where
         }
     }
 }
-
-

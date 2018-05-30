@@ -1,8 +1,8 @@
 use authenticator::Authenticator;
-use context::ConnectionId;
 use config::Config;
 use connect::{self, ConnectWithStrategies};
 use connection_request;
+use context::ConnectionId;
 use error::*;
 use incoming;
 use protocol::Protocol;
@@ -14,9 +14,9 @@ use std::mem;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use futures::Async::{NotReady, Ready};
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{mpsc, oneshot};
+use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_core::reactor::Handle;
@@ -412,7 +412,8 @@ where
         &mut self,
         handle: connection_request::ConnectionRequestSlaveHandle,
     ) {
-        let _ = self.send
+        let _ = self
+            .send
             .unbounded_send(HandleProtocol::AddressInfoRequest(handle));
     }
 

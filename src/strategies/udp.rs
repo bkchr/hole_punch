@@ -1,9 +1,11 @@
 use authenticator::Authenticator;
 use config::Config;
 use error::*;
-use strategies::{AddressInformation, Connection, ConnectionId, GetConnectionId, NewConnection,
-                 NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture,
-                 NewStreamHandle, Strategy, Stream};
+use strategies::{
+    AddressInformation, Connection, ConnectionId, GetConnectionId, NewConnection,
+    NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture, NewStreamHandle,
+    Strategy, Stream,
+};
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -205,7 +207,8 @@ impl NewStream for StreamWrapper {
         let handle = self.new_stream.clone();
         let id = self.con_id;
 
-        let new_con = self.new_stream
+        let new_con = self
+            .new_stream
             .new_bidirectional_stream()
             .map(move |s| Stream::new(StreamWrapper::new(s, handle, id)))
             .map_err(|e| e.into());

@@ -37,16 +37,16 @@ mod context;
 mod incoming;
 mod pubkey;
 mod strategies;
-mod timeout;
 mod stream;
+mod timeout;
 
 pub use authenticator::Authenticator;
 pub use config::Config;
 pub use context::{ConnectionId, Context};
-pub use stream::{Stream, StreamHandle};
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;
+pub use stream::{Stream, StreamHandle};
 
 pub mod plain {
     pub use strategies::Stream;

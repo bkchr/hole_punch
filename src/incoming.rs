@@ -1,7 +1,7 @@
 use context;
-use stream;
 use error::*;
 use protocol::Protocol;
+use stream;
 use timeout::Timeout;
 
 use std::time::Duration;

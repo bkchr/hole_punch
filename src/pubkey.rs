@@ -1,6 +1,8 @@
 use error::*;
 
-use std::{fmt, result, hash::{Hash, Hasher as StdHasher}, ops::Deref};
+use std::{
+    fmt, hash::{Hash, Hasher as StdHasher}, ops::Deref, result,
+};
 
 use openssl::error::ErrorStack;
 use openssl::hash::{Hasher, MessageDigest};
@@ -11,7 +13,7 @@ use openssl_sys;
 
 use hex;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error};
+use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 
 use bytes::Bytes;
 
