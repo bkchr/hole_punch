@@ -13,6 +13,7 @@ qemu-system-x86_64 "${qemu_args[@]}" > /dev/null < /dev/null &
 
 echo "Compiling test runners.."
 cd runners
+cargo update
 cargo install --force --root $(pwd)/..
 cd ..
 echo "Test runners compiled"

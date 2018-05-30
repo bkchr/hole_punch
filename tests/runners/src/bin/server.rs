@@ -64,9 +64,11 @@ impl Future for Connection {
                     if let Some(mut handle) =
                         self.server_context.borrow_mut().devices.get_mut(&name)
                     {
+                        println!("Peer found!");
                         self.stream
                             .create_connection_to(connection_id, &mut handle)?;
                     } else {
+                        println!("Peer not found!");
                         self.stream.send_and_poll(Protocol::PeerNotFound)?;
                     }
                 }
@@ -103,7 +105,6 @@ fn main() {
 
     let handle = evt_loop.handle();
     let server = server.for_each(|stream| {
-        println!("New connection");
         handle.spawn(
             Connection {
                 stream: stream,
