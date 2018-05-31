@@ -32,6 +32,7 @@ mod error;
 mod authenticator;
 mod config;
 mod connect;
+mod connection;
 mod connection_request;
 mod context;
 mod incoming;
@@ -42,7 +43,8 @@ mod timeout;
 
 pub use authenticator::Authenticator;
 pub use config::Config;
-pub use context::{ConnectionId, Context};
+pub use connection::ConnectionId;
+pub use context::Context;
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;

@@ -1,5 +1,5 @@
 use connection_request;
-use context::ConnectionId;
+use connection::ConnectionId;
 use error::*;
 use protocol::Protocol;
 use strategies::{self, AddressInformation, GetConnectionId, NewStream};

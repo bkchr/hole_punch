@@ -1,4 +1,4 @@
-use context;
+use connection;
 use error::*;
 use protocol::Protocol;
 use stream;
@@ -21,28 +21,28 @@ where
 {
     #[state_machine_future(start, transitions(WaitForInitialMessage, Finished))]
     WaitForStream {
-        con: context::Connection<P>,
+        con: connection::Connection<P>,
         timeout: Timeout,
     },
     #[state_machine_future(transitions(WaitForSelectedMessage, Finished))]
     WaitForInitialMessage {
-        con: context::Connection<P>,
+        con: connection::Connection<P>,
         stream: stream::Stream<P>,
         timeout: Timeout,
     },
     #[state_machine_future(transitions(Finished))]
     WaitForSelectedMessage {
-        con: context::Connection<P>,
+        con: connection::Connection<P>,
         stream: stream::Stream<P>,
         timeout: Timeout,
-        connection_id: context::ConnectionId,
+        connection_id: connection::ConnectionId,
     },
     #[state_machine_future(ready)]
     Finished(
         Option<(
-            context::Connection<P>,
+            connection::Connection<P>,
             stream::Stream<P>,
-            Option<context::ConnectionId>,
+            Option<connection::ConnectionId>,
         )>,
     ),
     #[state_machine_future(error)]
@@ -54,7 +54,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub(crate) fn new(
-        con: context::Connection<P>,
+        con: connection::Connection<P>,
         timeout: Duration,
         handle: &Handle,
     ) -> HandlerFuture<P> {
