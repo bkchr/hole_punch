@@ -1,22 +1,15 @@
-use authenticator::Authenticator;
-use config::Config;
-use connect::{self, ConnectWithStrategies};
 use connection_request;
 use context::ConnectionId;
 use error::*;
-use incoming;
 use protocol::Protocol;
-use strategies::{self, AddressInformation, GetConnectionId, NewConnection, NewStream};
+use strategies::{self, AddressInformation, GetConnectionId, NewStream};
 
 use std::collections::HashMap;
-use std::marker::PhantomData;
 use std::mem;
 use std::net::SocketAddr;
-use std::time::Duration;
 
-use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{mpsc, oneshot};
-use futures::Async::{NotReady, Ready};
+use futures::Async::Ready;
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_core::reactor::Handle;
@@ -28,8 +21,6 @@ use tokio_io::codec::length_delimited;
 use serde::{Deserialize, Serialize};
 
 use pnet_datalink::interfaces;
-
-use rand::{self, Rng};
 
 use itertools::Itertools;
 
@@ -232,7 +223,7 @@ where
                     }
                 }
                 Protocol::Connect(addresses, _, connection_id) => {
-                    self.connect_callback.unbounded_send((
+                    let _ = self.connect_callback.unbounded_send((
                         addresses,
                         connection_id,
                         self.stream_handle.clone(),

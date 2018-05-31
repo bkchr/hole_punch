@@ -1,37 +1,27 @@
 use authenticator::Authenticator;
 use config::Config;
 use connect::{self, ConnectWithStrategies};
-use connection_request;
 use error::*;
 use incoming;
 use protocol::Protocol;
-use strategies::{self, AddressInformation, GetConnectionId, NewConnection, NewStream};
+use strategies::{self, NewConnection, NewStream};
 use stream::{get_interface_addresses, NewStreamFuture, NewStreamHandle, Stream, StreamHandle};
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
-use std::mem;
 use std::net::SocketAddr;
 use std::time::Duration;
 
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{mpsc, oneshot};
 use futures::Async::{NotReady, Ready};
-use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
+use futures::{Future, Poll, Stream as FStream};
 
 use tokio_core::reactor::Handle;
 
-use tokio_serde_json::{ReadJson, WriteJson};
-
-use tokio_io::codec::length_delimited;
-
 use serde::{Deserialize, Serialize};
 
-use pnet_datalink::interfaces;
-
 use rand::{self, Rng};
-
-use itertools::Itertools;
 
 pub type ConnectionId = u64;
 
