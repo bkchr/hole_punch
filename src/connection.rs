@@ -1,36 +1,45 @@
+use context::PassStreamToContext;
 use error::*;
 use strategies::{self, NewConnection, NewStream};
 use stream::{NewStreamFuture, NewStreamHandle, Stream, StreamHandle};
 
-use std::marker::PhantomData;
 use std::net::SocketAddr;
 
-use futures::sync::{mpsc, oneshot};
-use futures::Async::Ready;
-use futures::{Future, Poll, Stream as FStream};
-
-use tokio_core::reactor::Handle;
+use futures::{
+    sync::{
+        mpsc::{self, UnboundedReceiver, UnboundedSender}, oneshot,
+    }, Async::Ready,
+    Future, Poll, Stream as FStream,
+};
 
 use serde::{Deserialize, Serialize};
+
+use tokio_core::reactor::Handle;
 
 pub type ConnectionId = u64;
 
 #[derive(Clone)]
-pub struct NewConnectionHandle<P> {
+pub struct NewConnectionHandle<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     new_con: strategies::NewConnectionHandle,
-    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
     handle: Handle,
+    pass_stream_to_context: PassStreamToContext<P>,
 }
 
-impl<P> NewConnectionHandle<P> {
+impl<P> NewConnectionHandle<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     pub fn new(
         new_con: strategies::NewConnectionHandle,
-        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        pass_stream_to_context: PassStreamToContext<P>,
         handle: &Handle,
     ) -> NewConnectionHandle<P> {
         NewConnectionHandle {
             new_con,
-            connect_callback,
+            pass_stream_to_context,
             handle: handle.clone(),
         }
     }
@@ -38,29 +47,33 @@ impl<P> NewConnectionHandle<P> {
     pub fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture<P> {
         NewConnectionFuture::new(
             self.new_con.new_connection(addr),
-            self.connect_callback.clone(),
+            self.pass_stream_to_context.clone(),
             &self.handle,
         )
     }
 }
 
-pub struct NewConnectionFuture<P> {
+pub struct NewConnectionFuture<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     new_con_recv: strategies::NewConnectionFuture,
-    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
-    _marker: PhantomData<P>,
+    pass_stream_to_context: PassStreamToContext<P>,
     handle: Handle,
 }
 
-impl<P> NewConnectionFuture<P> {
+impl<P> NewConnectionFuture<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
     fn new(
         new_con_recv: strategies::NewConnectionFuture,
-        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        pass_stream_to_context: PassStreamToContext<P>,
         handle: &Handle,
     ) -> NewConnectionFuture<P> {
         NewConnectionFuture {
             new_con_recv,
-            connect_callback,
-            _marker: Default::default(),
+            pass_stream_to_context,
             handle: handle.clone(),
         }
     }
@@ -74,16 +87,16 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.new_con_recv
-            .poll()
-            .map(|r| r.map(|v| Connection::new(v, self.connect_callback.clone(), &self.handle)))
+        self.new_con_recv.poll().map(|r| {
+            r.map(|v| Connection::new(v, self.pass_stream_to_context.clone(), &self.handle))
+        })
     }
 }
 
 enum ConnectionState {
     UnAuthenticated {
-        auth_recv: oneshot::Receiver<bool>,
-        auth_send: Option<oneshot::Sender<bool>>,
+        auth_recv: oneshot::Receiver<()>,
+        auth_send: Option<oneshot::Sender<()>>,
     },
     Authenticated,
 }
@@ -95,7 +108,11 @@ where
     con: strategies::Connection,
     state: ConnectionState,
     handle: Handle,
-    connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+    pass_stream_to_context: PassStreamToContext<P>,
+    connect_peers: (
+        UnboundedReceiver<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        ConnectPeers<P>,
+    ),
     is_p2p: bool,
 }
 
@@ -105,10 +122,12 @@ where
 {
     pub fn new(
         con: strategies::Connection,
-        connect_callback: mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        pass_stream_to_context: PassStreamToContext<P>,
         handle: &Handle,
     ) -> Connection<P> {
         let (send, auth_recv) = oneshot::channel();
+        let (connect_peers_send, connect_peers_recv) = mpsc::unbounded();
+        let connect_peers = ConnectPeers::new(connect_peers_send);
 
         Connection {
             con,
@@ -117,7 +136,8 @@ where
                 auth_send: Some(send),
             },
             handle: handle.clone(),
-            connect_callback,
+            pass_stream_to_context,
+            connect_peers: (connect_peers_recv, connect_peers),
             is_p2p: false,
         }
     }
@@ -130,7 +150,8 @@ where
         NewStreamFuture::new(
             self.con.new_stream(),
             self.get_new_stream_handle(),
-            self.connect_callback.clone(),
+            self.pass_stream_to_context.clone(),
+            self.connect_peers.1.clone(),
             self.is_p2p,
             &self.handle,
         )
@@ -139,49 +160,39 @@ where
     fn get_new_stream_handle(&self) -> NewStreamHandle<P> {
         NewStreamHandle::new(
             self.con.get_new_stream_handle(),
-            self.connect_callback.clone(),
+            self.pass_stream_to_context.clone(),
+            self.connect_peers.1.clone(),
             self.is_p2p,
             &self.handle,
         )
     }
-}
 
-impl<P> FStream for Connection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Stream<P>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_impl(&mut self) -> Poll<(), Error> {
         loop {
             let state = match self.state {
-                ConnectionState::Authenticated => {
-                    return self.con.poll().map(|r| {
-                        r.map(|o| {
-                            o.map(|v| {
-                                Stream::new(
-                                    v,
-                                    None,
-                                    &self.handle,
-                                    self.get_new_stream_handle(),
-                                    self.connect_callback.clone(),
-                                    self.is_p2p,
-                                )
-                            })
-                        })
-                    })
-                }
+                ConnectionState::Authenticated => loop {
+                    let stream = match try_ready!(self.con.poll()) {
+                        Some(stream) => stream,
+                        None => return Ok(Ready(())),
+                    };
+
+                    self.pass_stream_to_context.pass_stream(Stream::new(
+                        stream,
+                        None,
+                        &self.handle,
+                        self.get_new_stream_handle(),
+                        self.pass_stream_to_context.clone(),
+                        self.connect_peers.1.clone(),
+                        self.is_p2p,
+                    ));
+                },
                 ConnectionState::UnAuthenticated {
                     ref mut auth_recv,
                     ref mut auth_send,
                 } => {
                     loop {
                         let auth = match auth_recv.poll() {
-                            Ok(Ready(auth)) => {
-                                assert!(auth);
-                                auth
-                            }
+                            Ok(Ready(())) => true,
                             _ => false,
                         };
 
@@ -190,26 +201,22 @@ where
                         } else {
                             let stream = match try_ready!(self.con.poll()) {
                                 Some(stream) => stream,
-                                None => return Ok(Ready(None)),
+                                None => return Ok(Ready(())),
                             };
 
                             // Take `auth_send` and return the new `Stream`.
                             // If `auth_send` is None, we don't propagate any longer `Stream`s,
                             // because only one `Stream` is allowed for unauthorized `Connection`s.
                             if let Some(send) = auth_send.take() {
-                                return Ok(Ready(Some(Stream::new(
+                                self.pass_stream_to_context.pass_stream(Stream::new(
                                     stream,
                                     Some(send),
                                     &self.handle,
-                                    NewStreamHandle::new(
-                                        self.con.get_new_stream_handle(),
-                                        self.connect_callback.clone(),
-                                        self.is_p2p,
-                                        &self.handle,
-                                    ),
-                                    self.connect_callback.clone(),
+                                    self.get_new_stream_handle(),
+                                    self.pass_stream_to_context.clone(),
+                                    self.connect_peers.1.clone(),
                                     self.is_p2p,
-                                ))));
+                                ));
                             }
                         }
                     }
@@ -220,5 +227,53 @@ where
 
             self.state = state;
         }
+    }
+}
+
+impl<P> Future for Connection<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.poll_impl() {
+            Err(e) => {
+                println!("{:?}", e);
+                Ok(Ready(()))
+            }
+            r @ _ => r.map_err(|_| ()),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ConnectPeers<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    sender: UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+}
+
+impl<P> ConnectPeers<P>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+{
+    fn new(
+        sender: UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+    ) -> ConnectPeers<P> {
+        ConnectPeers { sender }
+    }
+
+    pub fn connect(
+        &mut self,
+        addresses: Vec<SocketAddr>,
+        con_id: ConnectionId,
+        stream_handle: StreamHandle<P>,
+    ) {
+        let _ = self
+            .sender
+            .unbounded_send((addresses, con_id, stream_handle));
     }
 }

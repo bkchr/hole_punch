@@ -1,6 +1,6 @@
 use connection::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle};
 use error::*;
-use protocol::Protocol;
+use protocol::{ConnectionType, Protocol};
 use stream::{NewStreamFuture, Stream, StreamHandle};
 use timeout::Timeout;
 
@@ -88,11 +88,11 @@ where
 
         let mut stream = try_ready!(wait.wait.poll());
 
-        stream.direct_send(Protocol::RequestConnection)?;
+        stream.direct_send(Protocol::ConnectionHello(None))?;
 
         let wait = wait.take();
         let timeout = wait.timeout.new_reset();
-        let wait = WaitForMessage::new(Some(wait.con), stream, Protocol::ConnectionEstablished);
+        let wait = WaitForMessage::new(Some(wait.con), stream, Protocol::ConnectionHelloAck);
 
         transition!(WaitForInitialAnswer { wait, timeout })
     }
@@ -305,16 +305,22 @@ where
                 Ready(Some((con, mut stream))) => {
                     if self.is_master {
                         stream
-                            .direct_send(Protocol::PeerToPeerConnection(self.connection_id))
+                            .direct_send(Protocol::ConnectionHello(Some(
+                                ConnectionType::PeerToPeer(self.connection_id),
+                            )))
                             .unwrap();
                     } else {
-                        stream.direct_send(Protocol::PokeConnection).unwrap();
+                        stream
+                            .direct_send(Protocol::ConnectionHello(Some(
+                                ConnectionType::PeerToPeerPoke,
+                            )))
+                            .unwrap();
                     }
 
                     self.wait_for_resp.push(WaitForMessage::new(
                         Some(con),
                         stream,
-                        Protocol::ConnectionEstablished,
+                        Protocol::ConnectionHelloAck,
                     ));
                 }
                 _ => break,

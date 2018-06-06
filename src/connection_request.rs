@@ -1,6 +1,6 @@
 use connection::ConnectionId;
 use error::*;
-use protocol::Protocol;
+use protocol::{Protocol, StreamType};
 use stream::{NewStreamFuture, StreamHandle};
 use timeout::Timeout;
 
@@ -152,8 +152,12 @@ where
 
         let (mut stream0, mut stream1) = try_ready!(state.new_streams.poll());
 
-        stream0.direct_send(Protocol::RelayConnection(state.connection_id))?;
-        stream1.direct_send(Protocol::RelayConnection(state.connection_id))?;
+        stream0.direct_send(Protocol::StreamHello(Some(StreamType::Relay(
+            state.connection_id,
+        ))))?;
+        stream1.direct_send(Protocol::StreamHello(Some(StreamType::Relay(
+            state.connection_id,
+        ))))?;
         println!("RELAY");
 
         let (sink0, fstream0) = stream0.split();
