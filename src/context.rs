@@ -10,6 +10,7 @@ use stream::{get_interface_addresses, Stream, StreamHandle};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
+use std::fmt::Debug;
 
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{
@@ -22,77 +23,35 @@ use tokio_core::reactor::Handle;
 
 use serde::{Deserialize, Serialize};
 
-use rand::{self, Rng};
-
-struct GetMessage<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    stream: Option<Stream<P>>,
-}
-
-impl<P> GetMessage<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn new(stream: Stream<P>) -> GetMessage<P> {
-        GetMessage {
-            stream: Some(stream),
-        }
-    }
-}
-
-impl<P> Future for GetMessage<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = (Stream<P>, Protocol<P>);
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let msg = match try_ready!(
-            self.stream
-                .as_mut()
-                .expect("can not be polled twice")
-                .direct_poll()
-        ) {
-            Some(msg) => msg,
-            None => bail!("returned None"),
-        };
-
-        Ok(Ready((self.stream.take().unwrap(), msg)))
-    }
-}
-
 pub struct Context<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-R: ResolvePeer<P>,
+    R: ResolvePeer<P>,
 {
-    new_stream_recv: UnboundedReceiver<Stream<P>>,
+    new_stream_recv: UnboundedReceiver<Stream<P, R>>,
     pass_stream_to_context: PassStreamToContext<P>,
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
     handle: Handle,
-    new_connection_handles: Vec<NewConnectionHandle<P>>,
+    new_connection_handles: Vec<NewConnectionHandle<P, R>>,
     device_to_device_callback: (
-        mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
-        mpsc::UnboundedReceiver<(Vec<SocketAddr>, ConnectionId, StreamHandle<P>)>,
+        mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P, R>)>,
+        mpsc::UnboundedReceiver<(Vec<SocketAddr>, ConnectionId, StreamHandle<P, R>)>,
     ),
     outgoing_device_con: FuturesUnordered<connect::DeviceToDeviceConnectionFuture<P>>,
     new_connection: (
-        mpsc::UnboundedSender<Connection<P>>,
-        mpsc::UnboundedReceiver<Connection<P>>,
+        mpsc::UnboundedSender<Connection<P, R>>,
+        mpsc::UnboundedReceiver<Connection<P, R>>,
     ),
-    incoming_stream: FuturesUnordered<GetMessage<P>>,
     authenticator: Option<Authenticator>,
     resolve_peer: R,
 }
 
-impl<P> Context<P>
+impl<P, R> Context<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    pub fn new(handle: Handle, config: Config, resolve_peer: R) -> Result<Context<P>> {
+    pub fn new(handle: Handle, config: Config, resolve_peer: R) -> Result<Context<P, R>> {
         let (new_stream_send, new_stream_recv) = mpsc::unbounded();
         let pass_stream_to_context = PassStreamToContext::new(new_stream_send);
 
@@ -257,7 +216,7 @@ impl<P> Future for NewConnectionToServer<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    type Item = Stream<P>;
+    type Item = Stream<P, R>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -269,11 +228,12 @@ where
     }
 }
 
-impl<P> FStream for Context<P>
+impl<P, R> FStream for Context<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    type Item = Stream<P>;
+    type Item = Stream<P, R>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -290,36 +250,36 @@ pub struct PassStreamToContext<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    send: UnboundedSender<Stream<P>>,
+    send: UnboundedSender<Stream<P, R>>,
 }
 
 impl<P> PassStreamToContext<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    fn new(send: UnboundedSender<Stream<P>>) -> PassStreamToContext<P> {
+    fn new(send: UnboundedSender<Stream<P, R>>) -> PassStreamToContext<P> {
         PassStreamToContext { send }
     }
 
-    pub fn pass_stream(&mut self, stream: Stream<P>) {
+    pub fn pass_stream(&mut self, stream: Stream<P, R>) {
         let _ = self.send.unbounded_send(stream);
     }
 }
 
-pub enum ResolvePeerResult<P>
+pub enum ResolvePeerResult<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
-    Found(StreamHandle<P>),
+    Found(StreamHandle<P, R>),
     NotFound,
-    NotFoundWithHint(SocketAddr),
+    NotFoundLocally(SocketAddr),
 }
 
 pub trait ResolvePeer<P>: Send + Sync + Clone
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    Self::Identifier: Serialize + for<'de> Deserialize<'de>,
+    Self::Identifier: Serialize + for<'de> Deserialize<'de> + Clone + Debug,
 {
     type Identifier;
-    fn resolve_peer(&self, peer: &Self::Identifier) -> ResolvePeerResult<P>;
+    fn resolve_peer(&self, peer: &Self::Identifier) -> ResolvePeerResult<P, Self>;
 }

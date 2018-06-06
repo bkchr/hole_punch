@@ -1,3 +1,4 @@
+use context::ResolvePeer;
 use connection::ConnectionId;
 use error::*;
 use protocol::{Protocol, StreamType};
@@ -18,15 +19,16 @@ use serde::{Deserialize, Serialize};
 use state_machine_future::RentToOwn;
 
 #[derive(StateMachineFuture)]
-pub enum ConnectionRequest<P>
+pub enum ConnectionRequest<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
     #[state_machine_future(start, transitions(WaitForRelayRequest))]
     WaitForSlaveAddressInfo {
-        connection_id: ConnectionId,
-        master: StreamHandle<P>,
-        slave: StreamHandle<P>,
+        id: ConnectionId,
+        master: StreamHandle<P, R>,
+        slave: StreamHandle<P, R>,
         master_address_info: Vec<SocketAddr>,
         slave_address_info_recv: oneshot::Receiver<Vec<SocketAddr>>,
         master_relay_con_recv: oneshot::Receiver<()>,
@@ -35,17 +37,17 @@ where
     },
     #[state_machine_future(transitions(WaitForNewStreams, Finished))]
     WaitForRelayRequest {
-        connection_id: ConnectionId,
-        master: StreamHandle<P>,
-        slave: StreamHandle<P>,
+        id: ConnectionId,
+        master: StreamHandle<P, R>,
+        slave: StreamHandle<P, R>,
         master_relay_con_recv: oneshot::Receiver<()>,
         timeout: Timeout,
         handle: Handle,
     },
     #[state_machine_future(transitions(Finished))]
     WaitForNewStreams {
-        connection_id: ConnectionId,
-        new_streams: Join<NewStreamFuture<P>, NewStreamFuture<P>>,
+        id: ConnectionId,
+        new_streams: Join<NewStreamFuture<P, R>, NewStreamFuture<P, R>>,
         timeout: Timeout,
         handle: Handle,
     },
@@ -60,7 +62,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     pub fn new(
-        connection_id: ConnectionId,
+        id: ConnectionId,
         handle: &Handle,
         master: StreamHandle<P>,
         mut slave: StreamHandle<P>,
@@ -72,7 +74,7 @@ where
         slave.send_msg(Protocol::RequestPrivateAdressInformation);
 
         let req = ConnectionRequest::start(
-            connection_id,
+            id,
             master,
             slave,
             master_address_info,
@@ -107,16 +109,16 @@ where
         state.slave.send_msg(Protocol::Connect(
             state.master_address_info,
             0,
-            state.connection_id,
+            state.id,
         ));
         state
             .master
-            .send_msg(Protocol::Connect(address_info, 0, state.connection_id));
+            .send_msg(Protocol::Connect(address_info, 0, state.id));
 
         transition!(WaitForRelayRequest {
             master: state.master,
             slave: state.slave,
-            connection_id: state.connection_id,
+            id: state.id,
             master_relay_con_recv: state.master_relay_con_recv,
             timeout: state.timeout,
             handle: state.handle,
@@ -136,7 +138,7 @@ where
 
         let new_streams = state.master.new_stream().join(state.slave.new_stream());
         transition!(WaitForNewStreams {
-            connection_id: state.connection_id,
+            id: state.id,
             new_streams,
             timeout: state.timeout,
             handle: state.handle,
@@ -153,10 +155,10 @@ where
         let (mut stream0, mut stream1) = try_ready!(state.new_streams.poll());
 
         stream0.direct_send(Protocol::StreamHello(Some(StreamType::Relay(
-            state.connection_id,
+            state.id,
         ))))?;
         stream1.direct_send(Protocol::StreamHello(Some(StreamType::Relay(
-            state.connection_id,
+            state.id,
         ))))?;
         println!("RELAY");
 

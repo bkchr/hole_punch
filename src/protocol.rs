@@ -1,7 +1,15 @@
+use context::ResolvePeer;
+
 use std::net::SocketAddr;
 
+use serde::{Deserialize, Serialize};
+
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum Protocol<P> {
+pub enum Protocol<P, R>
+where
+    R: ResolvePeer<P>,
+    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
+{
     /// The first message send by a `Connection` in the first `Stream`.
     /// To precisely describe the purpose of the `Connection`, it may carries a type.
     ConnectionHello(Option<ConnectionType>),
@@ -19,17 +27,14 @@ pub enum Protocol<P> {
     /// To precisely describe the purpose of the `Stream`, it may carries a type.
     StreamHello(Option<StreamType>),
 
-    Connect(Vec<SocketAddr>, u32, u64),
     Embedded(P),
-    RequestPeerConnection(u64, P, Vec<SocketAddr>),
-    RequestRelayPeerConnection(u64),
+    BuildPeerConnection(u64, BuildPeerConnection<P, R>),
 
     RequestPrivateAdressInformation,
     PrivateAdressInformation(Vec<SocketAddr>),
 
     ReUseConnection,
     AckReUseConnection,
-    RelayModeActivated,
 }
 
 /// The type of an incoming `Connection` that describe its purpose.
@@ -48,4 +53,18 @@ pub enum ConnectionType {
 pub enum StreamType {
     /// Relay this stream to another peer.
     Relay(u64),
+}
+
+/// Build a connection to a peer.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum BuildPeerConnection<P, R>
+where
+    R: ResolvePeer<P>,
+    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
+{
+    RequestPeer(R::Identifier, Vec<SocketAddr>),
+    PeerNotFound,
+    PeerNotFoundLocally(SocketAddr),
+    ConnectToPeer(Vec<SocketAddr>),
+    RelayConnection
 }
