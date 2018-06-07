@@ -8,9 +8,9 @@ use strategies::{self, NewConnection};
 use stream::{get_interface_addresses, Stream, StreamHandle};
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::time::Duration;
-use std::fmt::Debug;
 
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{
@@ -75,6 +75,7 @@ where
                 NewConnectionHandle::new(
                     s.get_new_connection_handle(),
                     pass_stream_to_context.clone(),
+                    resolve_peer.clone(),
                     &handle,
                 )
             })
@@ -89,7 +90,6 @@ where
             device_to_device_callback,
             outgoing_device_con: FuturesUnordered::new(),
             new_connection: mpsc::unbounded(),
-            incoming_stream: FuturesUnordered::new(),
             authenticator,
             resolve_peer,
         })
@@ -108,11 +108,19 @@ where
                 Ok(NotReady) => return Ok(()),
                 Err(e) => return Err(e.0),
                 Ok(Ready(Some((Some(con), strat)))) => {
-                    // self.incoming.push(incoming::Handler::new(
-                    //     Connection::new(con, self.pass_stream_to_context.clone(), &self.handle),
-                    //     Duration::from_secs(2),
-                    //     &self.handle,
-                    // ));
+                    let con = Connection::new(
+                        con,
+                        NewConnectionHandle::new(
+                            strat.get_new_connection_handle(),
+                            self.pass_stream_to_context.clone(),
+                            self.resolve_peer.clone(),
+                            &self.handle,
+                        ),
+                        self.pass_stream_to_context.clone(),
+                        self.resolve_peer.clone(),
+                        &self.handle,
+                    );
+                    self.handle.spawn(con.into_executor());
                     self.strategies.push(strat.into_future());
                 }
                 Ok(Ready(Some((None, _)))) => {
@@ -120,62 +128,6 @@ where
                 }
                 Ok(Ready(None)) => {
                     panic!("strategies empty");
-                }
-            }
-        }
-    }
-
-    fn poll_device_to_device_callback(&mut self) {
-        loop {
-            match self.device_to_device_callback.1.poll() {
-                Ok(Ready(Some((addresses, connection_id, stream_handle)))) => {
-                    self.outgoing_device_con
-                        .push(connect::DeviceToDeviceConnection::start(
-                            self.new_connection_handles.get(0).unwrap().clone(),
-                            addresses,
-                            stream_handle,
-                            connection_id,
-                            self.requested_connections.contains_key(&connection_id),
-                            self.handle.clone(),
-                        ));
-                }
-                _ => {
-                    break;
-                }
-            }
-        }
-    }
-
-    fn poll_outgoing_device_connections(&mut self) -> Poll<Option<Stream<P>>, Error> {
-        loop {
-            let (con, stream, id) = match try_ready!(self.outgoing_device_con.poll()) {
-                Some(res) => res,
-                None => return Ok(NotReady),
-            };
-
-            if let Some(con) = con {
-                self.handle.spawn(con);
-            }
-
-            if let Some(stream) = stream {
-                match self.requested_connections.remove(&id) {
-                    Some(cb) => {
-                        cb.send(stream);
-                    }
-                    None => return Ok(Ready(Some(stream))),
-                }
-            }
-        }
-    }
-
-    fn poll_new_connection(&mut self) {
-        loop {
-            match self.new_connection.1.poll() {
-                Ok(Ready(Some(con))) => {
-                    self.handle.spawn(con);
-                }
-                _ => {
-                    return;
                 }
             }
         }
@@ -189,12 +141,12 @@ where
     }
 }
 
-pub struct NewConnectionToServer<P>
+pub struct NewConnectionToServer<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
 {
     connect: ConnectWithStrategies<P>,
-    new_con_send: mpsc::UnboundedSender<Connection<P>>,
+    new_con_send: mpsc::UnboundedSender<Connection<P, R>>,
 }
 
 impl<P> NewConnectionToServer<P>
@@ -246,18 +198,20 @@ where
 }
 
 #[derive(Clone)]
-pub struct PassStreamToContext<P>
+pub struct PassStreamToContext<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+R: ResolvePeer<P>,
 {
     send: UnboundedSender<Stream<P, R>>,
 }
 
-impl<P> PassStreamToContext<P>
+impl<P, R> PassStreamToContext<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    fn new(send: UnboundedSender<Stream<P, R>>) -> PassStreamToContext<P> {
+    fn new(send: UnboundedSender<Stream<P, R>>) -> PassStreamToContext<P, R> {
         PassStreamToContext { send }
     }
 
@@ -275,7 +229,7 @@ where
     NotFoundLocally(SocketAddr),
 }
 
-pub trait ResolvePeer<P>: Send + Sync + Clone
+pub trait ResolvePeer<P>: 'static + Send + Sync + Clone
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     Self::Identifier: Serialize + for<'de> Deserialize<'de> + Clone + Debug,

@@ -1,8 +1,8 @@
-use connection::{ConnectPeers, ConnectionId};
+use connection::{ConnectionId, NewConnectionHandle};
 use connection_request;
 use context::{PassStreamToContext, ResolvePeer, ResolvePeerResult};
 use error::*;
-use protocol::{BuildPeerConnection, Protocol};
+use protocol::{PeerInfo, Protocol};
 use strategies::{self, AddressInformation, GetConnectionId, NewStream};
 
 use std::collections::HashMap;
@@ -32,9 +32,9 @@ where
     R: ResolvePeer<P>,
 {
     new_stream_handle: strategies::NewStreamHandle,
-    pass_stream_to_context: PassStreamToContext<P>,
+    pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
-    connect_peers: ConnectPeers<P>,
+    new_con_handle: NewConnectionHandle<P, R>,
     is_p2p_con: bool,
     handle: Handle,
 }
@@ -46,17 +46,17 @@ where
 {
     pub fn new(
         new_stream_handle: strategies::NewStreamHandle,
-        pass_stream_to_context: PassStreamToContext<P>,
+        new_con_handle: NewConnectionHandle<P, R>,
+        pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
-        connect_peers: ConnectPeers<P>,
         is_p2p_con: bool,
         handle: &Handle,
     ) -> NewStreamHandle<P, R> {
         NewStreamHandle {
             new_stream_handle,
+            new_con_handle,
             pass_stream_to_context,
             resolve_peer,
-            connect_peers,
             is_p2p_con,
             handle: handle.clone(),
         }
@@ -66,9 +66,9 @@ where
         NewStreamFuture::new(
             self.new_stream_handle.new_stream(),
             self.clone(),
+            self.new_con_handle.clone(),
             self.pass_stream_to_context.clone(),
             self.resolve_peer.clone(),
-            self.connect_peers.clone(),
             self.is_p2p_con,
             &self.handle,
         )
@@ -82,9 +82,9 @@ where
 {
     new_stream: strategies::NewStreamFuture,
     new_stream_handle: NewStreamHandle<P, R>,
-    pass_stream_to_context: PassStreamToContext<P>,
+    pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
-    connect_peers: ConnectPeers<P>,
+    new_con_handle: NewConnectionHandle<P, R>,
     handle: Handle,
     is_p2p_con: bool,
 }
@@ -97,9 +97,9 @@ where
     pub fn new(
         new_stream: strategies::NewStreamFuture,
         new_stream_handle: NewStreamHandle<P, R>,
-        pass_stream_to_context: PassStreamToContext<P>,
+        new_con_handle: NewConnectionHandle<P, R>,
+        pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
-        connect_peers: ConnectPeers<P>,
         is_p2p_con: bool,
         handle: &Handle,
     ) -> NewStreamFuture<P, R> {
@@ -108,7 +108,7 @@ where
             new_stream_handle,
             pass_stream_to_context,
             resolve_peer,
-            connect_peers,
+            new_con_handle,
             is_p2p_con,
             handle: handle.clone(),
         }
@@ -131,9 +131,9 @@ where
                     None,
                     &self.handle,
                     self.new_stream_handle.clone(),
+                    self.new_con_handle.clone(),
                     self.pass_stream_to_context.clone(),
                     self.resolve_peer.clone(),
-                    self.connect_peers.clone(),
                     self.is_p2p_con,
                 )
             })
@@ -179,9 +179,9 @@ where
     incoming_con_requests: HashMap<ConnectionId, Vec<SocketAddr>>,
     address_info_requests: Vec<connection_request::ConnectionRequestSlaveHandle>,
     handle: Handle,
-    pass_stream_to_context: PassStreamToContext<P>,
+    pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
-    connect_peers: ConnectPeers<P>,
+    new_con_handle: NewConnectionHandle<P, R>,
     is_p2p_con: bool,
     requested_connections: HashMap<ConnectionId, oneshot::Sender<Stream<P, R>>>,
 }
@@ -196,9 +196,9 @@ where
         auth_con: Option<oneshot::Sender<()>>,
         handle: &Handle,
         new_stream_handle: NewStreamHandle<P, R>,
-        pass_stream_to_context: PassStreamToContext<P>,
+        new_con_handle: NewConnectionHandle<P, R>,
+        pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
-        connect_peers: ConnectPeers<P>,
         is_p2p_con: bool,
     ) -> Stream<P, R> {
         let state = match auth_con {
@@ -218,7 +218,7 @@ where
             handle: handle.clone(),
             pass_stream_to_context,
             resolve_peer,
-            connect_peers,
+            new_con_handle,
             stream_handle,
             stream_handle_recv,
             is_p2p_con,
@@ -247,9 +247,9 @@ where
 
             match msg {
                 Protocol::Embedded(msg) => return Ok(Ready(Some(msg))),
-                Protocol::BuildPeerConnection(id, info) => {
+                Protocol::PeerInfo(info) => {
                     match info {
-                        BuildPeerConnection::RequestPeer(peer, mut addresses) => {
+                        PeerInfo::Request(peer, mut addresses) => {
                             match self.resolve_peer.resolve_peer(peer) {
                                 ResolvePeerResult::Found(handle) => {
                                     addresses.push(
@@ -257,22 +257,16 @@ where
                                     );
                                 }
                                 ResolvePeerResult::NotFound => {
-                                    self.send_and_poll(Protocol::BuildPeerConnection(
-                                        id,
-                                        BuildPeerConnection::NotFound,
-                                    ))?;
+                                    self.send_and_poll(PeerInfo::NotFound)?;
                                 }
                                 ResolvePeerResult::NotFoundLocally(addr) => {
-                                    self.send_and_poll(Protocol::BuildPeerConnection(
-                                        id,
-                                        BuildPeerConnection::PeerNotFoundLocally(addr),
-                                    ))?;
+                                    self.send_and_poll(PeerInfo::FoundRemote(peer, addr))?;
                                 }
                             }
                         }
-                        BuildPeerConnection::PeerNotFound => {}
-                        BuildPeerConnection::PeerNotFoundLocally(_) => {}
-                        BuildPeerConnection::ConnectToPeer(addresses) => {
+                        PeerInfo::NotFound => {}
+                        PeerInfo::FoundRemote(_) => {}
+                        PeerInfo::FoundLocally(addresses) => {
                             self.connect_peers
                                 .connect(addresses, id, self.stream_handle.clone());
                         }
@@ -357,8 +351,8 @@ where
         self.stream_handle.clone()
     }
 
-    pub fn send_and_poll(&mut self, item: P) -> Result<()> {
-        self.direct_send(Protocol::Embedded(item))
+    pub fn send_and_poll<T: Into<Protocol<P, R>>>(&mut self, item: T) -> Result<()> {
+        self.direct_send(item.into())
     }
 
     pub fn into_plain(self) -> strategies::Stream {

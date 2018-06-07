@@ -25,16 +25,26 @@ where
     /// The first message send by all `Stream`s of a `Connection` that follow the
     /// first `Stream`.
     /// To precisely describe the purpose of the `Stream`, it may carries a type.
-    StreamHello(Option<StreamType>),
+    StreamHello(Option<StreamType<P, R>>),
 
     Embedded(P),
-    BuildPeerConnection(u64, BuildPeerConnection<P, R>),
+    PeerInfo(PeerInfo<P, R>),
 
     RequestPrivateAdressInformation,
     PrivateAdressInformation(Vec<SocketAddr>),
 
     ReUseConnection,
     AckReUseConnection,
+}
+
+impl<P, R> From<P> for Protocol<P, R>
+where
+    R: ResolvePeer<P>,
+    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
+{
+    fn from(msg: P) -> Protocol<P, R> {
+        Protocol::Embedded(msg)
+    }
 }
 
 /// The type of an incoming `Connection` that describe its purpose.
@@ -48,23 +58,56 @@ pub enum ConnectionType {
     PeerToPeerPoke,
 }
 
-/// The type of an incoming `Stream` that describes its purpose.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum StreamType {
-    /// Relay this stream to another peer.
-    Relay(u64),
-}
-
-/// Build a connection to a peer.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum BuildPeerConnection<P, R>
+impl<P, R> From<ConnectionType> for Protocol<P, R>
 where
     R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    RequestPeer(R::Identifier, Vec<SocketAddr>),
-    PeerNotFound,
-    PeerNotFoundLocally(SocketAddr),
-    ConnectToPeer(Vec<SocketAddr>),
-    RelayConnection
+    fn from(ctype: ConnectionType) -> Protocol<P, R> {
+        Protocol::ConnectionHello(Some(ctype))
+    }
+}
+
+/// The type of an incoming `Stream` that describes its purpose.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum StreamType<P, R>
+where
+    R: ResolvePeer<P>,
+    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
+{
+    /// Relay this stream to another peer.
+    Relay(R::Identifier),
+}
+
+impl<P, R> From<StreamType<P, R>> for Protocol<P, R>
+where
+    R: ResolvePeer<P>,
+    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
+{
+    fn from(stype: StreamType<P, R>) -> Protocol<P, R> {
+        Protocol::StreamHello(Some(stype))
+    }
+}
+
+/// Build a connection to a peer.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum PeerInfo<P, R>
+where
+    R: ResolvePeer<P>,
+    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
+{
+    Request(R::Identifier, Vec<SocketAddr>),
+    NotFound,
+    FoundLocally(R::Identifier, Vec<SocketAddr>),
+    FoundRemote(R::Identifier, SocketAddr),
+}
+
+impl<P, R> From<PeerInfo<P, R>> for Protocol<P, R>
+where
+    R: ResolvePeer<P>,
+    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
+{
+    fn from(info: PeerInfo<P, R>) -> Protocol<P, R> {
+        Protocol::PeerInfo(info)
+    }
 }
