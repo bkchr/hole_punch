@@ -1,88 +1,81 @@
+use context::{PassStreamToContext, ResolvePeer, ResolvePeerResult};
 use error::*;
-use protocol::{ConnectionType, Protocol, StreamType};
+use protocol::{Protocol, StreamType};
 use stream::Stream;
 use timeout::Timeout;
 
 use std::time::Duration;
 
-use futures::{Future, Poll, Stream as FStream};
+use futures::{Async::Ready, Future, Poll, Stream as FStream};
 
 use serde::{Deserialize, Serialize};
 
 use tokio_core::reactor::Handle;
 
-use state_machine_future::RentToOwn;
-
-#[derive(StateMachineFuture)]
-pub enum IncomingStream<P>
+pub struct IncomingStream<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    #[state_machine_future(start, transitions(WaitingForSelectedMessage, Finished))]
-    WaitingForInitialMessage {
-        stream: Stream<P>,
-        // Is this the first stream of the `Connection`?
-        first_stream: bool,
-        timeout: Timeout,
-    },
-    #[state_machine_future(transitions(Finished))]
-    WaitingForSelectedMessage { stream: Stream<P>, timeout: Timeout },
-    #[state_machine_future(ready)]
-    Finished(Option<Stream<P>>),
-    #[state_machine_future(error)]
-    ErrorState(Error),
+    stream: Option<Stream<P, R>>,
+    // Is this the first stream of the `Connection`?
+    first_stream: bool,
+    timeout: Timeout,
+    pass_stream_to_context: PassStreamToContext<P, R>,
+    resolve_peer: R,
+    handle: Handle,
 }
 
-impl<P> IncomingStream<P>
+impl<P, R> IncomingStream<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    pub(crate) fn new(
-        stream: Stream<P>,
+    pub fn new(
+        stream: Stream<P, R>,
         first_stream: bool,
         timeout: Duration,
+        pass_stream_to_context: PassStreamToContext<P, R>,
+        resolve_peer: R,
         handle: &Handle,
-    ) -> IncomingStreamFuture<P> {
-        IncomingStream::start(stream, first_stream, Timeout::new(timeout, handle))
+    ) -> IncomingStream<P, R> {
+        IncomingStream {
+            stream: Some(stream),
+            first_stream,
+            timeout: Timeout::new(timeout, handle),
+            pass_stream_to_context,
+            resolve_peer,
+            handle: handle.clone(),
+        }
     }
 }
 
-impl<P> PollIncomingStream<P> for IncomingStream<P>
+impl<P, R> Future for IncomingStream<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    fn poll_waiting_for_initial_message<'a>(
-        wait: &'a mut RentToOwn<'a, WaitingForInitialMessage<P>>,
-    ) -> Poll<AfterWaitingForInitialMessage<P>, Error> {
-        if let Err(_) = wait.timeout.poll() {
-            bail!("timeout at IncomingStream::waiting_for_initial_message");
+    type Item = ();
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if let Err(_) = self.timeout.poll() {
+            bail!("timeout at IncomingStream::poll()");
         }
 
-        let msg = try_ready!(wait.stream.direct_poll());
+        let msg = try_ready!(
+            self.stream
+                .as_mut()
+                .expect("Can not be polled twice!")
+                .direct_poll()
+        );
 
-        if wait.first_stream {
+        if self.first_stream {
             match msg {
-                Some(Protocol::ConnectionHello(ctype)) => match ctype {
-                    None => {
-                        let mut wait = wait.take();
-                        wait.stream.direct_send(Protocol::ConnectionHelloAck)?;
-                        transition!(Finished(Some(wait.stream)))
-                    }
-                    Some(ConnectionType::PeerToPeerPoke) => {
-                        println!("POKE");
-                        wait.stream.direct_send(Protocol::ConnectionHelloAck)?;
-                        transition!(Finished(None))
-                    }
-                    Some(ConnectionType::PeerToPeer(id)) => {
-                        println!("PEERTOPEER");
-                        let mut wait = wait.take();
-                        wait.stream.direct_send(Protocol::ConnectionHelloAck)?;
-                        transition!(WaitingForSelectedMessage {
-                            timeout: wait.timeout,
-                            stream: wait.stream,
-                        })
-                    }
-                },
+                Some(Protocol::ConnectionHello) => {
+                    self.pass_stream_to_context
+                        .pass_stream(self.stream.take().unwrap());
+                }
                 _ => {
                     bail!("unexpected message({:?}) at IncomingStream::waiting_for_initial_message")
                 }
@@ -90,33 +83,27 @@ where
         } else {
             match msg {
                 Some(Protocol::StreamHello(stype)) => match stype {
-                    None => {}
-                    Some(StreamType::Relay(id)) => {}
+                    None => {
+                        self.pass_stream_to_context
+                            .pass_stream(self.stream.take().unwrap());
+                    }
+                    Some(StreamType::Relay(peer)) => {
+                        match self.resolve_peer.resolve_peer(&peer) {
+                            ResolvePeerResult::Found(handle) => {}
+                            _ => {
+                                self.stream.take().unwrap().send_and_poll(Protocol::Error(
+                                    format!("Could not find peer for relaying connection."),
+                                ));
+                            }
+                        }
+                    }
                 },
                 _ => {
                     bail!("unexpected message({:?}) at IncomingStream::waiting_for_initial_message")
                 }
             }
         }
-    }
 
-    fn poll_waiting_for_selected_message<'a>(
-        wait: &'a mut RentToOwn<'a, WaitingForSelectedMessage<P>>,
-    ) -> Poll<AfterWaitingForSelectedMessage<P>, Error> {
-        loop {
-            if let Err(_) = wait.timeout.poll() {
-                // The other side will no send a message, when a connection is NOT selected.
-                transition!(Finished(None));
-            }
-
-            match try_ready!(wait.stream.direct_poll()) {
-                Some(Protocol::ConnectionSelected) => {
-                    let mut wait = wait.take();
-                    transition!(Finished(Some(wait.stream,)))
-                }
-                None => transition!(Finished(None)),
-                _ => {}
-            }
-        }
+        Ok(Ready(()))
     }
 }

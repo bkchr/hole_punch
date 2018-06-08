@@ -133,10 +133,9 @@ where
         }
     }
 
-    pub fn create_connection_to_server(&mut self, addr: &SocketAddr) -> NewConnectionToServer<P> {
+    pub fn create_connection_to_server(&mut self, addr: &SocketAddr) -> NewConnectionToServer<P, R> {
         NewConnectionToServer::new(
             ConnectWithStrategies::new(self.new_connection_handles.clone(), &self.handle, *addr),
-            self.new_connection.0.clone(),
         )
     }
 }
@@ -144,37 +143,35 @@ where
 pub struct NewConnectionToServer<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    connect: ConnectWithStrategies<P>,
-    new_con_send: mpsc::UnboundedSender<Connection<P, R>>,
+    connect: ConnectWithStrategies<P, R>,
 }
 
-impl<P> NewConnectionToServer<P>
+impl<P, R> NewConnectionToServer<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
     fn new(
-        connect: ConnectWithStrategies<P>,
-        new_con_send: mpsc::UnboundedSender<Connection<P>>,
-    ) -> NewConnectionToServer<P> {
+        connect: ConnectWithStrategies<P, R>,
+    ) -> NewConnectionToServer<P, R> {
         NewConnectionToServer {
             connect,
-            new_con_send,
         }
     }
 }
 
-impl<P> Future for NewConnectionToServer<P>
+impl<P, R> Future for NewConnectionToServer<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
     type Item = Stream<P, R>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let (con, stream) = try_ready!(self.connect.poll());
-
-        let _ = self.new_con_send.unbounded_send(con);
 
         Ok(Ready(stream))
     }

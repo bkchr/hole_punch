@@ -1,8 +1,7 @@
 use connection::{ConnectionId, NewConnectionHandle};
-use connection_request;
 use context::{PassStreamToContext, ResolvePeer, ResolvePeerResult};
 use error::*;
-use protocol::{PeerInfo, Protocol};
+use protocol::{BuildPeerToPeerConnection, LocatePeer, Protocol};
 use strategies::{self, AddressInformation, GetConnectionId, NewStream};
 
 use std::collections::HashMap;
@@ -158,9 +157,13 @@ enum StreamState {
     UnAuthenticated(oneshot::Sender<()>),
 }
 
-enum HandleProtocol<P, R> {
+enum HandleProtocol<P, R>
+    where
+        P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+    {
     Send(Protocol<P, R>),
-    AddressInfoRequest(connection_request::ConnectionRequestSlaveHandle),
+    AddressInformationRequest(R::Identifier, StreamHandle<P, R>),
 }
 
 pub struct Stream<P, R>
@@ -175,15 +178,13 @@ where
     state: StreamState,
     stream_handle: StreamHandle<P, R>,
     stream_handle_recv: mpsc::UnboundedReceiver<HandleProtocol<P, R>>,
-    con_requests: HashMap<ConnectionId, connection_request::ConnectionRequestMasterHandle>,
-    incoming_con_requests: HashMap<ConnectionId, Vec<SocketAddr>>,
-    address_info_requests: Vec<connection_request::ConnectionRequestSlaveHandle>,
+    address_info_requests: Vec<(R::Identifier, StreamHandle<P, R>)>,
     handle: Handle,
     pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     is_p2p_con: bool,
-    requested_connections: HashMap<ConnectionId, oneshot::Sender<Stream<P, R>>>,
+    requested_connections: HashMap<R::Identifier, oneshot::Sender<Stream<P, R>>>,
 }
 
 impl<P, R> Stream<P, R>
@@ -199,7 +200,7 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
-        is_p2p_con: bool,
+        is_p2p_con: bool
     ) -> Stream<P, R> {
         let state = match auth_con {
             Some(auth) => StreamState::UnAuthenticated(auth),
@@ -213,7 +214,6 @@ where
             stream: WriteJson::new(ReadJson::new(length_delimited::Framed::new(stream))),
             state,
             con_requests: HashMap::new(),
-            incoming_con_requests: HashMap::new(),
             address_info_requests: Vec::new(),
             handle: handle.clone(),
             pass_stream_to_context,
@@ -247,49 +247,66 @@ where
 
             match msg {
                 Protocol::Embedded(msg) => return Ok(Ready(Some(msg))),
-                Protocol::PeerInfo(info) => {
+                Protocol::LocatePeer(info) => {
                     match info {
-                        PeerInfo::Request(peer, mut addresses) => {
-                            match self.resolve_peer.resolve_peer(peer) {
-                                ResolvePeerResult::Found(handle) => {
-                                    addresses.push(
-                                        self.stream.get_ref().get_ref().get_ref().peer_addr(),
-                                    );
-                                }
-                                ResolvePeerResult::NotFound => {
-                                    self.send_and_poll(PeerInfo::NotFound)?;
-                                }
-                                ResolvePeerResult::NotFoundLocally(addr) => {
-                                    self.send_and_poll(PeerInfo::FoundRemote(peer, addr))?;
-                                }
+                        LocatePeer::Locate(peer) => match self.resolve_peer.resolve_peer(peer) {
+                            ResolvePeerResult::Found(_) => {
+                                self.send_and_poll(LocatePeer::FoundLocally(peer))?;
                             }
-                        }
-                        PeerInfo::NotFound => {}
-                        PeerInfo::FoundRemote(_) => {}
-                        PeerInfo::FoundLocally(addresses) => {
-                            self.connect_peers
-                                .connect(addresses, id, self.stream_handle.clone());
-                        }
+                            ResolvePeerResult::NotFound => {
+                                self.send_and_poll(LocatePeer::NotFound)?;
+                            }
+                            ResolvePeerResult::NotFoundLocally(addr) => {
+                                self.send_and_poll(LocatePeer::FoundRemote(peer, addr))?;
+                            }
+                        },
+                        LocatePeer::NotFound => {}
+                        LocatePeer::FoundRemote(_, _) => {}
+                        LocatePeer::FoundLocally(peer) => {}
                     };
                 }
-                Protocol::RequestPrivateAdressInformation => {
-                    let addresses = get_interface_addresses(
-                        self.stream.get_ref().get_ref().get_ref().local_addr(),
-                    );
-                    self.direct_send(Protocol::PrivateAdressInformation(addresses))?;
-                }
-                Protocol::PrivateAdressInformation(mut addresses) => {
-                    addresses.push(self.stream.get_ref().get_ref().get_ref().peer_addr());
+                Protocol::BuildPeerToPeerConnection(op) => match op {
+                    BuildPeerToPeerConnection::AddressInformationExchange(peer, mut addresses) => {
+                        match self.resolve_peer.resolve_peer(peer) {
+                            ResolvePeerResult::Found(handle) => {
+                                handle.request_address_information(
+                                    peer.clone(),
+                                    self.stream_handle.clone(),
+                                );
 
-                    for req in self.address_info_requests.drain(..).into_iter() {
-                        req.add_address_info(addresses.clone());
+                                addresses
+                                    .push(self.stream.get_ref().get_ref().get_ref().peer_addr());
+                                handle.send_msg(BuildPeerToPeerConnection::ConnectionCreate(
+                                    peer, addresses,
+                                ));
+                            }
+                            _ => {
+                                self.send_and_poll(BuildPeerToPeerConnection::PeerNotFound(peer));
+                            }
+                        }
                     }
-                }
-                Protocol::RequestRelayPeerConnection(connection_id) => {
-                    if let Some(req) = self.con_requests.remove(&connection_id) {
-                        req.relay_connection();
+                    BuildPeerToPeerConnection::AddressInformationRequest => {
+                        let addresses = get_interface_addresses(
+                            self.stream.get_ref().get_ref().get_ref().local_addr(),
+                        );
+                        self.send_and_poll(BuildPeerToPeerConnection::AddressInformationResponse(
+                            addresses,
+                        ))?;
                     }
-                }
+                    BuildPeerToPeerConnection::AddressInformationResponse(addresses) => {
+                        addresses.push(self.stream.get_ref().get_ref().get_ref().peer_addr());
+                        self.address_info_requests
+                            .into_iter()
+                            .for_each(|(peer, handle)| {
+                                handle.send_msg(BuildPeerToPeerConnection::ConnectionCreate(
+                                    peer,
+                                    addresses.clone(),
+                                ))
+                            });
+                    }
+                    BuildPeerToPeerConnection::ConnectionCreate(peer, addresses) => {}
+                    BuildPeerToPeerConnection::PeerNotFound(peer) => {}
+                },
                 _ => {}
             };
         }
@@ -393,8 +410,8 @@ where
                     HandleProtocol::Send(msg) => {
                         self.direct_send(msg)?;
                     }
-                    HandleProtocol::AddressInfoRequest(req) => {
-                        self.address_info_requests.push(req);
+                    HandleProtocol::AddressInformationRequest(peer, handle) => {
+                        self.address_info_requests.push((peer, handle));
                     }
                 },
                 _ => break,
@@ -458,17 +475,14 @@ where
         }
     }
 
-    pub(crate) fn send_msg(&mut self, msg: Protocol<P, R>) {
-        let _ = self.send.unbounded_send(HandleProtocol::Send(msg));
+    pub(crate) fn send_msg<T: Into<Protocol<P, R>>>(&mut self, msg: T) {
+        let _ = self.send.unbounded_send(HandleProtocol::Send(msg.into()));
     }
 
-    pub(crate) fn register_address_info_handle(
-        &mut self,
-        handle: connection_request::ConnectionRequestSlaveHandle,
-    ) {
+    pub(crate) fn request_address_information(&mut self, peer: R::Identifier, handle: Self) {
         let _ = self
             .send
-            .unbounded_send(HandleProtocol::AddressInfoRequest(handle));
+            .unbounded_send(HandleProtocol::AddressInformationRequest(peer, handle));
     }
 
     pub(crate) fn new_stream(&mut self) -> NewStreamFuture<P, R> {

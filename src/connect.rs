@@ -1,132 +1,121 @@
-use connection::{Connection, ConnectionId, NewConnectionFuture, NewConnectionHandle};
+use connection::{Connection, NewConnectionFuture, NewConnectionHandle};
+use context::ResolvePeer;
 use error::*;
-use protocol::{ConnectionType, Protocol};
+use protocol::{Protocol, StreamType};
 use stream::{NewStreamFuture, Stream, StreamHandle};
 use timeout::Timeout;
 
-use std::mem::discriminant;
-use std::net::SocketAddr;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use tokio_core::reactor::Handle;
 
-use futures::stream::{futures_unordered, FuturesUnordered};
-use futures::Async::{NotReady, Ready};
-use futures::{Future, Poll, Stream as FStream};
+use futures::{
+    stream::{futures_unordered, FuturesUnordered}, sync::oneshot, Async::{NotReady, Ready}, Future,
+    Poll, Stream as FStream,
+};
 
 use serde::{Deserialize, Serialize};
 
 use state_machine_future::RentToOwn;
 
 #[derive(StateMachineFuture)]
-pub enum ConnectStateMachine<P>
+pub enum ConnectStateMachine<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
     #[state_machine_future(start, transitions(WaitForConnection))]
     InitConnect {
-        strat: NewConnectionHandle<P>,
+        strat: NewConnectionHandle<P, R>,
         addr: SocketAddr,
         handle: Handle,
     },
     #[state_machine_future(transitions(WaitForConnectStream))]
     WaitForConnection {
-        wait: NewConnectionFuture<P>,
+        wait: NewConnectionFuture<P, R>,
         timeout: Timeout,
-    },
-    #[state_machine_future(transitions(WaitForInitialAnswer))]
-    WaitForConnectStream {
-        con: Connection<P>,
-        wait: NewStreamFuture<P>,
-        timeout: Timeout,
+        handle: Handle,
     },
     #[state_machine_future(transitions(ConnectionCreated))]
-    WaitForInitialAnswer {
-        wait: WaitForMessage<P>,
+    WaitForConnectStream {
+        con: Connection<P, R>,
+        wait: NewStreamFuture<P, R>,
         timeout: Timeout,
     },
     #[state_machine_future(ready)]
-    ConnectionCreated((Connection<P>, Stream<P>)),
+    ConnectionCreated(Stream<P, R>),
     #[state_machine_future(error)]
     ConnectionError(Error),
 }
 
-impl<P> PollConnectStateMachine<P> for ConnectStateMachine<P>
+impl<P, R> PollConnectStateMachine<P, R> for ConnectStateMachine<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
     fn poll_init_connect<'a>(
-        init: &'a mut RentToOwn<'a, InitConnect<P>>,
-    ) -> Poll<AfterInitConnect<P>, Error> {
+        init: &'a mut RentToOwn<'a, InitConnect<P, R>>,
+    ) -> Poll<AfterInitConnect<P, R>, Error> {
         let mut init = init.take();
 
         let wait = init.strat.new_connection(init.addr);
         let timeout = Timeout::new(Duration::from_secs(2), &init.handle);
+        let handle = init.handle;
 
-        transition!(WaitForConnection { wait, timeout })
+        transition!(WaitForConnection { wait, timeout, handle })
     }
 
     fn poll_wait_for_connection<'a>(
-        wait: &'a mut RentToOwn<'a, WaitForConnection<P>>,
-    ) -> Poll<AfterWaitForConnection<P>, Error> {
+        wait: &'a mut RentToOwn<'a, WaitForConnection<P, R>>,
+    ) -> Poll<AfterWaitForConnection<P, R>, Error> {
         let _ = wait.timeout.poll()?;
 
         let mut con = try_ready!(wait.wait.poll());
 
-        let wait = wait.take();
-        let timeout = wait.timeout.new_reset();
+        let wait_old = wait.take();
+        let timeout = wait_old.timeout.new_reset();
 
         let wait = con.new_stream();
+
+        wait_old.handle.spawn(con.into_executor());
 
         transition!(WaitForConnectStream { con, timeout, wait })
     }
 
     fn poll_wait_for_connect_stream<'a>(
-        wait: &'a mut RentToOwn<'a, WaitForConnectStream<P>>,
-    ) -> Poll<AfterWaitForConnectStream<P>, Error> {
+        wait: &'a mut RentToOwn<'a, WaitForConnectStream<P, R>>,
+    ) -> Poll<AfterWaitForConnectStream<P, R>, Error> {
         let _ = wait.timeout.poll()?;
 
         let mut stream = try_ready!(wait.wait.poll());
 
-        stream.direct_send(Protocol::ConnectionHello(None))?;
+        stream.direct_send(Protocol::ConnectionHello)?;
 
-        let wait = wait.take();
-        let timeout = wait.timeout.new_reset();
-        let wait = WaitForMessage::new(Some(wait.con), stream, Protocol::ConnectionHelloAck);
-
-        transition!(WaitForInitialAnswer { wait, timeout })
-    }
-
-    fn poll_wait_for_initial_answer<'a>(
-        wait: &'a mut RentToOwn<'a, WaitForInitialAnswer<P>>,
-    ) -> Poll<AfterWaitForInitialAnswer<P>, Error> {
-        let _ = wait.timeout.poll()?;
-
-        let (con, stream) = try_ready!(wait.wait.poll());
-
-        transition!(ConnectionCreated((con.unwrap(), stream)))
+        transition!(ConnectionCreated(stream))
     }
 }
 
-pub struct ConnectWithStrategies<P>
+pub struct ConnectWithStrategies<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    strategies: Vec<NewConnectionHandle<P>>,
-    connect: ConnectStateMachineFuture<P>,
+    strategies: Vec<NewConnectionHandle<P, R>>,
+    connect: ConnectStateMachineFuture<P, R>,
     addr: SocketAddr,
     handle: Handle,
 }
 
-impl<P> ConnectWithStrategies<P>
+impl<P, R> ConnectWithStrategies<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
     pub(crate) fn new(
-        mut strategies: Vec<NewConnectionHandle<P>>,
+        mut strategies: Vec<NewConnectionHandle<P, R>>,
         handle: &Handle,
         addr: SocketAddr,
-    ) -> ConnectWithStrategies<P> {
+    ) -> ConnectWithStrategies<P, R> {
         let strategy = strategies
             .pop()
             .expect("At least one strategy should be given!");
@@ -140,11 +129,12 @@ where
     }
 }
 
-impl<P> Future for ConnectWithStrategies<P>
+impl<P, R> Future for ConnectWithStrategies<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    type Item = (Connection<P>, Stream<P>);
+    type Item = Stream<P, R>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -168,272 +158,231 @@ where
     }
 }
 
-pub struct WaitForMessage<P>(Option<Connection<P>>, Option<Stream<P>>, Protocol<P>)
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone;
-
-impl<P> WaitForMessage<P>
+#[derive(StateMachineFuture)]
+pub enum PeerToPeerConnection<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+{
+    #[state_machine_future(start, transitions(WaitingForStream, ConnectionEstablished))]
+    WaitingForConnection {
+        timeout: Timeout,
+        new_cons: FuturesUnordered<NewConnectionFuture<P, R>>,
+        handle: Handle,
+    },
+    #[state_machine_future(transitions(ConnectionEstablished))]
+    WaitingForStream { new_stream: NewStreamFuture<P, R> },
+    #[state_machine_future(ready)]
+    ConnectionEstablished(Stream<P, R>),
+    #[state_machine_future(error)]
+    PeerToPeerError(Error),
+}
+
+impl<P, R> PeerToPeerConnection<P, R>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
     pub fn new(
-        con: Option<Connection<P>>,
-        stream: Stream<P>,
-        msg: Protocol<P>,
-    ) -> WaitForMessage<P> {
-        WaitForMessage(con, Some(stream), msg)
-    }
-}
-
-impl<P> Future for WaitForMessage<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = (Option<Connection<P>>, Stream<P>);
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let message = match try_ready!(
-                self.1
-                    .as_mut()
-                    .expect("can not be polled when message was already received")
-                    .direct_poll()
-            ) {
-                Some(message) => message,
-                None => bail!("connection closed while waiting for Message"),
-            };
-
-            if discriminant(&self.2) == discriminant(&message) {
-                return Ok(Ready((self.0.take(), self.1.take().unwrap())));
-            }
-        }
-    }
-}
-
-struct WaitForNewStream<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    new_stream: NewStreamFuture<P>,
-    con: Option<Connection<P>>,
-}
-
-impl<P> WaitForNewStream<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn new(mut con: Connection<P>) -> WaitForNewStream<P> {
-        let new_stream = con.new_stream();
-        let con = Some(con);
-        WaitForNewStream { new_stream, con }
-    }
-}
-
-impl<P> Future for WaitForNewStream<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = (Connection<P>, Stream<P>);
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.new_stream
-            .poll()
-            .map(|r| r.map(|v| (self.con.take().expect("can only be taken once"), v)))
-    }
-}
-
-pub struct DirectDeviceToDeviceConnection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    wait_for_con: FuturesUnordered<NewConnectionFuture<P>>,
-    wait_for_stream: FuturesUnordered<WaitForNewStream<P>>,
-    wait_for_resp: FuturesUnordered<WaitForMessage<P>>,
-    handle: Handle,
-    is_master: bool,
-    connection_id: ConnectionId,
-}
-
-impl<P> DirectDeviceToDeviceConnection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    pub fn new(
-        mut strat: NewConnectionHandle<P>,
-        addresses: &[SocketAddr],
+        new_connection_handle: NewConnectionHandle<P, R>,
+        peer_addresses: Vec<SocketAddr>,
         handle: &Handle,
-        is_master: bool,
-        connection_id: ConnectionId,
-    ) -> DirectDeviceToDeviceConnection<P> {
-        DirectDeviceToDeviceConnection {
-            wait_for_con: futures_unordered(addresses.iter().map(|a| strat.new_connection(*a))),
-            wait_for_stream: FuturesUnordered::new(),
-            wait_for_resp: FuturesUnordered::new(),
-            handle: handle.clone(),
-            is_master,
-            connection_id,
-        }
+    ) -> PeerToPeerConnectionFuture<P, R> {
+        let timeout = Timeout::new(Duration::from_secs(20), handle);
+        let cons = futures_unordered(
+            peer_addresses
+                .into_iter()
+                .map(|a| new_connection_handle.new_connection(a)),
+        );
+        PeerToPeerConnection::start(timeout, cons, handle.clone())
     }
 }
 
-impl<P> Future for DirectDeviceToDeviceConnection<P>
+impl<P, R> PollPeerToPeerConnection<P, R> for PeerToPeerConnection<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    type Item = (Connection<P>, Stream<P>);
+    fn poll_waiting_for_connection<'a>(
+        wait: &'a mut RentToOwn<'a, WaitingForConnection<P, R>>,
+    ) -> Poll<AfterWaitingForConnection<P, R>, Error> {
+        wait.timeout.poll()?;
+
+        let con = match try_ready!(wait.new_cons.poll()) {
+            Some(con) => con,
+            None => bail!("PeerToPeerConnection new_cons returned `None`."),
+        };
+
+        let new_stream = con.new_stream();
+
+        wait.handle.spawn(con.into_executor());
+
+        transition!(WaitingForStream { new_stream })
+    }
+
+    fn poll_waiting_for_stream<'a>(
+        wait: &'a mut RentToOwn<'a, WaitingForStream<P, R>>,
+    ) -> Poll<AfterWaitingForStream<P, R>, Error> {
+        let stream = try_ready!(wait.new_stream.poll());
+        transition!(ConnectionEstablished(stream))
+    }
+}
+
+pub struct RelayConnection<P, R>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+{
+    new_stream: NewStreamFuture<P, R>,
+    peer: R::Identifier,
+}
+
+impl<P, R> RelayConnection<P, R>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+{
+    pub fn new(peer: R::Identifier, stream_handle: StreamHandle<P, R>) -> RelayConnection<P, R> {
+        let new_stream = stream_handle.new_stream();
+        RelayConnection { new_stream, peer }
+    }
+}
+
+impl<P, R> Future for RelayConnection<P, R>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+{
+    type Item = Stream<P, R>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            let con = self.wait_for_con.poll()?;
+        let mut stream = try_ready!(self.new_stream.poll());
 
-            match con {
-                Ready(Some(mut con)) => {
-                    con.set_p2p(true);
-                    self.wait_for_stream.push(WaitForNewStream::new(con));
-                }
-                _ => break,
-            }
-        }
-
-        loop {
-            let res = self.wait_for_stream.poll()?;
-
-            match res {
-                Ready(Some((con, mut stream))) => {
-                    if self.is_master {
-                        stream
-                            .direct_send(Protocol::ConnectionHello(Some(
-                                ConnectionType::PeerToPeer(self.connection_id),
-                            )))
-                            .unwrap();
-                    } else {
-                        stream
-                            .direct_send(Protocol::ConnectionHello(Some(
-                                ConnectionType::PeerToPeerPoke,
-                            )))
-                            .unwrap();
-                    }
-
-                    self.wait_for_resp.push(WaitForMessage::new(
-                        Some(con),
-                        stream,
-                        Protocol::ConnectionHelloAck,
-                    ));
-                }
-                _ => break,
-            }
-        }
-
-        loop {
-            match self.wait_for_resp.poll() {
-                Ok(Ready(Some((con, mut stream)))) => {
-                    stream.direct_send(Protocol::ConnectionSelected).unwrap();
-                    return Ok(Ready((con.unwrap(), stream)));
-                }
-                Ok(NotReady) => return Ok(NotReady),
-                Ok(Ready(None)) => {
-                    if self.wait_for_stream.is_empty() && self.wait_for_con.is_empty() {
-                        bail!("No connections left for connecting to device!");
-                    } else {
-                        return Ok(NotReady);
-                    }
-                }
-                Err(e) => {
-                    eprintln!("{:?}", e);
-                }
-            }
-        }
+        stream.send_and_poll(StreamType::Relay(self.peer.clone()))?;
+        Ok(Ready(stream))
     }
 }
 
 #[derive(StateMachineFuture)]
-pub enum DeviceToDeviceConnection<P>
+pub enum BuildConnectionToPeer<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    #[state_machine_future(start, transitions(TryDirectConnection))]
-    InitState {
-        new_connection_handle: NewConnectionHandle<P>,
-        addresses: Vec<SocketAddr>,
-        stream_handle: StreamHandle<P>,
-        connection_id: ConnectionId,
-        is_master: bool,
-        handle: Handle,
+    #[state_machine_future(start, transitions(TryRelayConnection, ConnectionBuild))]
+    TryPeerToPeerConnection {
+        peer: R::Identifier,
+        stream_handle: StreamHandle<P, R>,
+        p2p_con: PeerToPeerConnectionFuture<P, R>,
+        result_send: oneshot::Sender<Stream<P, R>>,
     },
-    #[state_machine_future(transitions(ConnectionEstablished))]
-    TryDirectConnection {
-        connect: DirectDeviceToDeviceConnection<P>,
-        timeout: Timeout,
-        stream_handle: StreamHandle<P>,
-        connection_id: ConnectionId,
-        is_master: bool,
+    #[state_machine_future(transitions(ConnectionBuild))]
+    TryRelayConnection {
+        relay_con: RelayConnection<P, R>,
+        result_send: oneshot::Sender<Stream<P, R>>,
     },
     #[state_machine_future(ready)]
-    ConnectionEstablished((Option<Connection<P>>, Option<Stream<P>>, ConnectionId)),
+    ConnectionBuild(()),
     #[state_machine_future(error)]
-    ErrorState(Error),
+    ConnectionBuildError(Error),
 }
 
-impl<P> PollDeviceToDeviceConnection<P> for DeviceToDeviceConnection<P>
+impl<P, R> BuildConnectionToPeer<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    fn poll_init_state<'a>(
-        init: &'a mut RentToOwn<'a, InitState<P>>,
-    ) -> Poll<AfterInitState<P>, Error> {
-        let init = init.take();
+    pub fn create_and_run(
+        new_connection_handle: NewConnectionHandle<P, R>,
+        peer: R::Identifier,
+        peer_addresses: Vec<SocketAddr>,
+        stream_handle: StreamHandle<P, R>,
+        handle: &Handle,
+        result_send: oneshot::Sender<Stream<P, R>>,
+    ) {
+        let p2p_con = PeerToPeerConnection::new(new_connection_handle, peer_addresses, handle);
+        let build = BuildConnectionToPeer::start(peer, stream_handle, p2p_con, result_send);
+        handle.spawn(build.map_err(|e| println!("{:?}", e)));
+    }
+}
 
-        let timeout = Timeout::new(
-            Duration::from_secs(if init.is_master { 20 } else { 1 }),
-            &init.handle,
-        );
-        let connection_id = init.connection_id;
-        let is_master = init.is_master;
-        let new_connection_handle = init.new_connection_handle;
+impl<P, R> PollBuildConnectionToPeer<P, R> for BuildConnectionToPeer<P, R>
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+{
+    fn poll_try_peer_to_peer_connection<'a>(
+        try: &'a mut RentToOwn<'a, TryPeerToPeerConnection<P, R>>,
+    ) -> Poll<AfterTryPeerToPeerConnection<P, R>, Error> {
+        let stream = match try.p2p_con.poll() {
+            Ok(Ready(stream)) => stream,
+            Ok(NotReady) => return Ok(NotReady),
+            Err(e) => {
+                println!("{:?}", e);
 
-        transition!(TryDirectConnection {
-            connect: DirectDeviceToDeviceConnection::new(
-                new_connection_handle,
-                &init.addresses,
-                &init.handle,
-                is_master,
-                connection_id,
-            ),
-            timeout,
-            stream_handle: init.stream_handle,
-            connection_id,
-            is_master,
-        })
+                let try = try.take();
+                let relay_con = RelayConnection::new(try.peer, try.stream_handle);
+                transition!(TryRelayConnection {
+                    relay_con,
+                    result_send: try.result_send
+                });
+            }
+        };
+
+        let try = try.take();
+        let _ = try.result_send.send(stream);
+        transition!(ConnectionBuild)
     }
 
-    fn poll_try_direct_connection<'a>(
-        try: &'a mut RentToOwn<'a, TryDirectConnection<P>>,
-    ) -> Poll<AfterTryDirectConnection<P>, Error> {
-        let res = try.connect.poll();
-        let timeout = try.timeout.poll();
+    fn poll_try_relay_connection<'a>(
+        try: &'a mut RentToOwn<'a, TryRelayConnection<P, R>>,
+    ) -> Poll<AfterTryRelayConnection, Error> {
+        let stream = try_ready!(try.relay_con.poll());
 
-        if timeout.is_err() || res.is_err() {
-            if try.is_master {
-                let mut try = try.take();
-                try.stream_handle
-                    .send_msg(Protocol::RequestRelayPeerConnection(try.connection_id));
+        let try = try.take();
+        let _ = try.result_send.send(stream);
+        transition!(ConnectionBuild)
+    }
+}
 
-                transition!(ConnectionEstablished((None, None, try.connection_id)))
-            } else {
-                // The controller will create a relay connection via the server
-                bail!("direct device to device connection timeout")
-            }
-        } else {
-            let (con, stream) = try_ready!(res);
+fn create_poke_connections<P, R>(
+    new_connection_handle: NewConnectionHandle<P, R>,
+    peer_addresses: Vec<SocketAddr>,
+) where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+{
+    // Create the connections, we don't want to use them, we just need to open the NAT port.
+    peer_addresses.into_iter().for_each(|a| {
+        new_connection_handle.new_connection(a);
+    });
+}
 
-            transition!(ConnectionEstablished((
-                Some(con),
-                Some(stream),
-                try.connection_id
-            )))
+pub fn build_connection_to_peer<P, R>(
+    new_connection_handle: NewConnectionHandle<P, R>,
+    peer: R::Identifier,
+    peer_addresses: Vec<SocketAddr>,
+    stream_handle: StreamHandle<P, R>,
+    handle: &Handle,
+    result_send: Option<oneshot::Sender<Stream<P, R>>>,
+) where
+    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
+{
+    match result_send {
+        Some(result_send) => {
+            BuildConnectionToPeer::create_and_run(
+                new_connection_handle,
+                peer,
+                peer_addresses,
+                stream_handle,
+                handle,
+                result_send,
+            );
+        }
+        None => {
+            create_poke_connections(new_connection_handle, peer_addresses);
         }
     }
 }

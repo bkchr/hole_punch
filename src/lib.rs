@@ -33,7 +33,6 @@ mod authenticator;
 mod config;
 mod connect;
 mod connection;
-mod connection_request;
 mod context;
 mod incoming_stream;
 mod pubkey;

@@ -150,16 +150,22 @@ where
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
         handle: &Handle,
+        is_authenticated: bool,
     ) -> Connection<P, R> {
         let (send, auth_recv) = oneshot::channel();
         let (connect_peers_send, connect_peers_recv) = mpsc::unbounded();
+        let state = if is_authenticated {
+            ConnectionState::Authenticated
+        } else {
+            ConnectionState::UnAuthenticated {
+                auth_recv,
+                auth_send: Some(send),
+            }
+        };
 
         Connection {
             con,
-            state: ConnectionState::UnAuthenticated {
-                auth_recv,
-                auth_send: Some(send),
-            },
+            state,
             handle: handle.clone(),
             pass_stream_to_context,
             is_p2p: false,
