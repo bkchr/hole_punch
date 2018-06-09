@@ -1,4 +1,4 @@
-use connection::{Connection, NewConnectionFuture, NewConnectionHandle};
+use connection::{NewConnectionFuture, NewConnectionHandle};
 use context::ResolvePeer;
 use error::*;
 use protocol::{Protocol, StreamType};
@@ -38,7 +38,6 @@ where
     },
     #[state_machine_future(transitions(ConnectionCreated))]
     WaitForConnectStream {
-        con: Connection<P, R>,
         wait: NewStreamFuture<P, R>,
         timeout: Timeout,
     },
@@ -79,7 +78,7 @@ where
 
         wait_old.handle.spawn(con.into_executor());
 
-        transition!(WaitForConnectStream { con, timeout, wait })
+        transition!(WaitForConnectStream { timeout, wait })
     }
 
     fn poll_wait_for_connect_stream<'a>(
@@ -184,7 +183,7 @@ where
     R: ResolvePeer<P>,
 {
     pub fn new(
-        new_connection_handle: NewConnectionHandle<P, R>,
+        mut new_connection_handle: NewConnectionHandle<P, R>,
         peer_addresses: Vec<SocketAddr>,
         handle: &Handle,
     ) -> PeerToPeerConnectionFuture<P, R> {
@@ -208,7 +207,7 @@ where
     ) -> Poll<AfterWaitingForConnection<P, R>, Error> {
         wait.timeout.poll()?;
 
-        let con = match try_ready!(wait.new_cons.poll()) {
+        let mut con = match try_ready!(wait.new_cons.poll()) {
             Some(con) => con,
             None => bail!("PeerToPeerConnection new_cons returned `None`."),
         };
@@ -242,7 +241,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     R: ResolvePeer<P>,
 {
-    pub fn new(peer: R::Identifier, stream_handle: StreamHandle<P, R>) -> RelayConnection<P, R> {
+    pub fn new(peer: R::Identifier, mut stream_handle: StreamHandle<P, R>) -> RelayConnection<P, R> {
         let new_stream = stream_handle.new_stream();
         RelayConnection { new_stream, peer }
     }
@@ -332,7 +331,7 @@ where
 
         let try = try.take();
         let _ = try.result_send.send(stream);
-        transition!(ConnectionBuild)
+        transition!(ConnectionBuild(()))
     }
 
     fn poll_try_relay_connection<'a>(
@@ -342,12 +341,12 @@ where
 
         let try = try.take();
         let _ = try.result_send.send(stream);
-        transition!(ConnectionBuild)
+        transition!(ConnectionBuild(()))
     }
 }
 
 fn create_poke_connections<P, R>(
-    new_connection_handle: NewConnectionHandle<P, R>,
+    mut new_connection_handle: NewConnectionHandle<P, R>,
     peer_addresses: Vec<SocketAddr>,
 ) where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,

@@ -1,15 +1,12 @@
 use context::{PassStreamToContext, ResolvePeer};
 use error::*;
 use strategies::{self, NewConnection, NewStream};
-use stream::{NewStreamFuture, NewStreamHandle, Stream, StreamHandle};
+use stream::{NewStreamFuture, NewStreamHandle, Stream};
 
 use std::net::SocketAddr;
 
 use futures::{
-    sync::{
-        mpsc::{self, UnboundedReceiver, UnboundedSender}, oneshot,
-    },
-    Async::{NotReady, Ready}, Future, Poll, Stream as FStream,
+    sync::oneshot, Async::{NotReady, Ready}, Future, Poll, Stream as FStream,
 };
 
 use serde::{Deserialize, Serialize};
@@ -111,6 +108,7 @@ where
                     self.pass_stream_to_context.clone(),
                     self.resolve_peer.clone(),
                     &self.handle,
+                    true,
                 )
             })
         })
@@ -153,7 +151,6 @@ where
         is_authenticated: bool,
     ) -> Connection<P, R> {
         let (send, auth_recv) = oneshot::channel();
-        let (connect_peers_send, connect_peers_recv) = mpsc::unbounded();
         let state = if is_authenticated {
             ConnectionState::Authenticated
         } else {
@@ -232,9 +229,9 @@ where
                         None,
                         &self.handle,
                         self.get_new_stream_handle(),
+                        self.get_new_con_handle(),
                         self.pass_stream_to_context.clone(),
                         self.resolve_peer.clone(),
-                        self.get_new_con_handle(),
                         self.is_p2p,
                     ))));
                 },
@@ -265,9 +262,9 @@ where
                                     Some(send),
                                     &self.handle,
                                     self.get_new_stream_handle(),
+                                    self.get_new_con_handle(),
                                     self.pass_stream_to_context.clone(),
                                     self.resolve_peer.clone(),
-                                    self.get_new_con_handle(),
                                     self.is_p2p,
                                 ))));
                             }

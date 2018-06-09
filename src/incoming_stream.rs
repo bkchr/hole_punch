@@ -6,7 +6,7 @@ use timeout::Timeout;
 
 use std::time::Duration;
 
-use futures::{Async::Ready, Future, Poll, Stream as FStream};
+use futures::{Async::Ready, Future, Poll, Stream as FStream, Sink};
 
 use serde::{Deserialize, Serialize};
 
@@ -89,7 +89,24 @@ where
                     }
                     Some(StreamType::Relay(peer)) => {
                         match self.resolve_peer.resolve_peer(&peer) {
-                            ResolvePeerResult::Found(handle) => {}
+                            ResolvePeerResult::FoundLocally(mut stream_handle) => {
+                                let handle = self.handle.clone();
+                                let stream = self.stream.take().unwrap();
+                                self.handle.spawn(stream_handle.new_stream().and_then(
+                                    move |stream2| {
+                                        let (sink0, fstream0) = stream.split();
+                                        let (sink1, fstream1) = stream2.split();
+
+                                        handle.spawn(
+                                            sink0.send_all(fstream1).map_err(|_| ()).map(|_| ()),
+                                        );
+                                        handle.spawn(
+                                            sink1.send_all(fstream0).map_err(|_| ()).map(|_| ()),
+                                        );
+                                        Ok(())
+                                    },
+                                ).map_err(|e| println!("{:?}", e)));
+                            }
                             _ => {
                                 self.stream.take().unwrap().send_and_poll(Protocol::Error(
                                     format!("Could not find peer for relaying connection."),

@@ -1,20 +1,18 @@
 use authenticator::Authenticator;
 use config::Config;
-use connect::{self, ConnectWithStrategies};
+use connect::{ConnectWithStrategies};
 use connection::{Connection, ConnectionId, NewConnectionHandle};
 use error::*;
-use protocol::Protocol;
 use strategies::{self, NewConnection};
-use stream::{get_interface_addresses, Stream, StreamHandle};
+use stream::{Stream, StreamHandle};
 
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::net::SocketAddr;
-use std::time::Duration;
+use failure;
+
+use std::{cmp::Eq, fmt::Debug, hash::Hash, net::SocketAddr};
 
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::{
-    mpsc::{self, UnboundedReceiver, UnboundedSender}, oneshot,
+    mpsc::{self, UnboundedReceiver, UnboundedSender}, 
 };
 use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Stream as FStream};
@@ -29,18 +27,13 @@ where
     R: ResolvePeer<P>,
 {
     new_stream_recv: UnboundedReceiver<Stream<P, R>>,
-    pass_stream_to_context: PassStreamToContext<P>,
+    pass_stream_to_context: PassStreamToContext<P, R>,
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
     handle: Handle,
     new_connection_handles: Vec<NewConnectionHandle<P, R>>,
     device_to_device_callback: (
         mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P, R>)>,
         mpsc::UnboundedReceiver<(Vec<SocketAddr>, ConnectionId, StreamHandle<P, R>)>,
-    ),
-    outgoing_device_con: FuturesUnordered<connect::DeviceToDeviceConnectionFuture<P>>,
-    new_connection: (
-        mpsc::UnboundedSender<Connection<P, R>>,
-        mpsc::UnboundedReceiver<Connection<P, R>>,
     ),
     authenticator: Option<Authenticator>,
     resolve_peer: R,
@@ -88,8 +81,6 @@ where
             handle,
             new_connection_handles,
             device_to_device_callback,
-            outgoing_device_con: FuturesUnordered::new(),
-            new_connection: mpsc::unbounded(),
             authenticator,
             resolve_peer,
         })
@@ -119,6 +110,7 @@ where
                         self.pass_stream_to_context.clone(),
                         self.resolve_peer.clone(),
                         &self.handle,
+                        false,
                     );
                     self.handle.spawn(con.into_executor());
                     self.strategies.push(strat.into_future());
@@ -133,10 +125,15 @@ where
         }
     }
 
-    pub fn create_connection_to_server(&mut self, addr: &SocketAddr) -> NewConnectionToServer<P, R> {
-        NewConnectionToServer::new(
-            ConnectWithStrategies::new(self.new_connection_handles.clone(), &self.handle, *addr),
-        )
+    pub fn create_connection_to_server(
+        &mut self,
+        addr: &SocketAddr,
+    ) -> NewConnectionToServer<P, R> {
+        NewConnectionToServer::new(ConnectWithStrategies::new(
+            self.new_connection_handles.clone(),
+            &self.handle,
+            *addr,
+        ))
     }
 }
 
@@ -153,12 +150,8 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     R: ResolvePeer<P>,
 {
-    fn new(
-        connect: ConnectWithStrategies<P, R>,
-    ) -> NewConnectionToServer<P, R> {
-        NewConnectionToServer {
-            connect,
-        }
+    fn new(connect: ConnectWithStrategies<P, R>) -> NewConnectionToServer<P, R> {
+        NewConnectionToServer { connect }
     }
 }
 
@@ -171,9 +164,7 @@ where
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (con, stream) = try_ready!(self.connect.poll());
-
-        Ok(Ready(stream))
+        self.connect.poll()
     }
 }
 
@@ -187,10 +178,7 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.poll_strategies()?;
-        self.poll_device_to_device_callback();
-        self.poll_new_connection();
-
-        self.poll_outgoing_device_connections()
+        self.new_stream_recv.poll().map_err(|_| failure::err_msg("Could not receive new stream").into())
     }
 }
 
@@ -198,7 +186,7 @@ where
 pub struct PassStreamToContext<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-R: ResolvePeer<P>,
+    R: ResolvePeer<P>,
 {
     send: UnboundedSender<Stream<P, R>>,
 }
@@ -220,16 +208,17 @@ where
 pub enum ResolvePeerResult<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    R: ResolvePeer<P>,
 {
-    Found(StreamHandle<P, R>),
+    FoundLocally(StreamHandle<P, R>),
+    FoundRemote(SocketAddr),
     NotFound,
-    NotFoundLocally(SocketAddr),
 }
 
 pub trait ResolvePeer<P>: 'static + Send + Sync + Clone
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    Self::Identifier: Serialize + for<'de> Deserialize<'de> + Clone + Debug,
+    Self::Identifier: Serialize + for<'de> Deserialize<'de> + Clone + Debug + Hash + Eq,
 {
     type Identifier;
     fn resolve_peer(&self, peer: &Self::Identifier) -> ResolvePeerResult<P, Self>;

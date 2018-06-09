@@ -5,6 +5,7 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(bound="")]
 pub enum Protocol<P, R>
 where
     R: ResolvePeer<P>,
@@ -67,7 +68,7 @@ where
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
     Locate(R::Identifier),
-    NotFound,
+    NotFound(R::Identifier),
     FoundLocally(R::Identifier),
     FoundRemote(R::Identifier, SocketAddr),
 }
