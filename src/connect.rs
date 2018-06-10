@@ -76,7 +76,7 @@ where
 
         let wait = con.new_stream();
 
-        wait_old.handle.spawn(con.into_executor());
+        wait_old.handle.spawn(con);
 
         transition!(WaitForConnectStream { timeout, wait })
     }
@@ -214,7 +214,7 @@ where
 
         let new_stream = con.new_stream();
 
-        wait.handle.spawn(con.into_executor());
+        wait.handle.spawn(con);
 
         transition!(WaitingForStream { new_stream })
     }

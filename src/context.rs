@@ -105,7 +105,7 @@ where
                         &self.handle,
                         false,
                     );
-                    self.handle.spawn(con.into_executor());
+                    self.handle.spawn(con);
                     self.strategies.push(strat.into_future());
                 }
                 Ok(Ready(Some((None, _)))) => {

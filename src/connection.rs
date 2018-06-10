@@ -1,9 +1,10 @@
 use context::{PassStreamToContext, ResolvePeer};
 use error::*;
+use incoming_stream::IncomingStream;
 use strategies::{self, NewConnection, NewStream};
 use stream::{NewStreamFuture, NewStreamHandle, Stream};
 
-use std::net::SocketAddr;
+use std::{net::SocketAddr, time::Duration};
 
 use futures::{
     sync::oneshot, Async::{NotReady, Ready}, Future, Poll, Stream as FStream,
@@ -160,7 +161,7 @@ where
             }
         };
 
-        let new_stream_handle= NewStreamHandle::new(
+        let new_stream_handle = NewStreamHandle::new(
             con.get_new_stream_handle(),
             new_con_handle.clone(),
             pass_stream_to_context.clone(),
@@ -198,20 +199,7 @@ where
         self.new_con_handle.clone()
     }
 
-    pub fn into_executor(self) -> ConnectionExecutor<P, R> {
-        ConnectionExecutor::new(self)
-    }
-}
-
-impl<P, R> FStream for Connection<P, R>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
-{
-    type Item = Stream<P, R>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+    fn poll_impl(&mut self) -> Poll<Option<Stream<P, R>>, Error> {
         loop {
             let state = match self.state {
                 ConnectionState::Authenticated => loop {
@@ -274,25 +262,7 @@ where
     }
 }
 
-pub struct ConnectionExecutor<P, R>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
-{
-    con: Connection<P, R>,
-}
-
-impl<P, R> ConnectionExecutor<P, R>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
-{
-    fn new(con: Connection<P, R>) -> ConnectionExecutor<P, R> {
-        ConnectionExecutor { con }
-    }
-}
-
-impl<P, R> Future for ConnectionExecutor<P, R>
+impl<P, R> Future for Connection<P, R>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     R: ResolvePeer<P>,
@@ -302,15 +272,24 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            match self.con.poll() {
+            match self.poll_impl() {
                 Ok(NotReady) => return Ok(NotReady),
                 Err(e) => {
-                    println!("ConnectionExecutor: {:?}", e);
+                    println!("Connection: {:?}", e);
                     return Ok(Ready(()));
                 }
                 Ok(Ready(None)) => return Ok(Ready(())),
                 Ok(Ready(Some(stream))) => {
-                    self.con.pass_stream_to_context.pass_stream(stream);
+                    let incoming_stream = IncomingStream::new(
+                        stream,
+                        Duration::from_secs(10),
+                        self.pass_stream_to_context.clone(),
+                        self.resolve_peer.clone(),
+                        &self.handle,
+                    );
+                    self.handle.spawn(
+                        incoming_stream.map_err(|e| println!("IncomingStream error: {:?}", e)),
+                    );
                 }
             }
         }
