@@ -164,7 +164,6 @@ where
         let new_stream_handle = NewStreamHandle::new(
             con.get_new_stream_handle(),
             new_con_handle.clone(),
-            pass_stream_to_context.clone(),
             resolve_peer.clone(),
             &handle,
         );
@@ -185,7 +184,6 @@ where
             self.con.new_stream(),
             self.get_new_stream_handle(),
             self.get_new_con_handle(),
-            self.pass_stream_to_context.clone(),
             self.resolve_peer.clone(),
             &self.handle,
         )
@@ -214,7 +212,6 @@ where
                         &self.handle,
                         self.get_new_stream_handle(),
                         self.get_new_con_handle(),
-                        self.pass_stream_to_context.clone(),
                         self.resolve_peer.clone(),
                     ))));
                 },
@@ -246,7 +243,6 @@ where
                                     &self.handle,
                                     self.new_stream_handle.clone(),
                                     self.new_con_handle.clone(),
-                                    self.pass_stream_to_context.clone(),
                                     self.resolve_peer.clone(),
                                 ))));
                             }

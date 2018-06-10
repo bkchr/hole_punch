@@ -1,6 +1,6 @@
 use connect::build_connection_to_peer;
 use connection::{ConnectionId, NewConnectionHandle};
-use context::{PassStreamToContext, ResolvePeer, ResolvePeerResult};
+use context::{ResolvePeer, ResolvePeerResult};
 use error::*;
 use protocol::{BuildPeerToPeerConnection, LocatePeer, Protocol};
 use strategies::{self, AddressInformation, GetConnectionId, NewStream};
@@ -32,7 +32,6 @@ where
     R: ResolvePeer<P>,
 {
     new_stream_handle: strategies::NewStreamHandle,
-    pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     handle: Handle,
@@ -46,14 +45,12 @@ where
     pub fn new(
         new_stream_handle: strategies::NewStreamHandle,
         new_con_handle: NewConnectionHandle<P, R>,
-        pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
         handle: &Handle,
     ) -> NewStreamHandle<P, R> {
         NewStreamHandle {
             new_stream_handle,
             new_con_handle,
-            pass_stream_to_context,
             resolve_peer,
             handle: handle.clone(),
         }
@@ -64,7 +61,6 @@ where
             self.new_stream_handle.new_stream(),
             self.clone(),
             self.new_con_handle.clone(),
-            self.pass_stream_to_context.clone(),
             self.resolve_peer.clone(),
             &self.handle,
         )
@@ -78,7 +74,6 @@ where
 {
     new_stream: strategies::NewStreamFuture,
     new_stream_handle: NewStreamHandle<P, R>,
-    pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     handle: Handle,
@@ -93,14 +88,12 @@ where
         new_stream: strategies::NewStreamFuture,
         new_stream_handle: NewStreamHandle<P, R>,
         new_con_handle: NewConnectionHandle<P, R>,
-        pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
         handle: &Handle,
     ) -> NewStreamFuture<P, R> {
         NewStreamFuture {
             new_stream,
             new_stream_handle,
-            pass_stream_to_context,
             resolve_peer,
             new_con_handle,
             handle: handle.clone(),
@@ -125,7 +118,6 @@ where
                     &self.handle,
                     self.new_stream_handle.clone(),
                     self.new_con_handle.clone(),
-                    self.pass_stream_to_context.clone(),
                     self.resolve_peer.clone(),
                 )
             })
@@ -173,7 +165,6 @@ where
     stream_handle_recv: mpsc::UnboundedReceiver<HandleProtocol<P, R>>,
     address_info_requests: Vec<(R::Identifier, StreamHandle<P, R>)>,
     handle: Handle,
-    pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     is_p2p_con: bool,
@@ -191,7 +182,6 @@ where
         handle: &Handle,
         new_stream_handle: NewStreamHandle<P, R>,
         new_con_handle: NewConnectionHandle<P, R>,
-        pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
     ) -> Stream<P, R> {
         let state = match auth_con {
@@ -207,7 +197,6 @@ where
             state,
             address_info_requests: Vec::new(),
             handle: handle.clone(),
-            pass_stream_to_context,
             resolve_peer,
             new_con_handle,
             stream_handle,
