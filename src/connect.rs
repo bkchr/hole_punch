@@ -88,7 +88,7 @@ where
 
         let mut stream = try_ready!(wait.wait.poll());
 
-        stream.direct_send(Protocol::ConnectionHello)?;
+        stream.direct_send(Protocol::Hello(None))?;
 
         transition!(ConnectionCreated(stream))
     }
@@ -258,6 +258,7 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let mut stream = try_ready!(self.new_stream.poll());
 
+        stream.set_p2p(false);
         stream.send_and_poll(StreamType::Relay(self.peer.clone()))?;
         Ok(Ready(stream))
     }

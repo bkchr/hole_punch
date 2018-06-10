@@ -1,7 +1,7 @@
 use authenticator::Authenticator;
 use config::Config;
 use connect::{ConnectWithStrategies};
-use connection::{Connection, ConnectionId, NewConnectionHandle};
+use connection::{Connection, NewConnectionHandle};
 use error::*;
 use strategies::{self, NewConnection};
 use stream::{Stream, StreamHandle};
@@ -31,10 +31,6 @@ where
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
     handle: Handle,
     new_connection_handles: Vec<NewConnectionHandle<P, R>>,
-    device_to_device_callback: (
-        mpsc::UnboundedSender<(Vec<SocketAddr>, ConnectionId, StreamHandle<P, R>)>,
-        mpsc::UnboundedReceiver<(Vec<SocketAddr>, ConnectionId, StreamHandle<P, R>)>,
-    ),
     authenticator: Option<Authenticator>,
     resolve_peer: R,
 }
@@ -60,8 +56,6 @@ where
 
         let strats = strategies::init(handle.clone(), &config, authenticator.as_ref())?;
 
-        let device_to_device_callback = mpsc::unbounded();
-
         let new_connection_handles = strats
             .iter()
             .map(|s| {
@@ -80,7 +74,6 @@ where
             strategies: futures_unordered(strats.into_iter().map(|s| s.into_future())),
             handle,
             new_connection_handles,
-            device_to_device_callback,
             authenticator,
             resolve_peer,
         })

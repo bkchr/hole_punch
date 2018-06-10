@@ -134,7 +134,7 @@ where
     pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
-    is_p2p: bool,
+    new_stream_handle: NewStreamHandle<P, R>,
 }
 
 impl<P, R> Connection<P, R>
@@ -160,19 +160,23 @@ where
             }
         };
 
+        let new_stream_handle= NewStreamHandle::new(
+            con.get_new_stream_handle(),
+            new_con_handle.clone(),
+            pass_stream_to_context.clone(),
+            resolve_peer.clone(),
+            &handle,
+        );
+
         Connection {
             con,
             state,
             handle: handle.clone(),
             pass_stream_to_context,
-            is_p2p: false,
             resolve_peer,
             new_con_handle,
+            new_stream_handle,
         }
-    }
-
-    pub fn set_p2p(&mut self, p2p: bool) {
-        self.is_p2p = p2p;
     }
 
     pub fn new_stream(&mut self) -> NewStreamFuture<P, R> {
@@ -182,20 +186,12 @@ where
             self.get_new_con_handle(),
             self.pass_stream_to_context.clone(),
             self.resolve_peer.clone(),
-            self.is_p2p,
             &self.handle,
         )
     }
 
     fn get_new_stream_handle(&self) -> NewStreamHandle<P, R> {
-        NewStreamHandle::new(
-            self.con.get_new_stream_handle(),
-            self.get_new_con_handle(),
-            self.pass_stream_to_context.clone(),
-            self.resolve_peer.clone(),
-            self.is_p2p,
-            &self.handle,
-        )
+        self.new_stream_handle.clone()
     }
 
     fn get_new_con_handle(&self) -> NewConnectionHandle<P, R> {
@@ -232,7 +228,6 @@ where
                         self.get_new_con_handle(),
                         self.pass_stream_to_context.clone(),
                         self.resolve_peer.clone(),
-                        self.is_p2p,
                     ))));
                 },
                 ConnectionState::UnAuthenticated {
@@ -261,11 +256,10 @@ where
                                     stream,
                                     Some(send),
                                     &self.handle,
-                                    self.get_new_stream_handle(),
-                                    self.get_new_con_handle(),
+                                    self.new_stream_handle.clone(),
+                                    self.new_con_handle.clone(),
                                     self.pass_stream_to_context.clone(),
                                     self.resolve_peer.clone(),
-                                    self.is_p2p,
                                 ))));
                             }
                         }

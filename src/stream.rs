@@ -35,7 +35,6 @@ where
     pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
-    is_p2p_con: bool,
     handle: Handle,
 }
 
@@ -49,7 +48,6 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
-        is_p2p_con: bool,
         handle: &Handle,
     ) -> NewStreamHandle<P, R> {
         NewStreamHandle {
@@ -57,7 +55,6 @@ where
             new_con_handle,
             pass_stream_to_context,
             resolve_peer,
-            is_p2p_con,
             handle: handle.clone(),
         }
     }
@@ -69,7 +66,6 @@ where
             self.new_con_handle.clone(),
             self.pass_stream_to_context.clone(),
             self.resolve_peer.clone(),
-            self.is_p2p_con,
             &self.handle,
         )
     }
@@ -86,7 +82,6 @@ where
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     handle: Handle,
-    is_p2p_con: bool,
 }
 
 impl<P, R> NewStreamFuture<P, R>
@@ -100,7 +95,6 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
-        is_p2p_con: bool,
         handle: &Handle,
     ) -> NewStreamFuture<P, R> {
         NewStreamFuture {
@@ -109,7 +103,6 @@ where
             pass_stream_to_context,
             resolve_peer,
             new_con_handle,
-            is_p2p_con,
             handle: handle.clone(),
         }
     }
@@ -134,7 +127,6 @@ where
                     self.new_con_handle.clone(),
                     self.pass_stream_to_context.clone(),
                     self.resolve_peer.clone(),
-                    self.is_p2p_con,
                 )
             })
         })
@@ -201,7 +193,6 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
-        is_p2p_con: bool,
     ) -> Stream<P, R> {
         let state = match auth_con {
             Some(auth) => StreamState::UnAuthenticated(auth),
@@ -221,7 +212,7 @@ where
             new_con_handle,
             stream_handle,
             stream_handle_recv,
-            is_p2p_con,
+            is_p2p_con: true,
             requested_connections: HashMap::new(),
         }
     }
@@ -295,7 +286,7 @@ where
                                 ));
                             }
                             _ => {
-                                self.send_and_poll(BuildPeerToPeerConnection::PeerNotFound(peer));
+                                self.send_and_poll(BuildPeerToPeerConnection::PeerNotFound(peer))?;
                             }
                         }
                     }
@@ -363,6 +354,10 @@ where
         }
 
         Ok(())
+    }
+
+    pub(crate) fn set_p2p(&mut self, p2p: bool) {
+        self.is_p2p_con = p2p;
     }
 
     pub fn request_connection_to_peer(

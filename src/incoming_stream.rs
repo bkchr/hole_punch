@@ -6,7 +6,7 @@ use timeout::Timeout;
 
 use std::time::Duration;
 
-use futures::{Async::Ready, Future, Poll, Stream as FStream, Sink};
+use futures::{Async::Ready, Future, Poll, Sink, Stream as FStream};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,8 +18,6 @@ where
     R: ResolvePeer<P>,
 {
     stream: Option<Stream<P, R>>,
-    // Is this the first stream of the `Connection`?
-    first_stream: bool,
     timeout: Timeout,
     pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
@@ -33,7 +31,6 @@ where
 {
     pub fn new(
         stream: Stream<P, R>,
-        first_stream: bool,
         timeout: Duration,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
@@ -41,7 +38,6 @@ where
     ) -> IncomingStream<P, R> {
         IncomingStream {
             stream: Some(stream),
-            first_stream,
             timeout: Timeout::new(timeout, handle),
             pass_stream_to_context,
             resolve_peer,
@@ -70,55 +66,53 @@ where
                 .direct_poll()
         );
 
-        if self.first_stream {
-            match msg {
-                Some(Protocol::ConnectionHello) => {
+        match msg {
+            Some(Protocol::Hello(stype)) => match stype {
+                None => {
                     self.pass_stream_to_context
                         .pass_stream(self.stream.take().unwrap());
                 }
-                _ => {
-                    bail!("unexpected message({:?}) at IncomingStream::waiting_for_initial_message")
+                Some(StreamType::Relayed) => {
+                    let mut stream = self.stream.take().unwrap();
+                    stream.set_p2p(false);
+                    self.pass_stream_to_context.pass_stream(stream);
                 }
-            }
-        } else {
-            match msg {
-                Some(Protocol::StreamHello(stype)) => match stype {
-                    None => {
-                        self.pass_stream_to_context
-                            .pass_stream(self.stream.take().unwrap());
-                    }
-                    Some(StreamType::Relay(peer)) => {
-                        match self.resolve_peer.resolve_peer(&peer) {
-                            ResolvePeerResult::FoundLocally(mut stream_handle) => {
-                                let handle = self.handle.clone();
-                                let stream = self.stream.take().unwrap();
-                                self.handle.spawn(stream_handle.new_stream().and_then(
-                                    move |stream2| {
-                                        let (sink0, fstream0) = stream.split();
-                                        let (sink1, fstream1) = stream2.split();
+                Some(StreamType::Relay(peer)) => match self.resolve_peer.resolve_peer(&peer) {
+                    ResolvePeerResult::FoundLocally(mut stream_handle) => {
+                        let handle = self.handle.clone();
+                        let stream = self.stream.take().unwrap();
+                        self.handle.spawn(
+                            stream_handle
+                                .new_stream()
+                                .and_then(move |mut stream2| {
+                                    // Relay the initial `Hello`
+                                    stream2.send_and_poll(StreamType::Relayed)?;
 
-                                        handle.spawn(
-                                            sink0.send_all(fstream1).map_err(|_| ()).map(|_| ()),
-                                        );
-                                        handle.spawn(
-                                            sink1.send_all(fstream0).map_err(|_| ()).map(|_| ()),
-                                        );
-                                        Ok(())
-                                    },
-                                ).map_err(|e| println!("{:?}", e)));
-                            }
-                            _ => {
-                                self.stream.take().unwrap().send_and_poll(Protocol::Error(
-                                    format!("Could not find peer for relaying connection."),
-                                ));
-                            }
-                        }
+                                    let (sink0, fstream0) = stream.into_plain().split();
+                                    let (sink1, fstream1) = stream2.into_plain().split();
+
+                                    handle.spawn(
+                                        sink0.send_all(fstream1).map_err(|_| ()).map(|_| ()),
+                                    );
+                                    handle.spawn(
+                                        sink1.send_all(fstream0).map_err(|_| ()).map(|_| ()),
+                                    );
+                                    Ok(())
+                                })
+                                .map_err(|e| println!("{:?}", e)),
+                        );
+                    }
+                    _ => {
+                        self.stream
+                            .take()
+                            .unwrap()
+                            .send_and_poll(Protocol::Error(format!(
+                                "Could not find peer for relaying connection."
+                            )))?;
                     }
                 },
-                _ => {
-                    bail!("unexpected message({:?}) at IncomingStream::waiting_for_initial_message")
-                }
-            }
+            },
+            _ => bail!("unexpected message({:?}) at IncomingStream::waiting_for_initial_message"),
         }
 
         Ok(Ready(()))

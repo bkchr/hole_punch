@@ -11,13 +11,8 @@ where
     R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    /// The first message send by a `Connection` in the first `Stream`.
-    ConnectionHello,
-
-    /// The first message send by all `Stream`s of a `Connection` that follow the
-    /// first `Stream`.
-    /// To precisely describe the purpose of the `Stream`, it may carries a type.
-    StreamHello(Option<StreamType<P, R>>),
+    /// The first message send by in each `Stream`.
+    Hello(Option<StreamType<P, R>>),
 
     Embedded(P),
     LocatePeer(LocatePeer<P, R>),
@@ -48,6 +43,8 @@ where
 {
     /// Relay this stream to another peer.
     Relay(R::Identifier),
+    /// This stream is relayed by another peer.
+    Relayed,
 }
 
 impl<P, R> From<StreamType<P, R>> for Protocol<P, R>
@@ -56,7 +53,7 @@ where
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
     fn from(stype: StreamType<P, R>) -> Protocol<P, R> {
-        Protocol::StreamHello(Some(stype))
+        Protocol::Hello(Some(stype))
     }
 }
 
