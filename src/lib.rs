@@ -42,7 +42,7 @@ mod timeout;
 pub use authenticator::Authenticator;
 pub use config::Config;
 pub use connection::ConnectionId;
-pub use context::Context;
+pub use context::{Context, ResolvePeer, ResolvePeerResult};
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;

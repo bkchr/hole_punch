@@ -11,4 +11,5 @@ if [ -e /dev/kvm ]; then
   enable_kvm="--device /dev/kvm"
 fi
 
+docker pull bkchr/hole_punch_tester:latest
 docker run -it -e RUN_UNTIL_ERROR=$RUN_UNTIL_ERROR $enable_kvm --rm -v $docker_home:/root -v $PWD/..:/src -w /src/tests bkchr/hole_punch_tester:latest "./run_in_docker.sh"

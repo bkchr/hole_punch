@@ -8,27 +8,69 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{Config, Context, Error, FileFormat, Stream, StreamHandle};
+use hole_punch::{
+    Config, Context, Error, FileFormat, ResolvePeer, ResolvePeerResult, Stream, StreamHandle,
+};
 
 use tokio_core::reactor::Core;
 
-use std::collections::HashMap;
-use std::rc::Rc;
-use std::cell::RefCell;
+use std::{
+    collections::HashMap, sync::{Arc, Mutex},
+};
 
-use futures::{Future, Poll, Stream as FStream};
 use futures::Async::Ready;
+use futures::{Future, Poll, Stream as FStream};
 
 use structopt::StructOpt;
 
-struct ServerContext {
-    devices: HashMap<String, StreamHandle<Protocol>>,
+struct ServerContextInner {
+    devices: HashMap<String, StreamHandle<Protocol, ServerContext>>,
 }
 
+#[derive(Clone)]
+struct ServerContext {
+    inner: Arc<Mutex<ServerContextInner>>,
+}
+
+impl ServerContext {
+    fn new() -> ServerContext {
+        ServerContext {
+            inner: Arc::new(Mutex::new(ServerContextInner {
+                devices: HashMap::new(),
+            })),
+        }
+    }
+
+    fn remove_peer(&self, peer: &str) {
+        self.inner.lock().unwrap().devices.remove(peer);
+    }
+
+    fn add_peer(&self, peer: &str, handle: StreamHandle<Protocol, ServerContext>) {
+        self.inner
+            .lock()
+            .unwrap()
+            .devices
+            .insert(peer.into(), handle);
+    }
+}
+
+impl ResolvePeer<Protocol> for ServerContext {
+    type Identifier = String;
+    fn resolve_peer(&self, peer: &Self::Identifier) -> ResolvePeerResult<Protocol, Self> {
+        match self.inner.lock().unwrap().devices.get(peer) {
+            Some(handle) => ResolvePeerResult::FoundLocally(handle.clone()),
+            None => ResolvePeerResult::NotFound,
+        }
+    }
+}
+
+unsafe impl Send for ServerContext {}
+unsafe impl Sync for ServerContext {}
+
 struct Connection {
-    stream: Stream<Protocol>,
+    stream: Stream<Protocol, ServerContext>,
     name: Option<String>,
-    server_context: Rc<RefCell<ServerContext>>,
+    server_context: ServerContext,
 }
 
 impl Future for Connection {
@@ -42,7 +84,7 @@ impl Future for Connection {
                 None => {
                     println!("Connection closed: {:?}", self.name);
                     if let Some(ref name) = self.name {
-                        self.server_context.borrow_mut().devices.remove(name);
+                        self.server_context.remove_peer(name);
                     }
                     return Ok(Ready(()));
                 }
@@ -53,24 +95,8 @@ impl Future for Connection {
                     self.name = Some(name.clone());
                     println!("New peer: {}", name);
                     self.server_context
-                        .borrow_mut()
-                        .devices
-                        .insert(name, self.stream.get_stream_handle());
+                        .add_peer(&name, self.stream.get_stream_handle());
                     self.stream.upgrade_to_authenticated();
-                }
-                Protocol::RequestPeer(name, connection_id) => {
-                    println!("Requesting peer: {}", name);
-
-                    if let Some(mut handle) =
-                        self.server_context.borrow_mut().devices.get_mut(&name)
-                    {
-                        println!("Peer found!");
-                        self.stream
-                            .create_connection_to(connection_id, &mut handle)?;
-                    } else {
-                        println!("Peer not found!");
-                        self.stream.send_and_poll(Protocol::PeerNotFound)?;
-                    }
                 }
                 _ => {}
             };
@@ -88,9 +114,7 @@ fn main() {
     let options = Options::from_args();
     let mut evt_loop = Core::new().unwrap();
 
-    let server_context = Rc::new(RefCell::new(ServerContext {
-        devices: HashMap::new(),
-    }));
+    let server_context = ServerContext::new();
 
     let cert = include_bytes!("../../certs/cert.pem");
     let key = include_bytes!("../../certs/key.pem");
@@ -100,7 +124,7 @@ fn main() {
     config.set_key(key.to_vec(), FileFormat::PEM);
     config.set_quic_listen_port(options.listen_port);
 
-    let server = Context::new(evt_loop.handle(), config).unwrap();
+    let server = Context::new(evt_loop.handle(), config, server_context.clone()).unwrap();
     println!("Server up and running");
 
     let handle = evt_loop.handle();

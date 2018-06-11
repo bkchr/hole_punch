@@ -9,25 +9,34 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{Config, Context, Error, FileFormat, Stream};
+use hole_punch::{Config, Context, Error, FileFormat, Stream, ResolvePeer, ResolvePeerResult};
 
 use tokio_core::reactor::Core;
 
 use std::net::ToSocketAddrs;
 
-use futures::future::Either;
 use futures::{Future, Poll, Stream as FStream};
 use futures::Async::Ready;
 
 use structopt::StructOpt;
 
+#[derive(Clone)]
+struct DummyResolvePeer{}
+
+impl ResolvePeer<Protocol> for DummyResolvePeer {
+    type Identifier = String;
+    fn resolve_peer(&self, _: &Self::Identifier) -> ResolvePeerResult<Protocol, Self> {
+        ResolvePeerResult::NotFound
+    }
+}
+
 struct SendAndRecvMessage {
-    con: Stream<Protocol>,
+    con: Stream<Protocol, DummyResolvePeer>,
     msg_data: String,
 }
 
 impl SendAndRecvMessage {
-    fn new(mut con: Stream<Protocol>, data: String) -> SendAndRecvMessage {
+    fn new(mut con: Stream<Protocol, DummyResolvePeer>, data: String) -> SendAndRecvMessage {
         con.send_and_poll(Protocol::SendMessage(data.clone()))
             .expect("Sends data");
         SendAndRecvMessage {
@@ -87,22 +96,19 @@ fn main() {
             config.set_key(key.to_vec(), FileFormat::PEM);
 
             let mut context =
-                Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
+                Context::new(evt_loop.handle(), config, DummyResolvePeer{}).expect("Create hole-punch Context");
 
             println!("Connecting to server: {}", server_addr);
             let mut server_con = evt_loop
                 .run(context.create_connection_to_server(&server_addr))
                 .expect("Create connection to server");
             server_con.upgrade_to_authenticated();
-            server_con.send_and_poll(Protocol::Register("client".into()));
+            server_con.send_and_poll(Protocol::Register("client".into())).unwrap();
             println!("Connected");
 
-            let connection_id = context.generate_connection_id();
-            let peer_con_req = context
-                .create_connection_to_peer(
-                    connection_id,
-                    &mut server_con,
-                    Protocol::RequestPeer("peer".into(), connection_id),
+            let peer_con_req = server_con
+                .request_connection_to_peer(
+                    "peer".into(),
                 )
                 .expect("Create connection to peer future");
 
@@ -113,21 +119,7 @@ fn main() {
                     .map(|v| panic!("{:?}", v.0)),
             );
 
-            // TODO: Remove this complicated thing
-            // TODO: Handle PeerNotFound
-            let (peer_con, context) = match evt_loop
-                .run(peer_con_req.select2(context.into_future()))
-                .map_err(|e| match e {
-                    Either::A((e, _)) => panic!(e),
-                    Either::B((e, _)) => panic!(e.0),
-                })
-                .unwrap()
-            {
-                Either::A((con, context)) => (con, context),
-                Either::B(_) => {
-                    panic!("connection to server closed while waiting for connection to peer")
-                }
-            };
+            let peer_con = evt_loop.run(peer_con_req).expect("Creates connection to peer.");
 
             // Check that it is a p2p connection, if that was expected.
             if options.expect_p2p_connection {

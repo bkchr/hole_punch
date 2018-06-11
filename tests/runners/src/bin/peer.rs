@@ -8,7 +8,7 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{Config, Context, Error, FileFormat, Stream};
+use hole_punch::{Config, Context, Error, FileFormat, Stream, ResolvePeer, ResolvePeerResult};
 
 use tokio_core::reactor::Core;
 
@@ -19,12 +19,22 @@ use futures::Async::Ready;
 
 use structopt::StructOpt;
 
+#[derive(Clone)]
+struct DummyResolvePeer{}
+
+impl ResolvePeer<Protocol> for DummyResolvePeer {
+    type Identifier = String;
+    fn resolve_peer(&self, _: &Self::Identifier) -> ResolvePeerResult<Protocol, Self> {
+        ResolvePeerResult::NotFound
+    }
+}
+
 struct RecvAndSendMessage {
-    con: Stream<Protocol>,
+    con: Stream<Protocol, DummyResolvePeer>,
 }
 
 impl RecvAndSendMessage {
-    fn new(con: Stream<Protocol>) -> RecvAndSendMessage {
+    fn new(con: Stream<Protocol, DummyResolvePeer>) -> RecvAndSendMessage {
         RecvAndSendMessage { con }
     }
 }
@@ -78,7 +88,7 @@ fn main() {
     config.set_cert_chain(vec![cert.to_vec()], FileFormat::PEM);
     config.set_key(key.to_vec(), FileFormat::PEM);
 
-    let mut context = Context::new(evt_loop.handle(), config).expect("Create hole-punch Context");
+    let mut context = Context::new(evt_loop.handle(), config, DummyResolvePeer{}).expect("Create hole-punch Context");
 
     println!("Connecting to server: {}", server_addr);
     let mut server_con = evt_loop

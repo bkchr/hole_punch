@@ -222,7 +222,9 @@ where
     fn poll_waiting_for_stream<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForStream<P, R>>,
     ) -> Poll<AfterWaitingForStream<P, R>, Error> {
-        let stream = try_ready!(wait.new_stream.poll());
+        let mut stream = try_ready!(wait.new_stream.poll());
+
+        stream.send_and_poll(Protocol::Hello(None))?;
         transition!(ConnectionEstablished(stream))
     }
 }

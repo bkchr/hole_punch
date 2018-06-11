@@ -351,10 +351,9 @@ where
 
     pub fn request_connection_to_peer(
         &mut self,
-        server: &mut Stream<P, R>,
         peer: R::Identifier,
     ) -> Result<NewPeerConnection<P, R>> {
-        server.send_and_poll(LocatePeer::Locate(peer.clone()))?;
+        self.send_and_poll(LocatePeer::Locate(peer.clone()))?;
 
         let (sender, receiver) = oneshot::channel();
 
@@ -410,6 +409,7 @@ where
                     }
                     HandleProtocol::AddressInformationRequest(peer, handle) => {
                         self.address_info_requests.push((peer, handle));
+                        self.send_and_poll(BuildPeerToPeerConnection::AddressInformationRequest)?;
                     }
                 },
                 _ => break,
