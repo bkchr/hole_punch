@@ -333,16 +333,8 @@ where
     /// INTERNAL USE ONLY
     /// Can be used to poll the underlying `strategies::Stream` directly. This enables handlers to
     /// to process protocol messages.
-    pub(crate) fn direct_poll(&mut self) -> Poll<Option<Protocol<P, R>>, Error> {
+    pub(crate) fn poll_inner(&mut self) -> Poll<Option<Protocol<P, R>>, Error> {
         self.stream.poll().map_err(|e| e.into())
-    }
-
-    pub(crate) fn direct_send(&mut self, item: Protocol<P, R>) -> Result<()> {
-        if self.stream.start_send(item).is_err() || self.stream.poll_complete().is_err() {
-            bail!("error at `direct_send`");
-        }
-
-        Ok(())
     }
 
     pub(crate) fn set_p2p(&mut self, p2p: bool) {
@@ -366,10 +358,14 @@ where
     }
 
     pub fn send_and_poll<T: Into<Protocol<P, R>>>(&mut self, item: T) -> Result<()> {
-        self.direct_send(item.into())
+        if self.stream.start_send(item.into()).is_err() || self.stream.poll_complete().is_err() {
+            bail!("could not send message.");
+        }
+
+        Ok(())
     }
 
-    pub fn into_plain(self) -> strategies::Stream {
+    pub fn into_inner(self) -> strategies::Stream {
         self.stream.into_inner().into_inner().into_inner()
     }
 

@@ -88,7 +88,7 @@ where
 
         let mut stream = try_ready!(wait.wait.poll());
 
-        stream.direct_send(Protocol::Hello(None))?;
+        stream.send_and_poll(Protocol::Hello(None))?;
 
         transition!(ConnectionCreated(stream))
     }

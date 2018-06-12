@@ -63,7 +63,7 @@ where
             self.stream
                 .as_mut()
                 .expect("Can not be polled twice!")
-                .direct_poll()
+                .poll_inner()
         );
 
         match msg {
@@ -88,8 +88,8 @@ where
                                     // Relay the initial `Hello`
                                     stream2.send_and_poll(StreamType::Relayed)?;
 
-                                    let (sink0, fstream0) = stream.into_plain().split();
-                                    let (sink1, fstream1) = stream2.into_plain().split();
+                                    let (sink0, fstream0) = stream.into_inner().split();
+                                    let (sink1, fstream1) = stream2.into_inner().split();
 
                                     handle.spawn(
                                         sink0.send_all(fstream1).map_err(|_| ()).map(|_| ()),
