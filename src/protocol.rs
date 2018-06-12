@@ -5,7 +5,7 @@ use std::net::SocketAddr;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(bound="")]
+#[serde(bound = "")]
 pub enum Protocol<P, R>
 where
     R: ResolvePeer<P>,
@@ -39,9 +39,11 @@ where
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
     /// Relay this stream to another peer.
-    Relay(R::Identifier),
+    /// It holds the name of the origin peer and the remote peer.
+    Relay(R::Identifier, R::Identifier),
     /// This stream is relayed by another peer.
-    Relayed,
+    /// It holds the name of the remote peer.
+    Relayed(R::Identifier),
 }
 
 impl<P, R> From<StreamType<P, R>> for Protocol<P, R>

@@ -61,7 +61,11 @@ where
         let timeout = Timeout::new(Duration::from_secs(2), &init.handle);
         let handle = init.handle;
 
-        transition!(WaitForConnection { wait, timeout, handle })
+        transition!(WaitForConnection {
+            wait,
+            timeout,
+            handle
+        })
     }
 
     fn poll_wait_for_connection<'a>(
@@ -243,7 +247,10 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     R: ResolvePeer<P>,
 {
-    pub fn new(peer: R::Identifier, mut stream_handle: StreamHandle<P, R>) -> RelayConnection<P, R> {
+    pub fn new(
+        peer: R::Identifier,
+        mut stream_handle: StreamHandle<P, R>,
+    ) -> RelayConnection<P, R> {
         let new_stream = stream_handle.new_stream();
         RelayConnection { new_stream, peer }
     }
@@ -260,8 +267,9 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let mut stream = try_ready!(self.new_stream.poll());
 
-        stream.set_p2p(false);
-        stream.send_and_poll(StreamType::Relay(self.peer.clone()))?;
+        stream.set_relayed(self.peer.clone());
+        let identifier = stream.get_identifier();
+        stream.send_and_poll(StreamType::Relay((*identifier).clone(), self.peer.clone()))?;
         Ok(Ready(stream))
     }
 }

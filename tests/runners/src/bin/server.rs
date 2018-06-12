@@ -124,7 +124,12 @@ fn main() {
     config.set_key(key.to_vec(), FileFormat::PEM);
     config.set_quic_listen_port(options.listen_port);
 
-    let server = Context::new(evt_loop.handle(), config, server_context.clone()).unwrap();
+    let server = Context::new(
+        "server".into(),
+        evt_loop.handle(),
+        config,
+        server_context.clone(),
+    ).unwrap();
     println!("Server up and running");
 
     let handle = evt_loop.handle();

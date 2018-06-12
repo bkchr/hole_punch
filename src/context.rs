@@ -1,6 +1,6 @@
 use authenticator::Authenticator;
 use config::Config;
-use connect::{ConnectWithStrategies};
+use connect::ConnectWithStrategies;
 use connection::{Connection, NewConnectionHandle};
 use error::*;
 use strategies::{self, NewConnection};
@@ -8,18 +8,18 @@ use stream::{Stream, StreamHandle};
 
 use failure;
 
-use std::{cmp::Eq, fmt::Debug, hash::Hash, net::SocketAddr};
+use std::{cmp::Eq, fmt::Debug, hash::Hash, net::SocketAddr, sync::Arc};
 
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
-use futures::sync::{
-    mpsc::{self, UnboundedReceiver, UnboundedSender}, 
-};
+use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::Async::{NotReady, Ready};
 use futures::{Future, Poll, Stream as FStream};
 
 use tokio_core::reactor::Handle;
 
 use serde::{Deserialize, Serialize};
+
+pub type Identifier<P, R> = Arc<<R as ResolvePeer<P>>::Identifier>;
 
 pub struct Context<P, R>
 where
@@ -33,6 +33,8 @@ where
     new_connection_handles: Vec<NewConnectionHandle<P, R>>,
     authenticator: Option<Authenticator>,
     resolve_peer: R,
+    /// The identifier of this Context.
+    identifier: Identifier<P, R>,
 }
 
 impl<P, R> Context<P, R>
@@ -40,7 +42,13 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
     R: ResolvePeer<P>,
 {
-    pub fn new(handle: Handle, config: Config, resolve_peer: R) -> Result<Context<P, R>> {
+    pub fn new(
+        identifier: R::Identifier,
+        handle: Handle,
+        config: Config,
+        resolve_peer: R,
+    ) -> Result<Context<P, R>> {
+        let identifier = Arc::new(identifier);
         let (new_stream_send, new_stream_recv) = mpsc::unbounded();
         let pass_stream_to_context = PassStreamToContext::new(new_stream_send);
 
@@ -63,6 +71,7 @@ where
                     s.get_new_connection_handle(),
                     pass_stream_to_context.clone(),
                     resolve_peer.clone(),
+                    identifier.clone(),
                     &handle,
                 )
             })
@@ -76,6 +85,7 @@ where
             new_connection_handles,
             authenticator,
             resolve_peer,
+            identifier,
         })
     }
 
@@ -98,10 +108,12 @@ where
                             strat.get_new_connection_handle(),
                             self.pass_stream_to_context.clone(),
                             self.resolve_peer.clone(),
+                            self.identifier.clone(),
                             &self.handle,
                         ),
                         self.pass_stream_to_context.clone(),
                         self.resolve_peer.clone(),
+                        self.identifier.clone(),
                         &self.handle,
                         false,
                     );
@@ -171,7 +183,9 @@ where
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.poll_strategies()?;
-        self.new_stream_recv.poll().map_err(|_| failure::err_msg("Could not receive new stream").into())
+        self.new_stream_recv
+            .poll()
+            .map_err(|_| failure::err_msg("Could not receive new stream").into())
     }
 }
 

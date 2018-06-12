@@ -1,6 +1,6 @@
 use connect::build_connection_to_peer;
 use connection::{ConnectionId, NewConnectionHandle};
-use context::{ResolvePeer, ResolvePeerResult};
+use context::{Identifier, ResolvePeer, ResolvePeerResult};
 use error::*;
 use protocol::{BuildPeerToPeerConnection, LocatePeer, Protocol};
 use strategies::{self, AddressInformation, GetConnectionId, NewStream};
@@ -35,6 +35,7 @@ where
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     handle: Handle,
+    identifier: Identifier<P, R>,
 }
 
 impl<P, R> NewStreamHandle<P, R>
@@ -46,6 +47,7 @@ where
         new_stream_handle: strategies::NewStreamHandle,
         new_con_handle: NewConnectionHandle<P, R>,
         resolve_peer: R,
+        identifier: Identifier<P, R>,
         handle: &Handle,
     ) -> NewStreamHandle<P, R> {
         NewStreamHandle {
@@ -53,6 +55,7 @@ where
             new_con_handle,
             resolve_peer,
             handle: handle.clone(),
+            identifier,
         }
     }
 
@@ -62,6 +65,7 @@ where
             self.clone(),
             self.new_con_handle.clone(),
             self.resolve_peer.clone(),
+            self.identifier.clone(),
             &self.handle,
         )
     }
@@ -77,6 +81,7 @@ where
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     handle: Handle,
+    identifier: Identifier<P, R>,
 }
 
 impl<P, R> NewStreamFuture<P, R>
@@ -89,6 +94,7 @@ where
         new_stream_handle: NewStreamHandle<P, R>,
         new_con_handle: NewConnectionHandle<P, R>,
         resolve_peer: R,
+        identifier: Identifier<P, R>,
         handle: &Handle,
     ) -> NewStreamFuture<P, R> {
         NewStreamFuture {
@@ -97,6 +103,7 @@ where
             resolve_peer,
             new_con_handle,
             handle: handle.clone(),
+            identifier,
         }
     }
 }
@@ -119,6 +126,7 @@ where
                     self.new_stream_handle.clone(),
                     self.new_con_handle.clone(),
                     self.resolve_peer.clone(),
+                    self.identifier.clone(),
                 )
             })
         })
@@ -166,9 +174,11 @@ where
     address_info_requests: Vec<(R::Identifier, StreamHandle<P, R>)>,
     handle: Handle,
     resolve_peer: R,
+    identifier: Identifier<P, R>,
     new_con_handle: NewConnectionHandle<P, R>,
-    is_p2p_con: bool,
     requested_connections: HashMap<R::Identifier, oneshot::Sender<Stream<P, R>>>,
+    // If this `Stream` is relayed, the field holds the name of the remote Peer.
+    is_stream_relayed: Option<R::Identifier>,
 }
 
 impl<P, R> Stream<P, R>
@@ -183,6 +193,7 @@ where
         new_stream_handle: NewStreamHandle<P, R>,
         new_con_handle: NewConnectionHandle<P, R>,
         resolve_peer: R,
+        identifier: Identifier<P, R>,
     ) -> Stream<P, R> {
         let state = match auth_con {
             Some(auth) => StreamState::UnAuthenticated(auth),
@@ -201,8 +212,9 @@ where
             new_con_handle,
             stream_handle,
             stream_handle_recv,
-            is_p2p_con: true,
             requested_connections: HashMap::new(),
+            is_stream_relayed: None,
+            identifier,
         }
     }
 
@@ -331,8 +343,10 @@ where
                 //TODO: Propagate error
                 Protocol::Error(err) => println!("Received error: {}", err),
                 _ => {
-                    println!("Received message not processed, because the Stream is not \
-                              authenticated!");
+                    println!(
+                        "Received message not processed, because the Stream is not \
+                         authenticated!"
+                    );
                 }
             };
         }
@@ -345,8 +359,13 @@ where
         self.stream.poll().map_err(|e| e.into())
     }
 
-    pub(crate) fn set_p2p(&mut self, p2p: bool) {
-        self.is_p2p_con = p2p;
+    pub(crate) fn set_relayed(&mut self, peer: R::Identifier) {
+        self.is_stream_relayed = Some(peer);
+    }
+
+    /// Returns the identifier of the local peer.
+    pub fn get_identifier(&self) -> Identifier<P, R> {
+        self.identifier.clone()
     }
 
     pub fn request_connection_to_peer(
@@ -378,7 +397,7 @@ where
     }
 
     pub fn is_p2p(&self) -> bool {
-        self.is_p2p_con
+        self.is_stream_relayed.is_none()
     }
 
     pub fn local_addr(&self) -> SocketAddr {

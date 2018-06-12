@@ -8,19 +8,19 @@ extern crate tokio_core;
 
 use runners::protocol::Protocol;
 
-use hole_punch::{Config, Context, Error, FileFormat, Stream, ResolvePeer, ResolvePeerResult};
+use hole_punch::{Config, Context, Error, FileFormat, ResolvePeer, ResolvePeerResult, Stream};
 
 use tokio_core::reactor::Core;
 
 use std::net::ToSocketAddrs;
 
-use futures::{Future, Poll, Stream as FStream};
 use futures::Async::Ready;
+use futures::{Future, Poll, Stream as FStream};
 
 use structopt::StructOpt;
 
 #[derive(Clone)]
-struct DummyResolvePeer{}
+struct DummyResolvePeer {}
 
 impl ResolvePeer<Protocol> for DummyResolvePeer {
     type Identifier = String;
@@ -88,7 +88,12 @@ fn main() {
     config.set_cert_chain(vec![cert.to_vec()], FileFormat::PEM);
     config.set_key(key.to_vec(), FileFormat::PEM);
 
-    let mut context = Context::new(evt_loop.handle(), config, DummyResolvePeer{}).expect("Create hole-punch Context");
+    let mut context = Context::new(
+        "peer".into(),
+        evt_loop.handle(),
+        config,
+        DummyResolvePeer {},
+    ).expect("Create hole-punch Context");
 
     println!("Connecting to server: {}", server_addr);
     let mut server_con = evt_loop

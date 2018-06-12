@@ -1,4 +1,4 @@
-use context::{PassStreamToContext, ResolvePeer};
+use context::{Identifier, PassStreamToContext, ResolvePeer};
 use error::*;
 use incoming_stream::IncomingStream;
 use strategies::{self, NewConnection, NewStream};
@@ -26,6 +26,7 @@ where
     handle: Handle,
     pass_stream_to_context: PassStreamToContext<P, R>,
     resolve_peer: R,
+    identifier: Identifier<P, R>,
 }
 
 impl<P, R> NewConnectionHandle<P, R>
@@ -37,6 +38,7 @@ where
         new_con: strategies::NewConnectionHandle,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
+        identifier: Identifier<P, R>,
         handle: &Handle,
     ) -> NewConnectionHandle<P, R> {
         NewConnectionHandle {
@@ -44,6 +46,7 @@ where
             pass_stream_to_context,
             handle: handle.clone(),
             resolve_peer,
+            identifier,
         }
     }
 
@@ -53,6 +56,7 @@ where
             self.clone(),
             self.pass_stream_to_context.clone(),
             self.resolve_peer.clone(),
+            self.identifier.clone(),
             &self.handle,
         )
     }
@@ -68,6 +72,7 @@ where
     new_con_handle: NewConnectionHandle<P, R>,
     resolve_peer: R,
     handle: Handle,
+    identifier: Identifier<P, R>,
 }
 
 impl<P, R> NewConnectionFuture<P, R>
@@ -80,6 +85,7 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
+        identifier: Identifier<P, R>,
         handle: &Handle,
     ) -> NewConnectionFuture<P, R> {
         NewConnectionFuture {
@@ -88,6 +94,7 @@ where
             pass_stream_to_context,
             resolve_peer,
             handle: handle.clone(),
+            identifier,
         }
     }
 }
@@ -108,6 +115,7 @@ where
                     self.new_con_handle.clone(),
                     self.pass_stream_to_context.clone(),
                     self.resolve_peer.clone(),
+                    self.identifier.clone(),
                     &self.handle,
                     true,
                 )
@@ -136,6 +144,7 @@ where
     resolve_peer: R,
     new_con_handle: NewConnectionHandle<P, R>,
     new_stream_handle: NewStreamHandle<P, R>,
+    identifier: Identifier<P, R>,
 }
 
 impl<P, R> Connection<P, R>
@@ -148,6 +157,7 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         pass_stream_to_context: PassStreamToContext<P, R>,
         resolve_peer: R,
+        identifier: Identifier<P, R>,
         handle: &Handle,
         is_authenticated: bool,
     ) -> Connection<P, R> {
@@ -165,6 +175,7 @@ where
             con.get_new_stream_handle(),
             new_con_handle.clone(),
             resolve_peer.clone(),
+            identifier.clone(),
             &handle,
         );
 
@@ -176,6 +187,7 @@ where
             resolve_peer,
             new_con_handle,
             new_stream_handle,
+            identifier,
         }
     }
 
@@ -185,6 +197,7 @@ where
             self.get_new_stream_handle(),
             self.get_new_con_handle(),
             self.resolve_peer.clone(),
+            self.identifier.clone(),
             &self.handle,
         )
     }
@@ -213,6 +226,7 @@ where
                         self.get_new_stream_handle(),
                         self.get_new_con_handle(),
                         self.resolve_peer.clone(),
+                        self.identifier.clone(),
                     ))));
                 },
                 ConnectionState::UnAuthenticated {
@@ -244,6 +258,7 @@ where
                                     self.new_stream_handle.clone(),
                                     self.new_con_handle.clone(),
                                     self.resolve_peer.clone(),
+                                    self.identifier.clone(),
                                 ))));
                             }
                         }
