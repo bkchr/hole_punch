@@ -18,9 +18,6 @@ where
     LocatePeer(LocatePeer<P, R>),
     BuildPeerToPeerConnection(BuildPeerToPeerConnection<P, R>),
 
-    ReUseConnection,
-    AckReUseConnection,
-
     Error(String),
 }
 
