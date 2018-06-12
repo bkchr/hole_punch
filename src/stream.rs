@@ -251,8 +251,7 @@ where
                                 );
                                 self.send_and_poll(
                                     BuildPeerToPeerConnection::AddressInformationExchange(
-                                        peer,
-                                        addresses,
+                                        peer, addresses,
                                     ),
                                 )?;
                             }
@@ -309,8 +308,12 @@ where
                             sender,
                         );
                     }
-                    BuildPeerToPeerConnection::PeerNotFound(peer) => {}
+                    BuildPeerToPeerConnection::PeerNotFound(peer) => {
+                        //TODO: Send an error message
+                        let _ = self.requested_connections.remove(&peer);
+                    }
                 },
+                Protocol::Error(err) => println!("Received error: {}", err),
                 _ => {}
             };
         }
@@ -325,7 +328,12 @@ where
 
             match msg {
                 Protocol::Embedded(msg) => return Ok(Ready(Some(msg))),
-                _ => {}
+                //TODO: Propagate error
+                Protocol::Error(err) => println!("Received error: {}", err),
+                _ => {
+                    println!("Received message not processed, because the Stream is not \
+                              authenticated!");
+                }
             };
         }
     }
