@@ -1,0 +1,9 @@
+sudo: required
+
+language: rust
+
+services:
+  - docker
+
+script:
+- cd tests && ./run_tests.sh
