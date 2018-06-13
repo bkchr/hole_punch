@@ -30,7 +30,6 @@ $ssh_cmd "sudo mkdir -p /share && sudo mount -t 9p -o trans=virtio,version=9p200
 loop=1
 while [ $loop == 1 ]; do
   for test_case in test_cases/*.py; do
-    $ssh_cmd "echo hello_travis"
     echo "Executing test_case: $test_case"
     # execute the test case in qemu
     $ssh_cmd "cd /share && sudo python2 $test_case"

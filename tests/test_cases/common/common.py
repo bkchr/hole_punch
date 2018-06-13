@@ -4,7 +4,6 @@ import imp
 import sys
 import time
 import os.path
-import linecache
 
 # Run the given `topologies`.
 # This function will setup each topology, start `server` and `peer` and
@@ -33,11 +32,12 @@ def run_tests(topologies, extra_client_args):
         client = net.get("client")
         peer = net.get("peer")
 
-        server.cmd("./bin/server --listen_port 22222 2>&1 > /tmp/server.log &")
-        peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > /tmp/peer.log &")
+        server.cmd("./bin/server --listen_port 22222 2>&1 > /run/user/1000/server.log &")
+        peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > /run/user/1000/peer.log &")
 
         # wait until the peer is connected
-        while not os.path.isfile("/tmp/server.log") or not "New peer: peer" in open("/tmp/server.log").read():
+        while not os.path.isfile("/run/user/1000/server.log") or not "New peer: peer" in open("/run/user/1000/server.log").read():
+            time.sleep(5)
             pass
 
         client_output = client.cmd(
@@ -47,10 +47,10 @@ def run_tests(topologies, extra_client_args):
         print("Client exited with:\n" + client_output)
         if not "Client finished successfully!" in client_output:
             print("Server output:")
-            print(open("server.log").read())
+            print(open("/run/user/1000/server.log").read())
 
             print("Peer output:")
-            print(open("peer.log").read())
+            print(open("/run/user/1000/peer.log").read())
             sys.exit(1)
 
         net.stop()
