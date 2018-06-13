@@ -33,8 +33,6 @@ while [ $loop == 1 ]; do
     $ssh_cmd "echo hello_travis"
     echo "Executing test_case: $test_case"
     # execute the test case in qemu
-    $ssh_cmd "/share/bin/server --listen_port 4567&"
-    $ssh_cmd "cd /share && touch test && ls -alh"
     $ssh_cmd "cd /share && sudo python2 $test_case"
   done
   loop=${RUN_UNTIL_ERROR:=0}

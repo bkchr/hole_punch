@@ -6,24 +6,11 @@ import time
 import os.path
 import linecache
 
-def traceit(frame, event, arg):
-    if event == "line":
-        lineno = frame.f_lineno
-        filename = frame.f_globals["__file__"]
-        if (filename.endswith(".pyc") or
-            filename.endswith(".pyo")):
-            filename = filename[:-1]
-        name = frame.f_globals["__name__"]
-        line = linecache.getline(filename, lineno)
-        print "%s:%s: %s" % (name, lineno, line.rstrip())
-    return traceit
-
 # Run the given `topologies`.
 # This function will setup each topology, start `server` and `peer` and
 # execute `client` with the given `extra_client_args`.
 # If an error occurs, the function will call `sys.exit(1)`.
 def run_tests(topologies, extra_client_args):
-    sys.settrace(traceit)
     for topology in topologies:
         print("\n---------------------------------------\n")
         print("Running topology: " + topology + "\n")
@@ -46,11 +33,11 @@ def run_tests(topologies, extra_client_args):
         client = net.get("client")
         peer = net.get("peer")
 
-        server.cmd("./bin/server --listen_port 22222 2>&1 > server.log &")
-        peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > peer.log &")
+        server.cmd("./bin/server --listen_port 22222 2>&1 > /tmp/server.log &")
+        peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > /tmp/peer.log &")
 
         # wait until the peer is connected
-        while not os.path.isfile("server.log") or not "New peer: peer" in open("server.log").read():
+        while not os.path.isfile("/tmp/server.log") or not "New peer: peer" in open("/tmp/server.log").read():
             pass
 
         client_output = client.cmd(
