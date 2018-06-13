@@ -4,13 +4,26 @@ import imp
 import sys
 import time
 import os.path
+import linecache
 
+def traceit(frame, event, arg):
+    if event == "line":
+        lineno = frame.f_lineno
+        filename = frame.f_globals["__file__"]
+        if (filename.endswith(".pyc") or
+            filename.endswith(".pyo")):
+            filename = filename[:-1]
+        name = frame.f_globals["__name__"]
+        line = linecache.getline(filename, lineno)
+        print "%s:%s: %s" % (name, lineno, line.rstrip())
+    return traceit
 
 # Run the given `topologies`.
 # This function will setup each topology, start `server` and `peer` and
 # execute `client` with the given `extra_client_args`.
 # If an error occurs, the function will call `sys.exit(1)`.
 def run_tests(topologies, extra_client_args):
+    sys.settrace(traceit)
     for topology in topologies:
         print("\n---------------------------------------\n")
         print("Running topology: " + topology + "\n")
