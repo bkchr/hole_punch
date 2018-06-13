@@ -84,7 +84,7 @@ where
                             let stream = self.stream.take().unwrap();
                             self.handle.spawn(
                                 stream_handle
-                                    .new_stream()
+                                    .new_stream_without_hello()
                                     .and_then(move |mut stream2| {
                                         // Relay the initial `Hello`
                                         stream2.send_and_poll(StreamType::Relayed(origin))?;

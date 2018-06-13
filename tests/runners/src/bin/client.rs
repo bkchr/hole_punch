@@ -75,6 +75,19 @@ struct Options {
     expect_relay_connection: bool,
 }
 
+// Check that the stream is as expected
+fn check_stream(stream: &Stream<Protocol, DummyResolvePeer>, options: &Options) {
+    // Check that it is a p2p connection, if that was expected.
+    if options.expect_p2p_connection {
+        assert!(stream.is_p2p());
+    }
+
+    // Check that the server relays this connection, if that was expected.
+    if options.expect_relay_connection {
+        assert!(!stream.is_p2p());
+    }
+}
+
 fn main() {
     timebomb::timeout_ms(
         || {
@@ -127,21 +140,25 @@ fn main() {
                 .run(peer_con_req)
                 .expect("Creates connection to peer.");
 
-            // Check that it is a p2p connection, if that was expected.
-            if options.expect_p2p_connection {
-                assert!(peer_con.is_p2p());
-            }
+            check_stream(&peer_con, &options);
 
-            // Check that the server relays this connection, if that was expected.
-            if options.expect_relay_connection {
-                assert!(!peer_con.is_p2p());
-            }
-
-            println!("PEER CONNECTED");
+            println!("Peer connected");
+            let mut peer_handle = peer_con.get_stream_handle();
             // Check that we actually can send messages
             evt_loop
                 .run(SendAndRecvMessage::new(peer_con, "herp and derp".into()))
                 .expect("Send and receives message");
+
+            println!("Creates new Stream");
+            // Check that we can create a new Stream
+            let stream = evt_loop.run(peer_handle.new_stream()).expect("Creates new Stream");
+
+            check_stream(&stream, &options);
+
+            // Check that we actually can send messages
+            evt_loop
+                .run(SendAndRecvMessage::new(stream, "herp and derp2".into()))
+                .expect("Send and receives message 2");
         },
         30 * 1000,
     );

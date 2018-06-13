@@ -134,6 +134,7 @@ fn main() {
 
     let handle = evt_loop.handle();
     let server = server.for_each(|stream| {
+        println!("NEW STREAM");
         handle.spawn(
             Connection {
                 stream: stream,

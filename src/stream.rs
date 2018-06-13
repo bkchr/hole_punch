@@ -2,7 +2,7 @@ use connect::build_connection_to_peer;
 use connection::{ConnectionId, NewConnectionHandle};
 use context::{Identifier, ResolvePeer, ResolvePeerResult};
 use error::*;
-use protocol::{BuildPeerToPeerConnection, LocatePeer, Protocol};
+use protocol::{BuildPeerToPeerConnection, LocatePeer, Protocol, StreamType};
 use strategies::{self, AddressInformation, GetConnectionId, NewStream};
 
 use std::collections::HashMap;
@@ -59,13 +59,14 @@ where
         }
     }
 
-    pub fn new_stream(&mut self) -> NewStreamFuture<P, R> {
+    pub fn new_stream(&mut self, hello_msg: Option<Protocol<P, R>>) -> NewStreamFuture<P, R> {
         NewStreamFuture::new(
             self.new_stream_handle.new_stream(),
             self.clone(),
             self.new_con_handle.clone(),
             self.resolve_peer.clone(),
             self.identifier.clone(),
+            hello_msg,
             &self.handle,
         )
     }
@@ -82,6 +83,7 @@ where
     new_con_handle: NewConnectionHandle<P, R>,
     handle: Handle,
     identifier: Identifier<P, R>,
+    hello_msg: Option<Protocol<P, R>>,
 }
 
 impl<P, R> NewStreamFuture<P, R>
@@ -95,6 +97,7 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         resolve_peer: R,
         identifier: Identifier<P, R>,
+        hello_msg: Option<Protocol<P, R>>,
         handle: &Handle,
     ) -> NewStreamFuture<P, R> {
         NewStreamFuture {
@@ -104,6 +107,7 @@ where
             new_con_handle,
             handle: handle.clone(),
             identifier,
+            hello_msg,
         }
     }
 }
@@ -119,7 +123,7 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.new_stream.poll().map(|r| {
             r.map(|v| {
-                Stream::new(
+                let mut stream = Stream::new(
                     v,
                     None,
                     &self.handle,
@@ -127,7 +131,26 @@ where
                     self.new_con_handle.clone(),
                     self.resolve_peer.clone(),
                     self.identifier.clone(),
-                )
+                );
+
+                if let Some(hello_msg) = self.hello_msg.take() {
+                    let relay_peer = match hello_msg {
+                        Protocol::Hello(ref stype) => match stype {
+                            Some(StreamType::Relay(_, remote)) => Some(remote.clone()),
+                            _ => None,
+                        },
+                        _ => panic!("NewStreamFuture wants a `Protocol::Hello(_)` message!"),
+                    };
+
+                    if let Some(peer) = relay_peer {
+                        stream.set_relayed(peer);
+                    }
+                    if let Err(e) = stream.send_and_poll(hello_msg) {
+                        println!("error while sending hello message: {:?}", e);
+                    }
+                }
+
+                stream
             })
         })
     }
@@ -201,7 +224,8 @@ where
         };
 
         let (stream_handle_send, stream_handle_recv) = mpsc::unbounded();
-        let stream_handle = StreamHandle::new(stream_handle_send, new_stream_handle);
+        let stream_handle =
+            StreamHandle::new(stream_handle_send, new_stream_handle, identifier.clone());
 
         Stream {
             stream: WriteJson::new(ReadJson::new(length_delimited::Framed::new(stream))),
@@ -360,7 +384,8 @@ where
     }
 
     pub(crate) fn set_relayed(&mut self, peer: R::Identifier) {
-        self.is_stream_relayed = Some(peer);
+        self.is_stream_relayed = Some(peer.clone());
+        self.stream_handle.set_relayed(peer);
     }
 
     /// Returns the identifier of the local peer.
@@ -479,6 +504,8 @@ where
 {
     send: mpsc::UnboundedSender<HandleProtocol<P, R>>,
     new_stream_handle: NewStreamHandle<P, R>,
+    is_relayed_stream: Option<R::Identifier>,
+    identifier: Identifier<P, R>,
 }
 
 impl<P, R> StreamHandle<P, R>
@@ -489,11 +516,18 @@ where
     fn new(
         send: mpsc::UnboundedSender<HandleProtocol<P, R>>,
         new_stream_handle: NewStreamHandle<P, R>,
+        identifier: Identifier<P, R>,
     ) -> StreamHandle<P, R> {
         StreamHandle {
             send,
             new_stream_handle,
+            is_relayed_stream: None,
+            identifier,
         }
+    }
+
+    fn set_relayed(&mut self, peer: R::Identifier) {
+        self.is_relayed_stream = Some(peer);
     }
 
     pub(crate) fn send_msg<T: Into<Protocol<P, R>>>(&mut self, msg: T) {
@@ -506,8 +540,18 @@ where
             .unbounded_send(HandleProtocol::AddressInformationRequest(peer, handle));
     }
 
-    pub(crate) fn new_stream(&mut self) -> NewStreamFuture<P, R> {
-        self.new_stream_handle.new_stream()
+    pub fn new_stream(&mut self) -> NewStreamFuture<P, R> {
+        let hello_msg = match self.is_relayed_stream {
+            Some(ref peer) => Some(StreamType::Relay((*self.identifier).clone(), peer.clone())),
+            None => None,
+        };
+
+        self.new_stream_handle
+            .new_stream(Some(Protocol::Hello(hello_msg)))
+    }
+
+    pub(crate) fn new_stream_without_hello(&mut self) -> NewStreamFuture<P, R> {
+        self.new_stream_handle.new_stream(None)
     }
 }
 

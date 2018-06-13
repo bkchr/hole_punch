@@ -198,6 +198,7 @@ where
             self.get_new_con_handle(),
             self.resolve_peer.clone(),
             self.identifier.clone(),
+            None,
             &self.handle,
         )
     }
