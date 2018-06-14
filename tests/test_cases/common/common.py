@@ -36,9 +36,7 @@ def run_tests(topologies, extra_client_args):
         peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > /run/user/1000/peer.log &")
 
         # wait until the peer is connected
-        while not os.path.isfile("/run/user/1000/server.log") or not "New peer: peer" in open("/run/user/1000/server.log").read():
-            time.sleep(5)
-            pass
+        time.sleep(20)
 
         client_output = client.cmd(
             "RUST_BACKTRACE=full ./bin/client --server_address " + server_ip +
