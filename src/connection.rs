@@ -1,6 +1,7 @@
 use context::{Identifier, PassStreamToContext, ResolvePeer};
 use error::*;
 use incoming_stream::IncomingStream;
+use protocol::Protocol;
 use strategies::{self, NewConnection, NewStream};
 use stream::{NewStreamFuture, NewStreamHandle, Stream};
 
@@ -191,14 +192,14 @@ where
         }
     }
 
-    pub fn new_stream(&mut self) -> NewStreamFuture<P, R> {
+    pub fn new_stream_with_hello(&mut self, hello_msg: Protocol<P, R>) -> NewStreamFuture<P, R> {
         NewStreamFuture::new(
             self.con.new_stream(),
             self.get_new_stream_handle(),
             self.get_new_con_handle(),
             self.resolve_peer.clone(),
             self.identifier.clone(),
-            None,
+            hello_msg,
             &self.handle,
         )
     }
@@ -261,6 +262,10 @@ where
                                     self.resolve_peer.clone(),
                                     self.identifier.clone(),
                                 ))));
+                            } else {
+                                println!(
+                                    "Dropping Stream, because the Connection is not authenticated!"
+                                );
                             }
                         }
                     }

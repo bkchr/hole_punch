@@ -114,8 +114,9 @@ fn main() {
 
     let handle = evt_loop.handle();
     evt_loop
-        .run(context.for_each(|c| {
+        .run(context.for_each(|mut c| {
             eprintln!("New peer connected");
+            c.upgrade_to_authenticated();
             handle.spawn(RecvAndSendMessage::new(c).map_err(|e| panic!(e)));
             Ok(())
         }))

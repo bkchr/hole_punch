@@ -59,7 +59,7 @@ where
         }
     }
 
-    pub fn new_stream(&mut self, hello_msg: Option<Protocol<P, R>>) -> NewStreamFuture<P, R> {
+    pub fn new_stream_with_hello(&mut self, hello_msg: Protocol<P, R>) -> NewStreamFuture<P, R> {
         NewStreamFuture::new(
             self.new_stream_handle.new_stream(),
             self.clone(),
@@ -97,7 +97,7 @@ where
         new_con_handle: NewConnectionHandle<P, R>,
         resolve_peer: R,
         identifier: Identifier<P, R>,
-        hello_msg: Option<Protocol<P, R>>,
+        hello_msg: Protocol<P, R>,
         handle: &Handle,
     ) -> NewStreamFuture<P, R> {
         NewStreamFuture {
@@ -107,7 +107,7 @@ where
             new_con_handle,
             handle: handle.clone(),
             identifier,
-            hello_msg,
+            hello_msg: Some(hello_msg),
         }
     }
 }
@@ -133,21 +133,20 @@ where
                     self.identifier.clone(),
                 );
 
-                if let Some(hello_msg) = self.hello_msg.take() {
-                    let relay_peer = match hello_msg {
-                        Protocol::Hello(ref stype) => match stype {
-                            Some(StreamType::Relay(_, remote)) => Some(remote.clone()),
-                            _ => None,
-                        },
-                        _ => panic!("NewStreamFuture wants a `Protocol::Hello(_)` message!"),
-                    };
+                let hello_msg = self.hello_msg.take().expect("Can not be polled twice.");
+                let relay_peer = match hello_msg {
+                    Protocol::Hello(ref stype) => match stype {
+                        Some(StreamType::Relay(_, remote)) => Some(remote.clone()),
+                        _ => None,
+                    },
+                    _ => panic!("NewStreamFuture wants a `Protocol::Hello(_)` message!"),
+                };
 
-                    if let Some(peer) = relay_peer {
-                        stream.set_relayed(peer);
-                    }
-                    if let Err(e) = stream.send_and_poll(hello_msg) {
-                        println!("error while sending hello message: {:?}", e);
-                    }
+                if let Some(peer) = relay_peer {
+                    stream.set_relayed(peer);
+                }
+                if let Err(e) = stream.send_and_poll(hello_msg) {
+                    println!("error while sending hello message: {:?}", e);
                 }
 
                 stream
@@ -547,11 +546,18 @@ where
         };
 
         self.new_stream_handle
-            .new_stream(Some(Protocol::Hello(hello_msg)))
+            .new_stream_with_hello(Protocol::Hello(hello_msg))
     }
 
-    pub(crate) fn new_stream_without_hello(&mut self) -> NewStreamFuture<P, R> {
-        self.new_stream_handle.new_stream(None)
+    pub(crate) fn new_stream_with_hello(
+        &mut self,
+        hello_msg: Protocol<P, R>,
+    ) -> NewStreamFuture<P, R> {
+        self.new_stream_handle.new_stream_with_hello(hello_msg)
+    }
+
+    pub(crate) fn get_identifier(&self) -> Identifier<P, R> {
+        self.identifier.clone()
     }
 }
 

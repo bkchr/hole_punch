@@ -84,11 +84,8 @@ where
                             let stream = self.stream.take().unwrap();
                             self.handle.spawn(
                                 stream_handle
-                                    .new_stream_without_hello()
-                                    .and_then(move |mut stream2| {
-                                        // Relay the initial `Hello`
-                                        stream2.send_and_poll(StreamType::Relayed(origin))?;
-
+                                    .new_stream_with_hello(StreamType::Relayed(origin).into())
+                                    .and_then(move |stream2| {
                                         let (sink0, fstream0) = stream.into_inner().split();
                                         let (sink1, fstream1) = stream2.into_inner().split();
 

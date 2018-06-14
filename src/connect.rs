@@ -78,7 +78,7 @@ where
         let wait_old = wait.take();
         let timeout = wait_old.timeout.new_reset();
 
-        let wait = con.new_stream();
+        let wait = con.new_stream_with_hello(Protocol::Hello(None));
 
         wait_old.handle.spawn(con);
 
@@ -90,9 +90,7 @@ where
     ) -> Poll<AfterWaitForConnectStream<P, R>, Error> {
         let _ = wait.timeout.poll()?;
 
-        let mut stream = try_ready!(wait.wait.poll());
-
-        stream.send_and_poll(Protocol::Hello(None))?;
+        let stream = try_ready!(wait.wait.poll());
 
         transition!(ConnectionCreated(stream))
     }
@@ -216,7 +214,7 @@ where
             None => bail!("PeerToPeerConnection new_cons returned `None`."),
         };
 
-        let new_stream = con.new_stream();
+        let new_stream = con.new_stream_with_hello(Protocol::Hello(None));
 
         wait.handle.spawn(con);
 
@@ -226,9 +224,8 @@ where
     fn poll_waiting_for_stream<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForStream<P, R>>,
     ) -> Poll<AfterWaitingForStream<P, R>, Error> {
-        let mut stream = try_ready!(wait.new_stream.poll());
+        let stream = try_ready!(wait.new_stream.poll());
 
-        stream.send_and_poll(Protocol::Hello(None))?;
         transition!(ConnectionEstablished(stream))
     }
 }
@@ -251,7 +248,9 @@ where
         peer: R::Identifier,
         mut stream_handle: StreamHandle<P, R>,
     ) -> RelayConnection<P, R> {
-        let new_stream = stream_handle.new_stream();
+        let identifier = stream_handle.get_identifier();
+        let new_stream = stream_handle
+            .new_stream_with_hello(StreamType::Relay((*identifier).clone(), peer.clone()).into());
         RelayConnection { new_stream, peer }
     }
 }
@@ -268,8 +267,6 @@ where
         let mut stream = try_ready!(self.new_stream.poll());
 
         stream.set_relayed(self.peer.clone());
-        let identifier = stream.get_identifier();
-        stream.send_and_poll(StreamType::Relay((*identifier).clone(), self.peer.clone()))?;
         Ok(Ready(stream))
     }
 }

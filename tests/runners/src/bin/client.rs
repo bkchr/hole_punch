@@ -160,7 +160,7 @@ fn main() {
                 .run(SendAndRecvMessage::new(stream, "herp and derp2".into()))
                 .expect("Send and receives message 2");
         },
-        30 * 1000,
+        50 * 1000,
     );
 
     println!("Client finished successfully!");
