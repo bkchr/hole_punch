@@ -1,9 +1,10 @@
 use connect::build_connection_to_peer;
 use connection::{ConnectionId, NewConnectionHandle};
-use context::{Identifier, ResolvePeer, ResolvePeerResult};
 use error::*;
 use protocol::{BuildPeerToPeerConnection, LocatePeer, Protocol, StreamType};
+use registry::Registry;
 use strategies::{self, AddressInformation, GetConnectionId, NewStream};
+use PubKeyHash;
 
 use std::collections::HashMap;
 use std::mem;
@@ -26,98 +27,86 @@ use pnet_datalink::interfaces;
 use itertools::Itertools;
 
 #[derive(Clone)]
-pub struct NewStreamHandle<P, R>
+pub struct NewStreamHandle<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     new_stream_handle: strategies::NewStreamHandle,
-    resolve_peer: R,
-    new_con_handle: NewConnectionHandle<P, R>,
+    new_con_handle: NewConnectionHandle<P>,
     handle: Handle,
-    identifier: Identifier<P, R>,
+    registry: Registry<P>,
 }
 
-impl<P, R> NewStreamHandle<P, R>
+impl<P> NewStreamHandle<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     pub fn new(
         new_stream_handle: strategies::NewStreamHandle,
-        new_con_handle: NewConnectionHandle<P, R>,
-        resolve_peer: R,
-        identifier: Identifier<P, R>,
+        new_con_handle: NewConnectionHandle<P>,
+        registry: Registry<P>,
         handle: &Handle,
-    ) -> NewStreamHandle<P, R> {
+    ) -> NewStreamHandle<P> {
         NewStreamHandle {
             new_stream_handle,
             new_con_handle,
-            resolve_peer,
             handle: handle.clone(),
-            identifier,
+            registry,
         }
     }
 
-    pub fn new_stream_with_hello(&mut self, hello_msg: Protocol<P, R>) -> NewStreamFuture<P, R> {
+    pub fn new_stream_with_hello(&mut self, hello_msg: Protocol<P>) -> NewStreamFuture<P> {
         NewStreamFuture::new(
             self.new_stream_handle.new_stream(),
             self.clone(),
             self.new_con_handle.clone(),
-            self.resolve_peer.clone(),
-            self.identifier.clone(),
+            self.registry.clone(),
             hello_msg,
             &self.handle,
         )
     }
 }
 
-pub struct NewStreamFuture<P, R>
+pub struct NewStreamFuture<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     new_stream: strategies::NewStreamFuture,
-    new_stream_handle: NewStreamHandle<P, R>,
-    resolve_peer: R,
-    new_con_handle: NewConnectionHandle<P, R>,
+    new_stream_handle: NewStreamHandle<P>,
+    new_con_handle: NewConnectionHandle<P>,
     handle: Handle,
-    identifier: Identifier<P, R>,
-    hello_msg: Option<Protocol<P, R>>,
+    registry: Registry<P>,
+    hello_msg: Option<Protocol<P>>,
 }
 
-impl<P, R> NewStreamFuture<P, R>
+impl<P> NewStreamFuture<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     pub fn new(
         new_stream: strategies::NewStreamFuture,
-        new_stream_handle: NewStreamHandle<P, R>,
-        new_con_handle: NewConnectionHandle<P, R>,
-        resolve_peer: R,
-        identifier: Identifier<P, R>,
-        hello_msg: Protocol<P, R>,
+        new_stream_handle: NewStreamHandle<P>,
+        new_con_handle: NewConnectionHandle<P>,
+        registry: Registry<P>,
+        hello_msg: Protocol<P>,
         handle: &Handle,
-    ) -> NewStreamFuture<P, R> {
+    ) -> NewStreamFuture<P> {
         NewStreamFuture {
             new_stream,
             new_stream_handle,
-            resolve_peer,
             new_con_handle,
             handle: handle.clone(),
-            identifier,
             hello_msg: Some(hello_msg),
+            registry,
         }
     }
 }
 
-impl<P, R> Future for NewStreamFuture<P, R>
+impl<P> Future for NewStreamFuture<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    type Item = Stream<P, R>;
+    type Item = Stream<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -129,8 +118,7 @@ where
                     &self.handle,
                     self.new_stream_handle.clone(),
                     self.new_con_handle.clone(),
-                    self.resolve_peer.clone(),
-                    self.identifier.clone(),
+                    self.registry.clone(),
                 );
 
                 let hello_msg = self.hello_msg.take().expect("Can not be polled twice.");
@@ -167,93 +155,65 @@ pub fn get_interface_addresses(local_addr: SocketAddr) -> Vec<SocketAddr> {
         .collect_vec()
 }
 
-enum StreamState {
-    Authenticated,
-    UnAuthenticated(oneshot::Sender<()>),
-}
+pub type StreamJsonWrapper<P> =
+    WriteJson<ReadJson<length_delimited::Framed<strategies::Stream>, Protocol<P>>, Protocol<P>>;
 
-enum HandleProtocol<P, R>
+enum HandleProtocol<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    Send(Protocol<P, R>),
-    AddressInformationRequest(R::Identifier, StreamHandle<P, R>),
+    Send(Protocol<P>),
+    AddressInformationRequest(PubKeyHash, StreamHandle<P>),
 }
 
-pub struct Stream<P, R>
+pub struct Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    stream: WriteJson<
-        ReadJson<length_delimited::Framed<strategies::Stream>, Protocol<P, R>>,
-        Protocol<P, R>,
-    >,
-    state: StreamState,
-    stream_handle: StreamHandle<P, R>,
-    stream_handle_recv: mpsc::UnboundedReceiver<HandleProtocol<P, R>>,
-    address_info_requests: Vec<(R::Identifier, StreamHandle<P, R>)>,
+    stream: StreamJsonWrapper<P>,
+    stream_handle: StreamHandle<P>,
+    stream_handle_recv: mpsc::UnboundedReceiver<HandleProtocol<P>>,
+    address_info_requests: Vec<(PubKeyHash, StreamHandle<P>)>,
     handle: Handle,
-    resolve_peer: R,
-    identifier: Identifier<P, R>,
-    new_con_handle: NewConnectionHandle<P, R>,
-    requested_connections: HashMap<R::Identifier, oneshot::Sender<Stream<P, R>>>,
-    // If this `Stream` is relayed, the field holds the name of the remote Peer.
-    is_stream_relayed: Option<R::Identifier>,
+    new_con_handle: NewConnectionHandle<P>,
+    requested_connections: HashMap<PubKeyHash, oneshot::Sender<Stream<P>>>,
+    /// Is this stream relayed by its peer to another peer?
+    is_stream_relayed: bool,
+    /// The identifier of the peer.
+    peer_identifier: PubKeyHash,
 }
 
-impl<P, R> Stream<P, R>
+impl<P> Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     pub fn new(
-        stream: strategies::Stream,
-        auth_con: Option<oneshot::Sender<()>>,
-        handle: &Handle,
-        new_stream_handle: NewStreamHandle<P, R>,
-        new_con_handle: NewConnectionHandle<P, R>,
-        resolve_peer: R,
-        identifier: Identifier<P, R>,
-    ) -> Stream<P, R> {
-        let state = match auth_con {
-            Some(auth) => StreamState::UnAuthenticated(auth),
-            None => StreamState::Authenticated,
-        };
-
+        stream: StreamJsonWrapper<P>,
+        peer_identifier: PubKeyHash,
+        handle: Handle,
+        new_stream_handle: NewStreamHandle<P>,
+        new_con_handle: NewConnectionHandle<P>,
+        registry: Registry<P>,
+    ) -> Stream<P> {
         let (stream_handle_send, stream_handle_recv) = mpsc::unbounded();
         let stream_handle =
-            StreamHandle::new(stream_handle_send, new_stream_handle, identifier.clone());
+            StreamHandle::new(stream_handle_send, new_stream_handle, registry.clone());
 
         Stream {
             stream: WriteJson::new(ReadJson::new(length_delimited::Framed::new(stream))),
-            state,
+            peer_identifier,
             address_info_requests: Vec::new(),
             handle: handle.clone(),
-            resolve_peer,
             new_con_handle,
             stream_handle,
             stream_handle_recv,
             requested_connections: HashMap::new(),
             is_stream_relayed: None,
-            identifier,
+            registry,
         }
     }
 
-    /// Upgrades this `Stream` and the underlying `Connection` to be authenticated.
-    /// This allows the `Connection` to accept multiple `Stream`s and the `Stream`s can execute
-    /// the full protocol, e.g. opening a connection to a different device.
-    pub fn upgrade_to_authenticated(&mut self) {
-        match mem::replace(&mut self.state, StreamState::Authenticated) {
-            StreamState::Authenticated => {}
-            StreamState::UnAuthenticated(auth) => {
-                let _ = auth.send(());
-            }
-        };
-    }
-
-    fn poll_authenticated(&mut self) -> Poll<Option<P>, Error> {
+    fn poll_impl(&mut self) -> Poll<Option<P>, Error> {
         loop {
             let msg = match try_ready!(self.stream.poll()) {
                 Some(msg) => msg,
@@ -354,48 +314,27 @@ where
         }
     }
 
-    fn poll_unauthenticated(&mut self) -> Poll<Option<P>, Error> {
-        loop {
-            let msg = match try_ready!(self.stream.poll()) {
-                Some(msg) => msg,
-                None => return Ok(Ready(None)),
-            };
-
-            match msg {
-                Protocol::Embedded(msg) => return Ok(Ready(Some(msg))),
-                //TODO: Propagate error
-                Protocol::Error(err) => println!("Received error: {}", err),
-                _ => {
-                    println!(
-                        "Received message not processed, because the Stream is not \
-                         authenticated!"
-                    );
-                }
-            };
-        }
-    }
-
     /// INTERNAL USE ONLY
     /// Can be used to poll the underlying `strategies::Stream` directly. This enables handlers to
     /// to process protocol messages.
-    pub(crate) fn poll_inner(&mut self) -> Poll<Option<Protocol<P, R>>, Error> {
+    pub(crate) fn poll_inner(&mut self) -> Poll<Option<Protocol<P>>, Error> {
         self.stream.poll().map_err(|e| e.into())
     }
 
-    pub(crate) fn set_relayed(&mut self, peer: R::Identifier) {
+    pub(crate) fn set_relayed(&mut self, peer: PubKeyHash) {
         self.is_stream_relayed = Some(peer.clone());
         self.stream_handle.set_relayed(peer);
     }
 
     /// Returns the identifier of the local peer.
-    pub fn get_identifier(&self) -> Identifier<P, R> {
+    pub fn get_identifier(&self) -> Identifier<P> {
         self.identifier.clone()
     }
 
     pub fn request_connection_to_peer(
         &mut self,
-        peer: R::Identifier,
-    ) -> Result<NewPeerConnection<P, R>> {
+        peer: &PubKeyHash,
+    ) -> Result<NewPeerConnection<P>> {
         self.send_and_poll(LocatePeer::Locate(peer.clone()))?;
 
         let (sender, receiver) = oneshot::channel();
@@ -404,11 +343,11 @@ where
         Ok(NewPeerConnection::new(receiver))
     }
 
-    pub fn get_stream_handle(&self) -> StreamHandle<P, R> {
+    pub fn get_stream_handle(&self) -> StreamHandle<P> {
         self.stream_handle.clone()
     }
 
-    pub fn send_and_poll<T: Into<Protocol<P, R>>>(&mut self, item: T) -> Result<()> {
+    pub fn send_and_poll<T: Into<Protocol<P>>>(&mut self, item: T) -> Result<()> {
         if self.stream.start_send(item.into()).is_err() || self.stream.poll_complete().is_err() {
             bail!("could not send message.");
         }
@@ -429,20 +368,18 @@ where
     }
 }
 
-impl<P, R> GetConnectionId for Stream<P, R>
+impl<P> GetConnectionId for Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     fn connection_id(&self) -> ConnectionId {
         self.stream.get_ref().get_ref().get_ref().connection_id()
     }
 }
 
-impl<P, R> FStream for Stream<P, R>
+impl<P> FStream for Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     type Item = P;
     type Error = Error;
@@ -470,10 +407,9 @@ where
     }
 }
 
-impl<P, R> Sink for Stream<P, R>
+impl<P> Sink for Stream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     type SinkItem = P;
     type SinkError = Error;
@@ -496,50 +432,48 @@ where
 }
 
 #[derive(Clone)]
-pub struct StreamHandle<P, R>
+pub struct StreamHandle<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    send: mpsc::UnboundedSender<HandleProtocol<P, R>>,
-    new_stream_handle: NewStreamHandle<P, R>,
-    is_relayed_stream: Option<R::Identifier>,
-    identifier: Identifier<P, R>,
+    send: mpsc::UnboundedSender<HandleProtocol<P>>,
+    new_stream_handle: NewStreamHandle<P>,
+    is_relayed_stream: Option<PubKeyHash>,
+    registry: Registry<P>,
 }
 
-impl<P, R> StreamHandle<P, R>
+impl<P> StreamHandle<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     fn new(
-        send: mpsc::UnboundedSender<HandleProtocol<P, R>>,
-        new_stream_handle: NewStreamHandle<P, R>,
-        identifier: Identifier<P, R>,
-    ) -> StreamHandle<P, R> {
+        send: mpsc::UnboundedSender<HandleProtocol<P>>,
+        new_stream_handle: NewStreamHandle<P>,
+        registry: Registry<P>,
+    ) -> StreamHandle<P> {
         StreamHandle {
             send,
             new_stream_handle,
             is_relayed_stream: None,
-            identifier,
+            registry,
         }
     }
 
-    fn set_relayed(&mut self, peer: R::Identifier) {
+    fn set_relayed(&mut self, peer: PubKeyHash) {
         self.is_relayed_stream = Some(peer);
     }
 
-    pub(crate) fn send_msg<T: Into<Protocol<P, R>>>(&mut self, msg: T) {
+    pub(crate) fn send_msg<T: Into<Protocol<P>>>(&mut self, msg: T) {
         let _ = self.send.unbounded_send(HandleProtocol::Send(msg.into()));
     }
 
-    pub(crate) fn request_address_information(&mut self, peer: R::Identifier, handle: Self) {
+    pub(crate) fn request_address_information(&mut self, peer: PubKeyHash, handle: Self) {
         let _ = self
             .send
             .unbounded_send(HandleProtocol::AddressInformationRequest(peer, handle));
     }
 
-    pub fn new_stream(&mut self) -> NewStreamFuture<P, R> {
+    pub fn new_stream(&mut self) -> NewStreamFuture<P> {
         let hello_msg = match self.is_relayed_stream {
             Some(ref peer) => Some(StreamType::Relay((*self.identifier).clone(), peer.clone())),
             None => None,
@@ -549,42 +483,36 @@ where
             .new_stream_with_hello(Protocol::Hello(hello_msg))
     }
 
-    pub(crate) fn new_stream_with_hello(
-        &mut self,
-        hello_msg: Protocol<P, R>,
-    ) -> NewStreamFuture<P, R> {
+    pub(crate) fn new_stream_with_hello(&mut self, hello_msg: Protocol<P>) -> NewStreamFuture<P> {
         self.new_stream_handle.new_stream_with_hello(hello_msg)
     }
 
-    pub(crate) fn get_identifier(&self) -> Identifier<P, R> {
+    pub(crate) fn get_identifier(&self) -> Identifier<P> {
         self.identifier.clone()
     }
 }
 
-pub struct NewPeerConnection<P, R>
+pub struct NewPeerConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    recv: oneshot::Receiver<Stream<P, R>>,
+    recv: oneshot::Receiver<Stream<P>>,
 }
 
-impl<P, R> NewPeerConnection<P, R>
+impl<P> NewPeerConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    fn new(recv: oneshot::Receiver<Stream<P, R>>) -> NewPeerConnection<P, R> {
+    fn new(recv: oneshot::Receiver<Stream<P>>) -> NewPeerConnection<P> {
         NewPeerConnection { recv }
     }
 }
 
-impl<P, R> Future for NewPeerConnection<P, R>
+impl<P> Future for NewPeerConnection<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    type Item = Stream<P, R>;
+    type Item = Stream<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {

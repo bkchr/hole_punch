@@ -1,4 +1,4 @@
-use context::ResolvePeer;
+use PubKeyHash;
 
 use std::net::SocketAddr;
 
@@ -6,99 +6,93 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "")]
-pub enum Protocol<P, R>
+pub enum Protocol<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    /// The first message send by in each `Stream`.
-    Hello(Option<StreamType<P, R>>),
+    /// The first message send by each `Stream`.
+    Hello(StreamPurpose<P>),
 
     Embedded(P),
-    LocatePeer(LocatePeer<P, R>),
-    BuildPeerToPeerConnection(BuildPeerToPeerConnection<P, R>),
+    LocatePeer(LocatePeer<P>),
+    BuildPeerToPeerConnection(BuildPeerToPeerConnection<P>),
 
     Error(String),
 }
 
-impl<P, R> From<P> for Protocol<P, R>
+impl<P> From<P> for Protocol<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    fn from(msg: P) -> Protocol<P, R> {
+    fn from(msg: P) -> Protocol<P> {
         Protocol::Embedded(msg)
     }
 }
 
-/// The type of an incoming `Stream` that describes its purpose.
+/// The purpose of the Stream.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum StreamType<P, R>
+pub enum StreamPurpose<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    /// Relay this stream to another peer.
-    /// It holds the name of the origin peer and the remote peer.
-    Relay(R::Identifier, R::Identifier),
-    /// This stream is relayed by another peer.
-    /// It holds the name of the remote peer.
-    Relayed(R::Identifier),
+    /// A Stream for the user.
+    User,
+    /// A Stream used for the peer registry.
+    Registry,
+    /// Relay this stream to the given peer.
+    Relay(PubKeyHash),
+    /// This stream is relayed to the given peer.
+    Relayed(PubKeyHash),
 }
 
-impl<P, R> From<StreamType<P, R>> for Protocol<P, R>
+impl<P> From<StreamPurpose<P>> for Protocol<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    fn from(stype: StreamType<P, R>) -> Protocol<P, R> {
-        Protocol::Hello(Some(stype))
+    fn from(stype: StreamPurpose<P>) -> Protocol<P> {
+        Protocol::Hello(stype)
     }
 }
 
 /// Locate a peer.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum LocatePeer<P, R>
+pub enum LocatePeer<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    Locate(R::Identifier),
-    NotFound(R::Identifier),
-    FoundLocally(R::Identifier),
-    FoundRemote(R::Identifier, SocketAddr),
+    Locate(PubKeyHash),
+    NotFound(PubKeyHash),
+    FoundLocally(PubKeyHash),
+    FoundRemote(PubKeyHash, SocketAddr),
 }
 
-impl<P, R> From<LocatePeer<P, R>> for Protocol<P, R>
+impl<P> From<LocatePeer<P>> for Protocol<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    fn from(info: LocatePeer<P, R>) -> Protocol<P, R> {
+    fn from(info: LocatePeer<P>) -> Protocol<P> {
         Protocol::LocatePeer(info)
     }
 }
 
 /// Build a connection to a peer.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum BuildPeerToPeerConnection<P, R>
+pub enum BuildPeerToPeerConnection<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    AddressInformationExchange(R::Identifier, Vec<SocketAddr>),
+    AddressInformationExchange(PubKeyHash, Vec<SocketAddr>),
     AddressInformationRequest,
     AddressInformationResponse(Vec<SocketAddr>),
-    ConnectionCreate(R::Identifier, Vec<SocketAddr>),
-    PeerNotFound(R::Identifier),
+    ConnectionCreate(PubKeyHash, Vec<SocketAddr>),
+    PeerNotFound(PubKeyHash),
 }
 
-impl<P, R> From<BuildPeerToPeerConnection<P, R>> for Protocol<P, R>
+impl<P> From<BuildPeerToPeerConnection<P>> for Protocol<P>
 where
-    R: ResolvePeer<P>,
     P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
 {
-    fn from(info: BuildPeerToPeerConnection<P, R>) -> Protocol<P, R> {
+    fn from(info: BuildPeerToPeerConnection<P>) -> Protocol<P> {
         Protocol::BuildPeerToPeerConnection(info)
     }
 }

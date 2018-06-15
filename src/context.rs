@@ -3,12 +3,12 @@ use config::Config;
 use connect::ConnectWithStrategies;
 use connection::{Connection, NewConnectionHandle};
 use error::*;
+use registry::Registry;
 use strategies::{self, NewConnection};
-use stream::{Stream, StreamHandle};
+use stream::Stream;
+use PubKeyHash;
 
 use failure;
-
-use std::{cmp::Eq, fmt::Debug, hash::Hash, net::SocketAddr, sync::Arc};
 
 use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
@@ -19,48 +19,33 @@ use tokio_core::reactor::Handle;
 
 use serde::{Deserialize, Serialize};
 
-pub type Identifier<P, R> = Arc<<R as ResolvePeer<P>>::Identifier>;
-
-pub struct Context<P, R>
+pub struct Context<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    new_stream_recv: UnboundedReceiver<Stream<P, R>>,
-    pass_stream_to_context: PassStreamToContext<P, R>,
+    new_stream_recv: UnboundedReceiver<Stream<P>>,
+    pass_stream_to_context: PassStreamToContext<P>,
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
     handle: Handle,
-    new_connection_handles: Vec<NewConnectionHandle<P, R>>,
+    new_connection_handles: Vec<NewConnectionHandle<P>>,
     authenticator: Option<Authenticator>,
-    resolve_peer: R,
-    /// The identifier of this Context.
-    identifier: Identifier<P, R>,
+    registry: Registry<P>,
 }
 
-impl<P, R> Context<P, R>
+impl<P> Context<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    pub fn new(
-        identifier: R::Identifier,
-        handle: Handle,
-        config: Config,
-        resolve_peer: R,
-    ) -> Result<Context<P, R>> {
-        let identifier = Arc::new(identifier);
+    pub fn new(identifier: PubKeyHash, handle: Handle, config: Config) -> Result<Context<P>> {
+        let registry = Registry::new(identifier);
         let (new_stream_send, new_stream_recv) = mpsc::unbounded();
         let pass_stream_to_context = PassStreamToContext::new(new_stream_send);
 
-        let authenticator = if config.authenticator_enable {
-            Some(Authenticator::new(
-                config.server_ca_certificates.as_ref().cloned(),
-                config.client_ca_certificates.as_ref().cloned(),
-                config.authenticator_store_orig_pub_key,
-            )?)
-        } else {
-            None
-        };
+        let authenticator = Authenticator::new(
+            config.server_ca_certificates.as_ref().cloned(),
+            config.client_ca_certificates.as_ref().cloned(),
+            config.authenticator_store_orig_pub_key,
+        )?;
 
         let strats = strategies::init(handle.clone(), &config, authenticator.as_ref())?;
 
@@ -70,8 +55,7 @@ where
                 NewConnectionHandle::new(
                     s.get_new_connection_handle(),
                     pass_stream_to_context.clone(),
-                    resolve_peer.clone(),
-                    identifier.clone(),
+                    registry.clone(),
                     &handle,
                 )
             })
@@ -84,16 +68,8 @@ where
             handle,
             new_connection_handles,
             authenticator,
-            resolve_peer,
-            identifier,
+            registry,
         })
-    }
-
-    /// Returns the `Authenticator`.
-    /// The authenticator is only created, if the `Config` contained trusted client/server
-    /// certificates.
-    pub fn authenticator(&self) -> Option<Authenticator> {
-        self.authenticator.as_ref().cloned()
     }
 
     fn poll_strategies(&mut self) -> Result<()> {
@@ -109,13 +85,14 @@ where
                             self.pass_stream_to_context.clone(),
                             self.resolve_peer.clone(),
                             self.identifier.clone(),
-                            &self.handle,
+                            self.handle.clone(),
+                            self.authenticator.clone(),
                         ),
                         self.pass_stream_to_context.clone(),
                         self.resolve_peer.clone(),
                         self.identifier.clone(),
-                        &self.handle,
-                        false,
+                        self.handle,
+                        self.authenticator.clone(),
                     );
                     self.handle.spawn(con);
                     self.strategies.push(strat.into_future());
@@ -129,56 +106,13 @@ where
             }
         }
     }
-
-    pub fn create_connection_to_server(
-        &mut self,
-        addr: &SocketAddr,
-    ) -> NewConnectionToServer<P, R> {
-        NewConnectionToServer::new(ConnectWithStrategies::new(
-            self.new_connection_handles.clone(),
-            &self.handle,
-            *addr,
-        ))
-    }
 }
 
-pub struct NewConnectionToServer<P, R>
+impl<P> FStream for Context<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    connect: ConnectWithStrategies<P, R>,
-}
-
-impl<P, R> NewConnectionToServer<P, R>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
-{
-    fn new(connect: ConnectWithStrategies<P, R>) -> NewConnectionToServer<P, R> {
-        NewConnectionToServer { connect }
-    }
-}
-
-impl<P, R> Future for NewConnectionToServer<P, R>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
-{
-    type Item = Stream<P, R>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.connect.poll()
-    }
-}
-
-impl<P, R> FStream for Context<P, R>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
-{
-    type Item = Stream<P, R>;
+    type Item = Stream<P>;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -190,43 +124,22 @@ where
 }
 
 #[derive(Clone)]
-pub struct PassStreamToContext<P, R>
+pub struct PassStreamToContext<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    send: UnboundedSender<Stream<P, R>>,
+    send: UnboundedSender<Stream<P>>,
 }
 
-impl<P, R> PassStreamToContext<P, R>
+impl<P> PassStreamToContext<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    fn new(send: UnboundedSender<Stream<P, R>>) -> PassStreamToContext<P, R> {
+    fn new(send: UnboundedSender<Stream<P>>) -> PassStreamToContext<P> {
         PassStreamToContext { send }
     }
 
-    pub fn pass_stream(&mut self, stream: Stream<P, R>) {
+    pub fn pass_stream(&mut self, stream: Stream<P>) {
         let _ = self.send.unbounded_send(stream);
     }
-}
-
-pub enum ResolvePeerResult<P, R>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
-{
-    FoundLocally(StreamHandle<P, R>),
-    FoundRemote(SocketAddr),
-    NotFound,
-}
-
-pub trait ResolvePeer<P>: 'static + Send + Sync + Clone
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    Self::Identifier: Serialize + for<'de> Deserialize<'de> + Clone + Debug + Hash + Eq,
-{
-    type Identifier;
-    fn resolve_peer(&self, peer: &Self::Identifier) -> ResolvePeerResult<P, Self>;
 }

@@ -62,8 +62,7 @@ trait ConnectionTrait:
 impl<
         T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId,
     > ConnectionTrait for T
-{
-}
+{}
 
 pub type ConnectionId = u64;
 
@@ -126,8 +125,7 @@ impl<
             + Send
             + GetConnectionId,
     > StreamTrait for T
-{
-}
+{}
 
 pub struct Stream {
     inner: Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>>,

@@ -42,8 +42,7 @@ fn create_certificate_store(certs: Option<Vec<PathBuf>>) -> Result<Option<X509St
 }
 
 struct Inner {
-    ///TODO: we never remove added hashes. That is not good!
-    client_pub_keys: HashMap<ConnectionId, PubKeyHash>,
+    incoming_con_pub_keys: HashMap<ConnectionId, PubKeyHash>,
     client_certificates: Option<X509Store>,
     server_certificates: Option<X509Store>,
     store_orig_pub_key: bool,
@@ -56,19 +55,19 @@ impl Inner {
         store_orig_pub_key: bool,
     ) -> Result<Inner> {
         Ok(Inner {
-            client_pub_keys: HashMap::new(),
+            incoming_con_pub_keys: HashMap::new(),
             client_certificates: create_certificate_store(client_certs)?,
             server_certificates: create_certificate_store(server_certs)?,
             store_orig_pub_key,
         })
     }
 
-    fn add_client_pub_key(&mut self, id: ConnectionId, key: PubKeyHash) {
-        self.client_pub_keys.insert(id, key);
+    fn add_incoming_con_pub_key(&mut self, id: ConnectionId, key: PubKeyHash) {
+        self.incoming_con_pub_keys.insert(id, key);
     }
 
-    fn client_pub_key(&self, id: &ConnectionId) -> Option<PubKeyHash> {
-        self.client_pub_keys.get(id).cloned()
+    fn incoming_con_pub_key(&self, id: &ConnectionId) -> Option<PubKeyHash> {
+        self.incoming_con_pub_keys.remove(id).cloned()
     }
 }
 
@@ -76,7 +75,7 @@ impl Inner {
 /// It will use the certificates specified in the `Config` for the authentication.
 ///
 /// If trusted client certificates are provided in the `Config`, the `Authenticator` stores the
-/// public keys of the connected clients. These public keys can be retrieved with `client_pub_key`.
+/// public keys of the connected clients. These public keys can be retrieved with `incoming_con_pub_key`.
 #[derive(Clone)]
 pub struct Authenticator {
     inner: Arc<Mutex<Inner>>,
@@ -97,14 +96,13 @@ impl Authenticator {
         })
     }
 
-    /// Returns a public key for a client connection.
-    /// This requires client authentication to be activated, or otherwise no public key will be
-    /// found for a connection.
-    pub fn client_pub_key<C: GetConnectionId>(&mut self, con: &C) -> Option<PubKeyHash> {
+    /// Returns the public key for an incoming connection.
+    /// This removes the key in the store.
+    pub fn incoming_con_pub_key<C: GetConnectionId>(&mut self, con: &C) -> Option<PubKeyHash> {
         self.inner
             .lock()
             .unwrap()
-            .client_pub_key(&con.connection_id())
+            .incoming_con_pub_key(&con.connection_id())
     }
 }
 
@@ -128,7 +126,7 @@ impl VerifyCertificate for Authenticator {
 
                 if res.is_ok() {
                     let store_orig = (*inner).store_orig_pub_key;
-                    inner.add_client_pub_key(
+                    inner.add_incoming_con_pub_key(
                         connection_id,
                         PubKeyHash::from_pkey(cert.public_key()?, store_orig)?,
                     );

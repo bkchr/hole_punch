@@ -1,7 +1,9 @@
-use context::{PassStreamToContext, ResolvePeer, ResolvePeerResult};
+use context::PassStreamToContext;
 use error::*;
-use protocol::{Protocol, StreamType};
-use stream::Stream;
+use protocol::{Protocol, StreamPurpose};
+use registry::Registry;
+use strategies;
+use stream::{Stream, StreamJsonWrapper};
 use timeout::Timeout;
 
 use std::time::Duration;
@@ -12,44 +14,47 @@ use serde::{Deserialize, Serialize};
 
 use tokio_core::reactor::Handle;
 
-pub struct IncomingStream<P, R>
+use tokio_serde_json::{ReadJson, WriteJson};
+
+use tokio_io::codec::length_delimited;
+
+pub struct IncomingStream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
-    stream: Option<Stream<P, R>>,
+    stream: Option<StreamJsonWrapper<P>>,
     timeout: Timeout,
-    pass_stream_to_context: PassStreamToContext<P, R>,
-    resolve_peer: R,
+    pass_stream_to_context: PassStreamToContext<P>,
+    registry: Registry<P>,
     handle: Handle,
 }
 
-impl<P, R> IncomingStream<P, R>
+impl<P> IncomingStream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     pub fn new(
-        stream: Stream<P, R>,
+        stream: strategies::Stream,
         timeout: Duration,
-        pass_stream_to_context: PassStreamToContext<P, R>,
-        resolve_peer: R,
-        handle: &Handle,
-    ) -> IncomingStream<P, R> {
+        pass_stream_to_context: PassStreamToContext<P>,
+        registry: Registry<P>,
+        handle: Handle,
+    ) -> IncomingStream<P> {
         IncomingStream {
-            stream: Some(stream),
+            stream: Some(WriteJson::new(ReadJson::new(
+                length_delimited::Framed::new(stream),
+            ))),
             timeout: Timeout::new(timeout, handle),
             pass_stream_to_context,
-            resolve_peer,
-            handle: handle.clone(),
+            registry,
+            handle,
         }
     }
 }
 
-impl<P, R> Future for IncomingStream<P, R>
+impl<P> Future for IncomingStream<P>
 where
     P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-    R: ResolvePeer<P>,
 {
     type Item = ();
     type Error = Error;
@@ -72,19 +77,19 @@ where
                     self.pass_stream_to_context
                         .pass_stream(self.stream.take().unwrap());
                 }
-                Some(StreamType::Relayed(remote)) => {
+                Some(StreamPurpose::Relayed(remote)) => {
                     let mut stream = self.stream.take().unwrap();
                     stream.set_relayed(remote);
                     self.pass_stream_to_context.pass_stream(stream);
                 }
-                Some(StreamType::Relay(origin, peer)) => {
+                Some(StreamPurpose::Relay(origin, peer)) => {
                     match self.resolve_peer.resolve_peer(&peer) {
                         ResolvePeerResult::FoundLocally(mut stream_handle) => {
                             let handle = self.handle.clone();
                             let stream = self.stream.take().unwrap();
                             self.handle.spawn(
                                 stream_handle
-                                    .new_stream_with_hello(StreamType::Relayed(origin).into())
+                                    .new_stream_with_hello(StreamPurpose::Relayed(origin).into())
                                     .and_then(move |stream2| {
                                         let (sink0, fstream0) = stream.into_inner().split();
                                         let (sink1, fstream1) = stream2.into_inner().split();

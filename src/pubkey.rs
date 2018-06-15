@@ -1,7 +1,10 @@
 use error::*;
 
 use std::{
-    fmt, hash::{Hash, Hasher as StdHasher}, ops::Deref, result,
+    fmt,
+    hash::{Hash, Hasher as StdHasher},
+    ops::Deref,
+    result,
 };
 
 use openssl::error::ErrorStack;
@@ -91,6 +94,16 @@ impl Eq for PubKeyHash {}
 impl fmt::Display for PubKeyHash {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", hex::encode_upper(&self.buf[..self.len]))
+    }
+}
+
+impl fmt::Debug for PubKeyHash {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "PubKeyHash: {}",
+            hex::encode_upper(&self.buf[..self.len])
+        )
     }
 }
 

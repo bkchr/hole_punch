@@ -10,8 +10,10 @@ use std::{net::SocketAddr, time::Duration};
 use tokio_core::reactor::Handle;
 
 use futures::{
-    stream::{futures_unordered, FuturesUnordered}, sync::oneshot, Async::{NotReady, Ready}, Future,
-    Poll, Stream as FStream,
+    stream::{futures_unordered, FuturesUnordered},
+    sync::oneshot,
+    Async::{NotReady, Ready},
+    Future, Poll, Stream as FStream,
 };
 
 use serde::{Deserialize, Serialize};
