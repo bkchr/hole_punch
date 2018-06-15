@@ -35,6 +35,7 @@ mod connection;
 mod context;
 mod incoming_stream;
 mod pubkey;
+mod registry;
 mod strategies;
 mod stream;
 mod timeout;
