@@ -2,97 +2,38 @@ use PubKeyHash;
 
 use std::net::SocketAddr;
 
-use serde::{Deserialize, Serialize};
+/// The first message send by each `Stream` that defines its purpose
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub enum StreamHello {
+    /// A Stream for the user that comes from the given peer.
+    User(PubKeyHash),
+    /// A Stream for the user that should be proxied to the given remote peer.
+    UserProxy(PubKeyHash),
+    /// A Stream used by the peer registry.
+    Registry,
+    /// A Stream used for building a connection to another peer.
+    BuildConnectionToPeer(PubKeyHash),
+    /// A Stream used for building a connection to another peer that should be proxied.
+    ProxyBuildConnectionToPeer(PubKeyHash),
+}
 
+/// The procotol used by `Stream`s that serve as registry providers.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(bound = "")]
-pub enum Protocol<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    /// The first message send by each `Stream`.
-    Hello(StreamPurpose<P>),
-
-    Embedded(P),
-    LocatePeer(LocatePeer<P>),
-    BuildPeerToPeerConnection(BuildPeerToPeerConnection<P>),
-
-    Error(String),
-}
-
-impl<P> From<P> for Protocol<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    fn from(msg: P) -> Protocol<P> {
-        Protocol::Embedded(msg)
-    }
-}
-
-/// The purpose of the Stream.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum StreamPurpose<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    /// A Stream for the user.
-    User,
-    /// A Stream used for the peer registry.
-    Registry,
-    /// Relay this stream to the given peer.
-    Relay(PubKeyHash),
-    /// This stream is relayed to the given peer.
-    Relayed(PubKeyHash),
-}
-
-impl<P> From<StreamPurpose<P>> for Protocol<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    fn from(stype: StreamPurpose<P>) -> Protocol<P> {
-        Protocol::Hello(stype)
-    }
-}
-
-/// Locate a peer.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum LocatePeer<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    Locate(PubKeyHash),
+pub enum Registry {
+    Find(PubKeyHash),
     NotFound(PubKeyHash),
-    FoundLocally(PubKeyHash),
-    FoundRemote(PubKeyHash, SocketAddr),
-}
-
-impl<P> From<LocatePeer<P>> for Protocol<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    fn from(info: LocatePeer<P>) -> Protocol<P> {
-        Protocol::LocatePeer(info)
-    }
+    /// Found the requested peer.
+    Found(PubKeyHash),
 }
 
 /// Build a connection to a peer.
 #[derive(Serialize, Deserialize, Debug, Clone)]
-pub enum BuildPeerToPeerConnection<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    AddressInformationExchange(PubKeyHash, Vec<SocketAddr>),
-    AddressInformationRequest,
-    AddressInformationResponse(Vec<SocketAddr>),
-    ConnectionCreate(PubKeyHash, Vec<SocketAddr>),
-    PeerNotFound(PubKeyHash),
-}
-
-impl<P> From<BuildPeerToPeerConnection<P>> for Protocol<P>
-where
-    P: 'static + Serialize + for<'pde> Deserialize<'pde> + Clone,
-{
-    fn from(info: BuildPeerToPeerConnection<P>) -> Protocol<P> {
-        Protocol::BuildPeerToPeerConnection(info)
-    }
+pub enum BuildConnectionToPeer {
+    /// The address information of the peer, as seen by the peer in the middle.
+    InternetAddressInformation(SocketAddr),
+    /// Exchange the address information with the other side.
+    ExchangeAddressInformation(Vec<SocketAddr>),
+    /// Use the current connection as proxy connection.
+    ProxyConnection,
 }

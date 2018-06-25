@@ -90,6 +90,12 @@ impl From<hex::FromHexError> for Error {
     }
 }
 
+impl From<&'static str> for Error {
+    fn from(err: &'static str) -> Error {
+        Error::Custom(::failure::err_msg::<&'static str>(err).into())
+    }
+}
+
 //FIXME: Remove when upstream provides a better bail macro
 macro_rules! bail {
     ($e:expr) => {

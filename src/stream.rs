@@ -1,20 +1,11 @@
-use connect::build_connection_to_peer;
-use connection::{ConnectionId, NewConnectionHandle};
 use error::*;
-use protocol::{BuildPeerToPeerConnection, LocatePeer, Protocol, StreamType};
-use registry::Registry;
-use strategies::{self, AddressInformation, GetConnectionId, NewStream};
+use protocol::StreamHello;
+use strategies::{self, AddressInformation, NewStream};
 use PubKeyHash;
 
-use std::collections::HashMap;
-use std::mem;
 use std::net::SocketAddr;
 
-use futures::sync::{mpsc, oneshot};
-use futures::Async::Ready;
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
-
-use tokio_core::reactor::Handle;
 
 use tokio_serde_json::{ReadJson, WriteJson};
 
@@ -22,120 +13,110 @@ use tokio_io::codec::length_delimited;
 
 use serde::{Deserialize, Serialize};
 
-use pnet_datalink::interfaces;
-
-use itertools::Itertools;
-
 #[derive(Clone)]
-pub struct NewStreamHandle<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+pub struct NewStreamHandle {
+    peer_identifier: PubKeyHash,
+    local_peer_identifier: PubKeyHash,
     new_stream_handle: strategies::NewStreamHandle,
-    new_con_handle: NewConnectionHandle<P>,
-    handle: Handle,
-    registry: Registry<P>,
+    proxy_stream: bool,
 }
 
-impl<P> NewStreamHandle<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+impl NewStreamHandle {
     pub fn new(
+        peer_identifier: PubKeyHash,
+        local_peer_identifier: PubKeyHash,
         new_stream_handle: strategies::NewStreamHandle,
-        new_con_handle: NewConnectionHandle<P>,
-        registry: Registry<P>,
-        handle: &Handle,
-    ) -> NewStreamHandle<P> {
+    ) -> NewStreamHandle {
         NewStreamHandle {
+            peer_identifier,
+            local_peer_identifier,
             new_stream_handle,
-            new_con_handle,
-            handle: handle.clone(),
-            registry,
+            proxy_stream: false,
         }
     }
 
-    pub fn new_stream_with_hello(&mut self, hello_msg: Protocol<P>) -> NewStreamFuture<P> {
+    pub(crate) fn set_proxy_stream(&mut self, proxy: bool) {
+        self.proxy_stream = proxy;
+    }
+
+    pub(crate) fn new_stream_with_hello(
+        &mut self,
+        stream_hello: StreamHello,
+    ) -> NewStreamFuture {
         NewStreamFuture::new(
+            self.peer_identifier.clone(),
             self.new_stream_handle.new_stream(),
             self.clone(),
-            self.new_con_handle.clone(),
-            self.registry.clone(),
-            hello_msg,
-            &self.handle,
+            stream_hello,
+        )
+    }
+
+    pub fn new_stream(&mut self) -> NewStreamFuture {
+        let stream_hello = if self.proxy_stream {
+            StreamHello::UserProxy(self.peer_identifier.clone())
+        } else {
+            StreamHello::User(self.local_peer_identifier.clone())
+        };
+
+        NewStreamFuture::new(
+            self.peer_identifier.clone(),
+            self.new_stream_handle.new_stream(),
+            self.clone(),
+            stream_hello,
         )
     }
 }
 
-pub struct NewStreamFuture<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+pub struct NewStreamFuture {
     new_stream: strategies::NewStreamFuture,
-    new_stream_handle: NewStreamHandle<P>,
-    new_con_handle: NewConnectionHandle<P>,
-    handle: Handle,
-    registry: Registry<P>,
-    hello_msg: Option<Protocol<P>>,
+    new_stream_handle: NewStreamHandle,
+    stream_hello: StreamHello,
+    peer_identifier: PubKeyHash,
 }
 
-impl<P> NewStreamFuture<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+impl NewStreamFuture {
     pub fn new(
+        peer_identifier: PubKeyHash,
         new_stream: strategies::NewStreamFuture,
-        new_stream_handle: NewStreamHandle<P>,
-        new_con_handle: NewConnectionHandle<P>,
-        registry: Registry<P>,
-        hello_msg: Protocol<P>,
-        handle: &Handle,
-    ) -> NewStreamFuture<P> {
+        new_stream_handle: NewStreamHandle,
+        stream_hello: StreamHello,
+    ) -> NewStreamFuture {
         NewStreamFuture {
+            peer_identifier,
             new_stream,
             new_stream_handle,
-            new_con_handle,
-            handle: handle.clone(),
-            hello_msg: Some(hello_msg),
-            registry,
+            stream_hello,
         }
     }
 }
 
-impl<P> Future for NewStreamFuture<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Stream<P>;
+impl Future for NewStreamFuture {
+    type Item = Stream;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.new_stream.poll().map(|r| {
             r.map(|v| {
-                let mut stream = Stream::new(
-                    v,
-                    None,
-                    &self.handle,
-                    self.new_stream_handle.clone(),
-                    self.new_con_handle.clone(),
-                    self.registry.clone(),
-                );
-
-                let hello_msg = self.hello_msg.take().expect("Can not be polled twice.");
-                let relay_peer = match hello_msg {
-                    Protocol::Hello(ref stype) => match stype {
-                        Some(StreamType::Relay(_, remote)) => Some(remote.clone()),
-                        _ => None,
-                    },
-                    _ => panic!("NewStreamFuture wants a `Protocol::Hello(_)` message!"),
+                let (peer_identifier, is_proxied) = match self.stream_hello {
+                    StreamHello::UserProxy(ref peer)
+                    | StreamHello::ProxyBuildConnectionToPeer(ref peer) => (peer.clone(), true),
+                    _ => (self.peer_identifier.clone(), false),
                 };
 
-                if let Some(peer) = relay_peer {
-                    stream.set_relayed(peer);
-                }
-                if let Err(e) = stream.send_and_poll(hello_msg) {
-                    println!("error while sending hello message: {:?}", e);
-                }
+                let mut stream_hello: ProtocolStream<StreamHello> = v.into();
+                stream_hello
+                    .start_send(self.stream_hello.clone())
+                    .expect("start sending stream hello");
+                stream_hello
+                    .poll_complete()
+                    .expect("poll complete stream hello");
+
+                let stream = Stream::new(
+                    stream_hello,
+                    peer_identifier,
+                    self.new_stream_handle.clone(),
+                    is_proxied,
+                );
 
                 stream
             })
@@ -143,211 +124,73 @@ where
     }
 }
 
-pub fn get_interface_addresses(local_addr: SocketAddr) -> Vec<SocketAddr> {
-    interfaces()
-        .iter()
-        .map(|v| v.ips.clone())
-        .concat()
-        .iter()
-        .map(|v| v.ip())
-        .filter(|ip| !ip.is_loopback())
-        .map(|ip| (ip, local_addr.port()).into())
-        .collect_vec()
+pub type ProtocolStream<P> =
+    WriteJson<ReadJson<length_delimited::Framed<strategies::Stream>, P>, P>;
+
+impl<P> Into<ProtocolStream<P>> for strategies::Stream
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    fn into(self) -> ProtocolStream<P> {
+        WriteJson::new(ReadJson::new(length_delimited::Framed::new(self)))
+    }
 }
 
-pub type StreamJsonWrapper<P> =
-    WriteJson<ReadJson<length_delimited::Framed<strategies::Stream>, Protocol<P>>, Protocol<P>>;
-
-enum HandleProtocol<P>
+impl<P> Into<ProtocolStream<P>> for Stream
 where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    Send(Protocol<P>),
-    AddressInformationRequest(PubKeyHash, StreamHandle<P>),
+    fn into(self) -> ProtocolStream<P> {
+        WriteJson::new(ReadJson::new(length_delimited::Framed::new(self.into())))
+    }
 }
 
-pub struct Stream<P>
+impl Into<strategies::Stream> for Stream {
+    fn into(self) -> strategies::Stream {
+        self.stream
+    }
+}
+
+impl<P> From<ProtocolStream<P>> for strategies::Stream
 where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    stream: StreamJsonWrapper<P>,
-    stream_handle: StreamHandle<P>,
-    stream_handle_recv: mpsc::UnboundedReceiver<HandleProtocol<P>>,
-    address_info_requests: Vec<(PubKeyHash, StreamHandle<P>)>,
-    handle: Handle,
-    new_con_handle: NewConnectionHandle<P>,
-    requested_connections: HashMap<PubKeyHash, oneshot::Sender<Stream<P>>>,
-    /// Is this stream relayed by its peer to another peer?
-    is_stream_relayed: bool,
-    /// The identifier of the peer.
+    fn from(stream: ProtocolStream<P>) -> strategies::Stream {
+        stream.into_inner().into_inner().into_inner()
+    }
+}
+
+pub struct Stream {
+    stream: strategies::Stream,
+    new_stream_handle: NewStreamHandle,
+    /// The identifier of the peer, if the stream is relayed it is the identifier of the peer the
+    /// data is relayed too.
     peer_identifier: PubKeyHash,
+    /// Is the stream proxied by another peer to the remote peer?
+    is_proxy_stream: bool,
 }
 
-impl<P> Stream<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    pub fn new(
-        stream: StreamJsonWrapper<P>,
+impl Stream {
+    pub fn new<T>(
+        stream: T,
         peer_identifier: PubKeyHash,
-        handle: Handle,
-        new_stream_handle: NewStreamHandle<P>,
-        new_con_handle: NewConnectionHandle<P>,
-        registry: Registry<P>,
-    ) -> Stream<P> {
-        let (stream_handle_send, stream_handle_recv) = mpsc::unbounded();
-        let stream_handle =
-            StreamHandle::new(stream_handle_send, new_stream_handle, registry.clone());
+        mut new_stream_handle: NewStreamHandle,
+        is_proxy_stream: bool,
+    ) -> Stream
+    where
+        T: Into<strategies::Stream>,
+    {
+        new_stream_handle.set_proxy_stream(is_proxy_stream);
 
         Stream {
-            stream: WriteJson::new(ReadJson::new(length_delimited::Framed::new(stream))),
+            stream: stream.into(),
             peer_identifier,
-            address_info_requests: Vec::new(),
-            handle: handle.clone(),
-            new_con_handle,
-            stream_handle,
-            stream_handle_recv,
-            requested_connections: HashMap::new(),
-            is_stream_relayed: None,
-            registry,
+            new_stream_handle,
+            is_proxy_stream,
         }
     }
 
-    fn poll_impl(&mut self) -> Poll<Option<P>, Error> {
-        loop {
-            let msg = match try_ready!(self.stream.poll()) {
-                Some(msg) => msg,
-                None => return Ok(Ready(None)),
-            };
-
-            match msg {
-                Protocol::Embedded(msg) => return Ok(Ready(Some(msg))),
-                Protocol::LocatePeer(info) => {
-                    match info {
-                        LocatePeer::Locate(peer) => match self.resolve_peer.resolve_peer(&peer) {
-                            ResolvePeerResult::FoundLocally(_) => {
-                                self.send_and_poll(LocatePeer::FoundLocally(peer))?;
-                            }
-                            ResolvePeerResult::NotFound => {
-                                self.send_and_poll(LocatePeer::NotFound(peer))?;
-                            }
-                            ResolvePeerResult::FoundRemote(addr) => {
-                                self.send_and_poll(LocatePeer::FoundRemote(peer, addr))?;
-                            }
-                        },
-                        LocatePeer::NotFound(peer) => {
-                            self.requested_connections.remove(&peer);
-                        }
-                        LocatePeer::FoundRemote(_, _) => unimplemented!(),
-                        LocatePeer::FoundLocally(peer) => {
-                            if self.requested_connections.contains_key(&peer) {
-                                let addresses = get_interface_addresses(
-                                    self.stream.get_ref().get_ref().get_ref().local_addr(),
-                                );
-                                self.send_and_poll(
-                                    BuildPeerToPeerConnection::AddressInformationExchange(
-                                        peer, addresses,
-                                    ),
-                                )?;
-                            }
-                        }
-                    };
-                }
-                Protocol::BuildPeerToPeerConnection(op) => match op {
-                    BuildPeerToPeerConnection::AddressInformationExchange(peer, mut addresses) => {
-                        match self.resolve_peer.resolve_peer(&peer) {
-                            ResolvePeerResult::FoundLocally(mut handle) => {
-                                handle.request_address_information(
-                                    peer.clone(),
-                                    self.stream_handle.clone(),
-                                );
-
-                                addresses
-                                    .push(self.stream.get_ref().get_ref().get_ref().peer_addr());
-                                handle.send_msg(BuildPeerToPeerConnection::ConnectionCreate(
-                                    peer, addresses,
-                                ));
-                            }
-                            _ => {
-                                self.send_and_poll(BuildPeerToPeerConnection::PeerNotFound(peer))?;
-                            }
-                        }
-                    }
-                    BuildPeerToPeerConnection::AddressInformationRequest => {
-                        let addresses = get_interface_addresses(
-                            self.stream.get_ref().get_ref().get_ref().local_addr(),
-                        );
-                        self.send_and_poll(BuildPeerToPeerConnection::AddressInformationResponse(
-                            addresses,
-                        ))?;
-                    }
-                    BuildPeerToPeerConnection::AddressInformationResponse(mut addresses) => {
-                        addresses.push(self.stream.get_ref().get_ref().get_ref().peer_addr());
-                        self.address_info_requests
-                            .drain(..)
-                            .for_each(|(peer, mut handle)| {
-                                handle.send_msg(BuildPeerToPeerConnection::ConnectionCreate(
-                                    peer,
-                                    addresses.clone(),
-                                ))
-                            });
-                    }
-                    BuildPeerToPeerConnection::ConnectionCreate(peer, addresses) => {
-                        let sender = self.requested_connections.remove(&peer);
-                        build_connection_to_peer(
-                            self.new_con_handle.clone(),
-                            peer,
-                            addresses,
-                            self.get_stream_handle(),
-                            &self.handle,
-                            sender,
-                        );
-                    }
-                    BuildPeerToPeerConnection::PeerNotFound(peer) => {
-                        //TODO: Send an error message
-                        let _ = self.requested_connections.remove(&peer);
-                    }
-                },
-                Protocol::Error(err) => println!("Received error: {}", err),
-                _ => {}
-            };
-        }
-    }
-
-    /// INTERNAL USE ONLY
-    /// Can be used to poll the underlying `strategies::Stream` directly. This enables handlers to
-    /// to process protocol messages.
-    pub(crate) fn poll_inner(&mut self) -> Poll<Option<Protocol<P>>, Error> {
-        self.stream.poll().map_err(|e| e.into())
-    }
-
-    pub(crate) fn set_relayed(&mut self, peer: PubKeyHash) {
-        self.is_stream_relayed = Some(peer.clone());
-        self.stream_handle.set_relayed(peer);
-    }
-
-    /// Returns the identifier of the local peer.
-    pub fn get_identifier(&self) -> Identifier<P> {
-        self.identifier.clone()
-    }
-
-    pub fn request_connection_to_peer(
-        &mut self,
-        peer: &PubKeyHash,
-    ) -> Result<NewPeerConnection<P>> {
-        self.send_and_poll(LocatePeer::Locate(peer.clone()))?;
-
-        let (sender, receiver) = oneshot::channel();
-
-        self.requested_connections.insert(peer, sender);
-        Ok(NewPeerConnection::new(receiver))
-    }
-
-    pub fn get_stream_handle(&self) -> StreamHandle<P> {
-        self.stream_handle.clone()
-    }
-
-    pub fn send_and_poll<T: Into<Protocol<P>>>(&mut self, item: T) -> Result<()> {
+    pub fn send_and_poll(&mut self, item: <strategies::Stream as Sink>::SinkItem) -> Result<()> {
         if self.stream.start_send(item.into()).is_err() || self.stream.poll_complete().is_err() {
             bail!("could not send message.");
         }
@@ -355,167 +198,37 @@ where
         Ok(())
     }
 
-    pub fn into_inner(self) -> strategies::Stream {
-        self.stream.into_inner().into_inner().into_inner()
-    }
-
     pub fn is_p2p(&self) -> bool {
-        self.is_stream_relayed.is_none()
+        self.is_proxy_stream
     }
 
     pub fn local_addr(&self) -> SocketAddr {
-        self.stream.get_ref().get_ref().get_ref().local_addr()
+        self.stream.local_addr()
+    }
+
+    pub fn new_stream_handle(&self) -> NewStreamHandle {
+        self.new_stream_handle.clone()
     }
 }
 
-impl<P> GetConnectionId for Stream<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn connection_id(&self) -> ConnectionId {
-        self.stream.get_ref().get_ref().get_ref().connection_id()
-    }
-}
-
-impl<P> FStream for Stream<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = P;
+impl FStream for Stream {
+    type Item = <strategies::Stream as FStream>::Item;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        loop {
-            match self.stream_handle_recv.poll() {
-                Ok(Ready(Some(msg))) => match msg {
-                    HandleProtocol::Send(msg) => {
-                        self.send_and_poll(msg)?;
-                    }
-                    HandleProtocol::AddressInformationRequest(peer, handle) => {
-                        self.address_info_requests.push((peer, handle));
-                        self.send_and_poll(BuildPeerToPeerConnection::AddressInformationRequest)?;
-                    }
-                },
-                _ => break,
-            }
-        }
-
-        match self.state {
-            StreamState::Authenticated => self.poll_authenticated(),
-            StreamState::UnAuthenticated(_) => self.poll_unauthenticated(),
-        }
+        self.stream.poll().map_err(|e| e.into())
     }
 }
 
-impl<P> Sink for Stream<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type SinkItem = P;
+impl Sink for Stream {
+    type SinkItem = <strategies::Stream as Sink>::SinkItem;
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        self.stream
-            .start_send(Protocol::Embedded(item))
-            .map(|r| {
-                r.map(|v| match v {
-                    Protocol::Embedded(item) => item,
-                    _ => unreachable!(),
-                })
-            })
-            .map_err(|e| e.into())
+        self.stream.start_send(item).map_err(|e| e.into())
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
         self.stream.poll_complete().map_err(|e| e.into())
-    }
-}
-
-#[derive(Clone)]
-pub struct StreamHandle<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    send: mpsc::UnboundedSender<HandleProtocol<P>>,
-    new_stream_handle: NewStreamHandle<P>,
-    is_relayed_stream: Option<PubKeyHash>,
-    registry: Registry<P>,
-}
-
-impl<P> StreamHandle<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn new(
-        send: mpsc::UnboundedSender<HandleProtocol<P>>,
-        new_stream_handle: NewStreamHandle<P>,
-        registry: Registry<P>,
-    ) -> StreamHandle<P> {
-        StreamHandle {
-            send,
-            new_stream_handle,
-            is_relayed_stream: None,
-            registry,
-        }
-    }
-
-    fn set_relayed(&mut self, peer: PubKeyHash) {
-        self.is_relayed_stream = Some(peer);
-    }
-
-    pub(crate) fn send_msg<T: Into<Protocol<P>>>(&mut self, msg: T) {
-        let _ = self.send.unbounded_send(HandleProtocol::Send(msg.into()));
-    }
-
-    pub(crate) fn request_address_information(&mut self, peer: PubKeyHash, handle: Self) {
-        let _ = self
-            .send
-            .unbounded_send(HandleProtocol::AddressInformationRequest(peer, handle));
-    }
-
-    pub fn new_stream(&mut self) -> NewStreamFuture<P> {
-        let hello_msg = match self.is_relayed_stream {
-            Some(ref peer) => Some(StreamType::Relay((*self.identifier).clone(), peer.clone())),
-            None => None,
-        };
-
-        self.new_stream_handle
-            .new_stream_with_hello(Protocol::Hello(hello_msg))
-    }
-
-    pub(crate) fn new_stream_with_hello(&mut self, hello_msg: Protocol<P>) -> NewStreamFuture<P> {
-        self.new_stream_handle.new_stream_with_hello(hello_msg)
-    }
-
-    pub(crate) fn get_identifier(&self) -> Identifier<P> {
-        self.identifier.clone()
-    }
-}
-
-pub struct NewPeerConnection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    recv: oneshot::Receiver<Stream<P>>,
-}
-
-impl<P> NewPeerConnection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn new(recv: oneshot::Receiver<Stream<P>>) -> NewPeerConnection<P> {
-        NewPeerConnection { recv }
-    }
-}
-
-impl<P> Future for NewPeerConnection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Stream<P>;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.recv.poll().map_err(|e| e.into())
     }
 }

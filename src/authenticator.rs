@@ -66,8 +66,8 @@ impl Inner {
         self.incoming_con_pub_keys.insert(id, key);
     }
 
-    fn incoming_con_pub_key(&self, id: &ConnectionId) -> Option<PubKeyHash> {
-        self.incoming_con_pub_keys.remove(id).cloned()
+    fn incoming_con_pub_key(&mut self, id: &ConnectionId) -> Option<PubKeyHash> {
+        self.incoming_con_pub_keys.remove(id).clone()
     }
 }
 

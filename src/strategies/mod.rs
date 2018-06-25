@@ -106,6 +106,12 @@ impl FStream for Connection {
     }
 }
 
+impl GetConnectionId for Connection {
+    fn connection_id(&self) -> ConnectionId {
+        self.inner.connection_id()
+    }
+}
+
 /// The super `Stream` trait. We need this hack, to store the `inner` of the stream in a `Box`.
 trait StreamTrait:
     FStream<Item = BytesMut, Error = Error>
@@ -363,7 +369,7 @@ impl NewStream for NewStreamHandle {
 pub fn init(
     handle: Handle,
     config: &Config,
-    authenticator: Option<&Authenticator>,
+    authenticator: Authenticator,
 ) -> Result<Vec<Strategy>> {
     Ok(vec![udp::init(handle, config, authenticator)?])
 }

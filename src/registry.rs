@@ -1,13 +1,10 @@
-use stream::StreamHandle;
+use stream::NewStreamHandle;
 use PubKeyHash;
 
 use std::{
     collections::HashMap,
-    net::SocketAddr,
     sync::{Arc, Mutex},
 };
-
-use serde::{Deserialize, Serialize};
 
 use futures::{
     future,
@@ -16,90 +13,83 @@ use futures::{
     Future, Poll, Stream as FStream,
 };
 
-enum RegistryResult<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    FoundSelf,
-    FoundLocally(StreamHandle<P>),
-    FoundRemote(SocketAddr),
+pub enum RegistryResult {
+    /// Found the peer. The given handle returns new `Stream`s directly to the peer.
+    Found(NewStreamHandle),
+    /// Found the peer, but available at a remote peer. The given handle returns new `Stream`s to
+    /// the remote peer that holds the connection to the searched peer.
+    FoundRemote(NewStreamHandle),
+    /// The peer could not be found.
     NotFound,
 }
 
-trait RegistryProvider<P, I>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult<P>, Error = ()>>;
+pub trait RegistryProvider {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>>;
 }
 
-struct Inner<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
+struct Inner {
     /// The identifier of this peer.
     local_identifier: PubKeyHash,
     /// All the peers that are connected with this peer.
-    connected_peers: HashMap<PubKeyHash, StreamHandle<P>>,
-    /// Other remote registries
-    remote_registries: Vec<Box<RegistryProvider<P>>>,
+    connected_peers: HashMap<PubKeyHash, NewStreamHandle>,
+    /// Other registries
+    registries: Vec<Box<RegistryProvider>>,
 }
 
-impl<P> Inner<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn new(local_identifier: PubKeyHash) -> Inner<P> {
+impl Inner {
+    fn new(local_identifier: PubKeyHash) -> Inner {
         Inner {
             local_identifier,
             connected_peers: HashMap::new(),
-            remote_registries: Vec::new(),
+            registries: Vec::new(),
         }
+    }
+
+    fn peer(&self, peer: &PubKeyHash) -> Option<NewStreamHandle> {
+        self.connected_peers.get(peer).cloned()
+    }
+
+    fn has_peer(&self, peer: &PubKeyHash) -> bool {
+        self.connected_peers.contains_key(peer)
+    }
+
+    fn register_peer(&mut self, peer: PubKeyHash, new_stream_handle: NewStreamHandle) {
+        self.connected_peers.insert(peer, new_stream_handle);
+    }
+
+    fn unregister_peer(&mut self, peer: &PubKeyHash) {
+        self.connected_peers.remove(peer);
     }
 }
 
-impl<P> RegistryProvider<P> for Inner<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult<P>, Error = ()>> {
-        if *peer == self.local_identifier {
-            Box::new(future::ok(RegistryResult::FoundSelf))
-        } else if let Some(handle) = self.connected_peers.get(peer) {
-            Box::new(future::ok(RegistryResult::FoundLocally(handle.clone())))
+impl RegistryProvider for Inner {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>> {
+        if let Some(handle) = self.connected_peers.get(peer) {
+            Box::new(future::ok(RegistryResult::Found(handle.clone())))
         } else {
             Box::new(SearchRemoteRegistries::new(
-                self.remote_registries.iter().map(|r| r.find_peer(peer)),
+                self.registries.iter().map(|r| r.find_peer(peer)),
             ))
         }
     }
 }
 
-struct SearchRemoteRegistries<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    futures: FuturesUnordered<Box<Future<Item = RegistryResult<P>, Error = ()>>>,
+struct SearchRemoteRegistries {
+    futures: FuturesUnordered<Box<Future<Item = RegistryResult, Error = ()>>>,
 }
 
-impl<P> SearchRemoteRegistries<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
+impl SearchRemoteRegistries {
     fn new(
-        itr: impl Iterator<Item = Box<Future<Item = RegistryResult<P>, Error = ()>>>,
-    ) -> SearchRemoteRegistries<P> {
+        itr: impl Iterator<Item = Box<Future<Item = RegistryResult, Error = ()>>>,
+    ) -> SearchRemoteRegistries {
         SearchRemoteRegistries {
             futures: futures_unordered(itr),
         }
     }
 }
 
-impl<P> Future for SearchRemoteRegistries<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = RegistryResult<P>;
+impl Future for SearchRemoteRegistries {
+    type Item = RegistryResult;
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -111,36 +101,43 @@ where
 
             match res {
                 RegistryResult::NotFound => {}
-                r @ _ => return Ok(Ready(res)),
+                r @ _ => return Ok(Ready(r)),
             }
         }
     }
 }
 
 #[derive(Clone)]
-pub struct Registry<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    inner: Arc<Mutex<Inner<P>>>,
+pub struct Registry {
+    inner: Arc<Mutex<Inner>>,
 }
 
-impl<P> Registry<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    pub fn new(local_identifier: PubKeyHash) -> Registry<P> {
+impl Registry {
+    pub fn new(local_identifier: PubKeyHash) -> Registry {
         Registry {
             inner: Arc::new(Mutex::new(Inner::new(local_identifier))),
         }
     }
+
+    pub fn peer(&self, peer: &PubKeyHash) -> Option<NewStreamHandle> {
+        self.inner.lock().unwrap().peer(peer)
+    }
+
+    pub fn has_peer(&self, peer: &PubKeyHash) -> bool {
+        self.inner.lock().unwrap().has_peer(peer)
+    }
+
+    pub fn register_peer(&self, peer: PubKeyHash, new_stream_handle: NewStreamHandle) {
+        self.inner.lock().unwrap().register_peer(peer, new_stream_handle);
+    }
+
+    pub fn unregister_peer(&self, peer: &PubKeyHash) {
+        self.inner.lock().unwrap().unregister_peer(peer);
+    }
 }
 
-impl<P> RegistryProvider<P> for Registry<P>
-where
-    P: Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult<P>, Error = ()>> {
+impl RegistryProvider for Registry {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>> {
         self.inner.lock().unwrap().find_peer(peer)
     }
 }

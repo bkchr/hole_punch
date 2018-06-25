@@ -1,43 +1,39 @@
 use authenticator::Authenticator;
 use config::Config;
-use connect::ConnectWithStrategies;
 use connection::{Connection, NewConnectionHandle};
 use error::*;
 use registry::Registry;
 use strategies::{self, NewConnection};
-use stream::Stream;
+use stream::{NewStreamHandle, Stream};
 use PubKeyHash;
 
 use failure;
 
-use futures::stream::{futures_unordered, FuturesUnordered, StreamFuture};
-use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::Async::{NotReady, Ready};
-use futures::{Future, Poll, Stream as FStream};
+use futures::{
+    stream::{futures_unordered, FuturesUnordered, StreamFuture},
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    Async::{NotReady, Ready},
+    Poll, Stream as FStream,
+};
 
 use tokio_core::reactor::Handle;
 
-use serde::{Deserialize, Serialize};
+type NewStreamChannel = (strategies::Stream, PubKeyHash, NewStreamHandle, bool);
 
-pub struct Context<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    new_stream_recv: UnboundedReceiver<Stream<P>>,
-    pass_stream_to_context: PassStreamToContext<P>,
+pub struct Context {
+    new_stream_recv: UnboundedReceiver<NewStreamChannel>,
+    pass_stream_to_context: PassStreamToContext,
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
     handle: Handle,
-    new_connection_handles: Vec<NewConnectionHandle<P>>,
-    authenticator: Option<Authenticator>,
-    registry: Registry<P>,
+    new_connection_handles: Vec<NewConnectionHandle>,
+    authenticator: Authenticator,
+    registry: Registry,
+    local_peer_identifier: PubKeyHash,
 }
 
-impl<P> Context<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    pub fn new(identifier: PubKeyHash, handle: Handle, config: Config) -> Result<Context<P>> {
-        let registry = Registry::new(identifier);
+impl Context {
+    pub fn new(local_peer_identifier: PubKeyHash, handle: Handle, config: Config) -> Result<Context> {
+        let registry = Registry::new(local_peer_identifier.clone());
         let (new_stream_send, new_stream_recv) = mpsc::unbounded();
         let pass_stream_to_context = PassStreamToContext::new(new_stream_send);
 
@@ -47,16 +43,18 @@ where
             config.authenticator_store_orig_pub_key,
         )?;
 
-        let strats = strategies::init(handle.clone(), &config, authenticator.as_ref())?;
+        let strats = strategies::init(handle.clone(), &config, authenticator.clone())?;
 
         let new_connection_handles = strats
             .iter()
             .map(|s| {
                 NewConnectionHandle::new(
+                    local_peer_identifier.clone(),
                     s.get_new_connection_handle(),
                     pass_stream_to_context.clone(),
                     registry.clone(),
-                    &handle,
+                    handle.clone(),
+                    authenticator.clone(),
                 )
             })
             .collect();
@@ -69,6 +67,7 @@ where
             new_connection_handles,
             authenticator,
             registry,
+            local_peer_identifier,
         })
     }
 
@@ -80,18 +79,18 @@ where
                 Ok(Ready(Some((Some(con), strat)))) => {
                     let con = Connection::new(
                         con,
+                        self.local_peer_identifier.clone(),
                         NewConnectionHandle::new(
+                            self.local_peer_identifier.clone(),
                             strat.get_new_connection_handle(),
                             self.pass_stream_to_context.clone(),
-                            self.resolve_peer.clone(),
-                            self.identifier.clone(),
+                            self.registry.clone(),
                             self.handle.clone(),
                             self.authenticator.clone(),
                         ),
                         self.pass_stream_to_context.clone(),
-                        self.resolve_peer.clone(),
-                        self.identifier.clone(),
-                        self.handle,
+                        self.registry.clone(),
+                        self.handle.clone(),
                         self.authenticator.clone(),
                     );
                     self.handle.spawn(con);
@@ -108,11 +107,8 @@ where
     }
 }
 
-impl<P> FStream for Context<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Stream<P>;
+impl FStream for Context {
+    type Item = Stream;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -120,26 +116,37 @@ where
         self.new_stream_recv
             .poll()
             .map_err(|_| failure::err_msg("Could not receive new stream").into())
+            .map(|r| {
+                r.map(|o| {
+                    o.map(
+                        |(stream, peer_identifier, new_stream_handle, is_proxy_stream)| {
+                            Stream::new(stream, peer_identifier, new_stream_handle, is_proxy_stream)
+                        },
+                    )
+                })
+            })
     }
 }
 
 #[derive(Clone)]
-pub struct PassStreamToContext<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    send: UnboundedSender<Stream<P>>,
+pub struct PassStreamToContext {
+    send: UnboundedSender<NewStreamChannel>,
 }
 
-impl<P> PassStreamToContext<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    fn new(send: UnboundedSender<Stream<P>>) -> PassStreamToContext<P> {
+impl PassStreamToContext {
+    fn new(send: UnboundedSender<NewStreamChannel>) -> PassStreamToContext {
         PassStreamToContext { send }
     }
 
-    pub fn pass_stream(&mut self, stream: Stream<P>) {
-        let _ = self.send.unbounded_send(stream);
+    pub fn pass_stream(
+        &mut self,
+        stream: strategies::Stream,
+        peer_identifier: PubKeyHash,
+        new_stream_handle: NewStreamHandle,
+        is_proxy_stream: bool,
+    ) {
+        let _ =
+            self.send
+                .unbounded_send((stream, peer_identifier, new_stream_handle, is_proxy_stream));
     }
 }

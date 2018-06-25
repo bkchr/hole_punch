@@ -26,7 +26,7 @@ impl StrategyWrapper {
     fn new(
         hconfig: &Config,
         handle: Handle,
-        authenticator: Option<&Authenticator>,
+        authenticator: Authenticator,
     ) -> Result<StrategyWrapper> {
         let mut config = picoquic::Config::clone_from(&hconfig.quic_config);
 
@@ -36,9 +36,7 @@ impl StrategyWrapper {
             config.enable_client_authentication();
         }
 
-        if let Some(auth) = authenticator {
-            config.set_verify_certificate_handler(auth.clone());
-        }
+        config.set_verify_certificate_handler(authenticator);
 
         let context = picoquic::Context::new(&hconfig.quic_listen_address, &handle, config)?;
 
@@ -283,7 +281,7 @@ impl NewStream for NewStreamHandleWrapper {
 pub fn init(
     handle: Handle,
     config: &Config,
-    authenticator: Option<&Authenticator>,
+    authenticator: Authenticator,
 ) -> Result<Strategy> {
     Ok(Strategy::new(StrategyWrapper::new(
         config,

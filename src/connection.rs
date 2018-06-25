@@ -2,59 +2,55 @@ use authenticator::Authenticator;
 use context::PassStreamToContext;
 use error::*;
 use incoming_stream::IncomingStream;
-use protocol::Protocol;
+use protocol::StreamHello;
 use registry::Registry;
 use strategies::{self, NewConnection, NewStream};
-use stream::{NewStreamFuture, NewStreamHandle, Stream};
+use stream::{NewStreamFuture, NewStreamHandle};
 use PubKeyHash;
 
 use std::{net::SocketAddr, time::Duration};
 
 use futures::{
-    sync::oneshot, Async::{NotReady, Ready}, Future, Poll, Stream as FStream,
+    Async::{NotReady, Ready}, Future, Poll, Stream as FStream,
 };
-
-use serde::{Deserialize, Serialize};
 
 use tokio_core::reactor::Handle;
 
 pub type ConnectionId = u64;
 
 #[derive(Clone)]
-pub struct NewConnectionHandle<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+pub struct NewConnectionHandle {
     new_con: strategies::NewConnectionHandle,
     handle: Handle,
-    pass_stream_to_context: PassStreamToContext<P>,
-    registry: Registry<P>,
+    pass_stream_to_context: PassStreamToContext,
+    registry: Registry,
     authenticator: Authenticator,
+    local_peer_identifier: PubKeyHash,
 }
 
-impl<P> NewConnectionHandle<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+impl NewConnectionHandle {
     pub fn new(
+        local_peer_identifier: PubKeyHash,
         new_con: strategies::NewConnectionHandle,
-        pass_stream_to_context: PassStreamToContext<P>,
-        registry: Registry<P>,
+        pass_stream_to_context: PassStreamToContext,
+        registry: Registry,
         handle: Handle,
         authenticator: Authenticator,
-    ) -> NewConnectionHandle<P> {
+    ) -> NewConnectionHandle {
         NewConnectionHandle {
             new_con,
             pass_stream_to_context,
-            handle: handle.clone(),
+            handle,
             registry,
             authenticator,
+            local_peer_identifier,
         }
     }
 
-    pub fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture<P> {
+    pub fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
         NewConnectionFuture::new(
             self.new_con.new_connection(addr),
+            self.local_peer_identifier.clone(),
             self.clone(),
             self.pass_stream_to_context.clone(),
             self.registry.clone(),
@@ -64,46 +60,40 @@ where
     }
 }
 
-pub struct NewConnectionFuture<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+pub struct NewConnectionFuture {
     new_con_recv: strategies::NewConnectionFuture,
-    pass_stream_to_context: PassStreamToContext<P>,
-    new_con_handle: NewConnectionHandle<P>,
+    pass_stream_to_context: PassStreamToContext,
+    new_con_handle: NewConnectionHandle,
     handle: Handle,
-    registry: Registry<P>,
+    registry: Registry,
     authenticator: Authenticator,
+    local_peer_identifier: PubKeyHash,
 }
 
-impl<P> NewConnectionFuture<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+impl NewConnectionFuture {
     fn new(
         new_con_recv: strategies::NewConnectionFuture,
-        new_con_handle: NewConnectionHandle<P>,
-        pass_stream_to_context: PassStreamToContext<P>,
-        registry: Registry<P>,
+        local_peer_identifier: PubKeyHash,
+        new_con_handle: NewConnectionHandle,
+        pass_stream_to_context: PassStreamToContext,
+        registry: Registry,
         handle: Handle,
         authenticator: Authenticator,
-    ) -> NewConnectionFuture<P> {
+    ) -> NewConnectionFuture {
         NewConnectionFuture {
             new_con_recv,
             new_con_handle,
             pass_stream_to_context,
-            handle: handle.clone(),
+            handle,
             registry,
             authenticator,
+            local_peer_identifier
         }
     }
 }
 
-impl<P> Future for NewConnectionFuture<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
-    type Item = Connection<P>;
+impl Future for NewConnectionFuture {
+    type Item = Connection;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -111,6 +101,7 @@ where
             r.map(|v| {
                 Connection::new(
                     v,
+                    self.local_peer_identifier.clone(),
                     self.new_con_handle.clone(),
                     self.pass_stream_to_context.clone(),
                     self.registry.clone(),
@@ -122,44 +113,38 @@ where
     }
 }
 
-pub struct Connection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+pub struct Connection {
     con: strategies::Connection,
     handle: Handle,
-    pass_stream_to_context: PassStreamToContext<P>,
-    new_con_handle: NewConnectionHandle<P>,
-    new_stream_handle: NewStreamHandle<P>,
-    registry: Registry<P>,
+    pass_stream_to_context: PassStreamToContext,
+    new_con_handle: NewConnectionHandle,
+    new_stream_handle: NewStreamHandle,
+    registry: Registry,
     /// The identifier of the peer this Connection is connected to.
     peer_identifier: PubKeyHash,
 }
 
-impl<P> Connection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+impl Connection {
     pub fn new(
         con: strategies::Connection,
-        new_con_handle: NewConnectionHandle<P>,
-        pass_stream_to_context: PassStreamToContext<P>,
-        registry: Registry<P>,
+        local_peer_identifier: PubKeyHash,
+        new_con_handle: NewConnectionHandle,
+        pass_stream_to_context: PassStreamToContext,
+        registry: Registry,
         handle: Handle,
-        authenticator: Authenticator,
-    ) -> Connection<P> {
-        let (send, auth_recv) = oneshot::channel();
-
-        let new_stream_handle = NewStreamHandle::new(
-            con.get_new_stream_handle(),
-            new_con_handle.clone(),
-            registry.clone(),
-            handle.clone(),
-        );
-
+        mut authenticator: Authenticator,
+    ) -> Connection {
         let peer_identifier = authenticator
             .incoming_con_pub_key(&con)
             .expect("Could not find public key for connection!");
+
+        let new_stream_handle = NewStreamHandle::new(
+            peer_identifier.clone(),
+            local_peer_identifier,
+            con.get_new_stream_handle(),
+        );
+
+        registry.register_peer(peer_identifier.clone(), new_stream_handle.clone());
 
         Connection {
             con,
@@ -172,47 +157,34 @@ where
         }
     }
 
-    pub fn new_stream_with_hello(&mut self, hello_msg: Protocol<P>) -> NewStreamFuture<P> {
+    pub fn new_stream_with_hello(&mut self, stream_hello: StreamHello) -> NewStreamFuture {
         NewStreamFuture::new(
             self.peer_identifier.clone(),
             self.con.new_stream(),
             self.get_new_stream_handle(),
-            self.get_new_con_handle(),
-            self.registry.clone(),
-            hello_msg,
-            self.handle.clone(),
+            stream_hello,
         )
     }
 
-    fn get_new_stream_handle(&self) -> NewStreamHandle<P> {
+    fn get_new_stream_handle(&self) -> NewStreamHandle {
         self.new_stream_handle.clone()
     }
 
-    fn get_new_con_handle(&self) -> NewConnectionHandle<P> {
+    fn get_new_con_handle(&self) -> NewConnectionHandle {
         self.new_con_handle.clone()
     }
 
-    fn poll_impl(&mut self) -> Poll<Option<Stream<P>>, Error> {
+    fn poll_impl(&mut self) -> Poll<Option<strategies::Stream>, Error> {
         let stream = match try_ready!(self.con.poll()) {
             Some(stream) => stream,
             None => return Ok(Ready(None)),
         };
 
-        return Ok(Ready(Some(Stream::new(
-            stream,
-            self.peer_identifier.clone(),
-            self.handle.clone(),
-            self.get_new_stream_handle(),
-            self.get_new_con_handle(),
-            self.registry.clone(),
-        ))));
+        return Ok(Ready(Some(stream)));
     }
 }
 
-impl<P> Future for Connection<P>
-where
-    P: 'static + Serialize + for<'de> Deserialize<'de> + Clone,
-{
+impl Future for Connection {
     type Item = ();
     type Error = ();
 
@@ -221,16 +193,23 @@ where
             match self.poll_impl() {
                 Ok(NotReady) => return Ok(NotReady),
                 Err(e) => {
+                    self.registry.unregister_peer(&self.peer_identifier);
                     println!("Connection: {:?}", e);
                     return Ok(Ready(()));
                 }
-                Ok(Ready(None)) => return Ok(Ready(())),
+                Ok(Ready(None)) => {
+                    self.registry.unregister_peer(&self.peer_identifier);
+                    return Ok(Ready(()));
+                }
                 Ok(Ready(Some(stream))) => {
                     let incoming_stream = IncomingStream::new(
                         stream,
                         Duration::from_secs(10),
                         self.pass_stream_to_context.clone(),
                         self.registry.clone(),
+                        self.peer_identifier.clone(),
+                        self.new_stream_handle.clone(),
+                        self.new_con_handle.clone(),
                         self.handle.clone(),
                     );
                     self.handle.spawn(

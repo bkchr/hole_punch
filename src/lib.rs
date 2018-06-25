@@ -29,6 +29,7 @@ mod protocol;
 #[macro_use]
 mod error;
 mod authenticator;
+mod build_connection_to_peer;
 mod config;
 mod connect;
 mod connection;
@@ -36,6 +37,7 @@ mod context;
 mod incoming_stream;
 mod pubkey;
 mod registry;
+mod remote_registry;
 mod strategies;
 mod stream;
 mod timeout;
@@ -43,11 +45,11 @@ mod timeout;
 pub use authenticator::Authenticator;
 pub use config::Config;
 pub use connection::ConnectionId;
-pub use context::{Context, ResolvePeer, ResolvePeerResult};
+pub use context::Context;
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;
-pub use stream::{Stream, StreamHandle};
+pub use stream::Stream;
 
 pub mod plain {
     pub use strategies::Stream;
