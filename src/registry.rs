@@ -26,7 +26,6 @@ pub trait RegistryProvider {
 
 struct Inner {
     /// The identifier of this peer.
-    local_identifier: PubKeyHash,
     /// All the peers that are connected with this peer.
     connected_peers: HashMap<PubKeyHash, NewStreamHandle>,
     /// Other registries
@@ -34,9 +33,8 @@ struct Inner {
 }
 
 impl Inner {
-    fn new(local_identifier: PubKeyHash) -> Inner {
+    fn new() -> Inner {
         Inner {
-            local_identifier,
             connected_peers: HashMap::new(),
             registries: Vec::new(),
         }
@@ -114,9 +112,9 @@ pub struct Registry {
 }
 
 impl Registry {
-    pub fn new(local_identifier: PubKeyHash) -> Registry {
+    pub fn new() -> Registry {
         Registry {
-            inner: Arc::new(Mutex::new(Inner::new(local_identifier))),
+            inner: Arc::new(Mutex::new(Inner::new())),
         }
     }
 

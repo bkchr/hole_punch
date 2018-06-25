@@ -1,8 +1,9 @@
 use authenticator::Authenticator;
+use build_connection_to_peer::BuildConnectionToPeer;
 use config::Config;
 use connection::{Connection, NewConnectionHandle};
 use error::*;
-use registry::Registry;
+use registry::{Registry, RegistryProvider, RegistryResult};
 use remote_registry;
 use strategies::{self, NewConnection};
 use stream::{NewStreamHandle, Stream};
@@ -12,9 +13,11 @@ use failure;
 
 use futures::{
     stream::{futures_unordered, FuturesUnordered, StreamFuture},
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender}, Async::{NotReady, Ready}, Poll,
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender}, Async::{NotReady, Ready}, Future, Poll,
     Stream as FStream,
 };
+
+use std::time::Duration;
 
 use tokio_core::reactor::Handle;
 
@@ -37,7 +40,7 @@ impl Context {
         handle: Handle,
         config: Config,
     ) -> Result<Context> {
-        let registry = Registry::new(local_peer_identifier.clone());
+        let registry = Registry::new();
         let (new_stream_send, new_stream_recv) = mpsc::unbounded();
         let pass_stream_to_context = PassStreamToContext::new(new_stream_send);
 
@@ -81,6 +84,41 @@ impl Context {
             registry,
             local_peer_identifier,
         })
+    }
+
+    pub fn create_connection_to_peer(
+        &self,
+        peer: PubKeyHash,
+    ) -> impl Future<Item = Stream, Error = Error> {
+        let handle = self.handle.clone();
+        // TODO: Don't do that.
+        let new_connection_handle = self.new_connection_handles.get(0).unwrap().clone();
+        let local_peer_identifier = self.local_peer_identifier.clone();
+
+        self.registry
+            .find_peer(&peer)
+            .map_err(|_| Error::from("Unknown error while finding a peer"))
+            .and_then(
+                move |find| -> Result<Box<Future<Item = Stream, Error = Error>>> {
+                    match find {
+                        RegistryResult::Found(mut new_stream_handle) => {
+                            return Ok(Box::new(new_stream_handle.new_stream()))
+                        }
+                        RegistryResult::FoundRemote(new_stream_handle) => {
+                            return Ok(Box::new(BuildConnectionToPeer::new(
+                                local_peer_identifier,
+                                peer,
+                                new_connection_handle,
+                                new_stream_handle,
+                                Duration::from_secs(20),
+                                handle,
+                            )))
+                        }
+                        RegistryResult::NotFound => bail!("Could not find peer: {:?}", peer),
+                    }
+                },
+            )
+            .flatten()
     }
 
     fn poll_strategies(&mut self) -> Result<()> {
