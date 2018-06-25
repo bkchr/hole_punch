@@ -171,10 +171,6 @@ impl Connection {
         self.new_stream_handle.clone()
     }
 
-    fn get_new_con_handle(&self) -> NewConnectionHandle {
-        self.new_con_handle.clone()
-    }
-
     fn poll_impl(&mut self) -> Poll<Option<strategies::Stream>, Error> {
         let stream = match try_ready!(self.con.poll()) {
             Some(stream) => stream,
