@@ -119,7 +119,7 @@ impl Future for IncomingStream {
                     |stream0, stream1| prepare_streams_for_building(stream0, stream1),
                 );
             }
-            None => {},
+            None => {}
         }
 
         Ok(Ready(()))

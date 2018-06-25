@@ -31,10 +31,7 @@ impl StrategyWrapper {
         let mut config = picoquic::Config::clone_from(&hconfig.quic_config);
 
         config.enable_keep_alive(Duration::from_secs(15));
-
-        if hconfig.client_ca_certificates.is_some() {
-            config.enable_client_authentication();
-        }
+        config.enable_client_authentication();
 
         config.set_verify_certificate_handler(authenticator);
 
@@ -278,11 +275,7 @@ impl NewStream for NewStreamHandleWrapper {
     }
 }
 
-pub fn init(
-    handle: Handle,
-    config: &Config,
-    authenticator: Authenticator,
-) -> Result<Strategy> {
+pub fn init(handle: Handle, config: &Config, authenticator: Authenticator) -> Result<Strategy> {
     Ok(Strategy::new(StrategyWrapper::new(
         config,
         handle,

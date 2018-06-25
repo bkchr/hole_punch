@@ -2,15 +2,12 @@ use stream::NewStreamHandle;
 use PubKeyHash;
 
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
+    collections::HashMap, sync::{Arc, Mutex},
 };
 
 use futures::{
-    future,
-    stream::{futures_unordered, FuturesUnordered},
-    Async::Ready,
-    Future, Poll, Stream as FStream,
+    future, stream::{futures_unordered, FuturesUnordered}, Async::Ready, Future, Poll,
+    Stream as FStream,
 };
 
 pub enum RegistryResult {
@@ -59,6 +56,10 @@ impl Inner {
 
     fn unregister_peer(&mut self, peer: &PubKeyHash) {
         self.connected_peers.remove(peer);
+    }
+
+    pub fn add_registry_provider(&mut self, provider: impl RegistryProvider + 'static) {
+        self.registries.push(Box::new(provider));
     }
 }
 
@@ -128,11 +129,18 @@ impl Registry {
     }
 
     pub fn register_peer(&self, peer: PubKeyHash, new_stream_handle: NewStreamHandle) {
-        self.inner.lock().unwrap().register_peer(peer, new_stream_handle);
+        self.inner
+            .lock()
+            .unwrap()
+            .register_peer(peer, new_stream_handle);
     }
 
     pub fn unregister_peer(&self, peer: &PubKeyHash) {
         self.inner.lock().unwrap().unregister_peer(peer);
+    }
+
+    pub fn add_registry_provider(&self, provider: impl RegistryProvider + 'static) {
+        self.inner.lock().unwrap().add_registry_provider(provider);
     }
 }
 

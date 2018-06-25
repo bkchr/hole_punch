@@ -43,8 +43,8 @@ fn create_certificate_store(certs: Option<Vec<PathBuf>>) -> Result<Option<X509St
 
 struct Inner {
     incoming_con_pub_keys: HashMap<ConnectionId, PubKeyHash>,
-    client_certificates: Option<X509Store>,
-    server_certificates: Option<X509Store>,
+    incoming_certificates: Option<X509Store>,
+    outgoing_certificates: Option<X509Store>,
     store_orig_pub_key: bool,
 }
 
@@ -56,8 +56,8 @@ impl Inner {
     ) -> Result<Inner> {
         Ok(Inner {
             incoming_con_pub_keys: HashMap::new(),
-            client_certificates: create_certificate_store(client_certs)?,
-            server_certificates: create_certificate_store(server_certs)?,
+            incoming_certificates: create_certificate_store(client_certs)?,
+            outgoing_certificates: create_certificate_store(server_certs)?,
             store_orig_pub_key,
         })
     }
@@ -71,7 +71,7 @@ impl Inner {
     }
 }
 
-/// The `Authenticator` is used to authenticate the identities of clients and servers.
+/// The `Authenticator` is used to authenticate the identities of incoming and outgoing connections.
 /// It will use the certificates specified in the `Config` for the authentication.
 ///
 /// If trusted client certificates are provided in the `Config`, the `Authenticator` stores the
@@ -118,10 +118,11 @@ impl VerifyCertificate for Authenticator {
 
         match connection_type {
             ConnectionType::Incoming => {
-                let res = if let Some(ref store) = (*inner).client_certificates {
+                let res = if let Some(ref store) = (*inner).incoming_certificates {
                     default_verify_certificate(cert, chain, store)
                 } else {
-                    panic!("Client authentication activated, but we have no client certificates!")
+                    // We trust all incoming connections
+                    Ok(true)
                 };
 
                 if res.is_ok() {
@@ -135,11 +136,10 @@ impl VerifyCertificate for Authenticator {
                 res
             }
             ConnectionType::Outgoing => {
-                if let Some(ref store) = (*inner).server_certificates {
+                if let Some(ref store) = (*inner).outgoing_certificates {
                     default_verify_certificate(cert, chain, store)
                 } else {
-                    // We are the client and have no trusted certificates for servers, so we trust
-                    // any server.
+                    // We trust all outgoing connections
                     Ok(true)
                 }
             }

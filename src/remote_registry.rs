@@ -10,34 +10,38 @@ use PubKeyHash;
 
 use futures::{
     sync::{
-        mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, oneshot,
+        mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+        oneshot,
     },
-    Async::{NotReady, Ready}, Future, Poll, Sink, Stream as FStream,
+    Async::{NotReady, Ready},
+    Future, Poll, Sink, Stream as FStream,
 };
 
 use std::{
-    collections::{hash_map::Entry, HashMap}, net::SocketAddr, time::Duration,
+    collections::{hash_map::Entry, HashMap},
+    net::SocketAddr,
+    time::Duration,
 };
 
 use tokio_core::reactor::Handle;
 
 type ResultSender = oneshot::Sender<RegistryResult>;
 
-struct RemoteRegistry {
+pub struct RemoteRegistry {
     find_peer_request: UnboundedSender<(PubKeyHash, ResultSender)>,
     handle: Handle,
 }
 
 impl RemoteRegistry {
-    fn new(
-        next_remote_peer: Box<dyn Iterator<Item = SocketAddr>>,
+    pub fn new(
+        remote_peers: Vec<SocketAddr>,
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         handle: Handle,
     ) -> RemoteRegistry {
         let (find_peer_request_send, find_peer_request_recv) = unbounded();
         let con_handler = RemoteRegistryConnectionHandler::new(
-            next_remote_peer,
+            remote_peers,
             strategies,
             local_peer_identifier,
             find_peer_request_recv,
@@ -110,12 +114,13 @@ struct RemoteRegistryConnectionHandler {
 
 impl RemoteRegistryConnectionHandler {
     fn new(
-        mut next_remote_peer: Box<dyn Iterator<Item = SocketAddr>>,
+        remote_peers: Vec<SocketAddr>,
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         find_peer_request: FindPeerRequest,
         handle: Handle,
     ) -> RemoteRegistryConnectionHandler {
+        let mut next_remote_peer = Box::new(remote_peers.into_iter().cycle());
         let connect = ConnectWithStrategies::new(
             strategies.clone(),
             handle.clone(),
@@ -190,7 +195,7 @@ impl Future for RemoteRegistryConnectionHandler {
                         return Ok(NotReady);
                     }
                     Ok(Ready(stream)) => {
-                        let new_stream_handle = stream.new_stream_handle();
+                        let new_stream_handle = stream.new_stream_handle().clone();
                         let current_peer =
                             OutgoingStream::new(stream, new_stream_handle, find_peer_request);
                         self.current_peer = Some(current_peer);

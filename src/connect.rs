@@ -11,7 +11,7 @@ use tokio_core::reactor::Handle;
 
 use futures::{
     Async::{NotReady, Ready},
-    Future, Poll, 
+    Future, Poll,
 };
 
 use state_machine_future::RentToOwn;

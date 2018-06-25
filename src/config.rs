@@ -1,35 +1,35 @@
-use std::net::SocketAddr;
-use std::path::PathBuf;
+use error::*;
+
+use std::{
+    net::{SocketAddr, ToSocketAddrs},
+    path::PathBuf,
+};
 
 use picoquic::{self, FileFormat};
 
-pub struct Config {
-    /// The address where pcioquic should listen on.
+pub struct ConfigBuilder {
+    /// The address where picoquic should listen on.
     /// Default: `0.0.0.0:0`
-    pub quic_listen_address: SocketAddr,
+    quic_listen_address: SocketAddr,
     /// The configuration used for picoquic.
-    pub quic_config: picoquic::Config,
+    quic_config: picoquic::Config,
     /// The list of certificate authorities certificates for clients.
-    pub client_ca_certificates: Option<Vec<PathBuf>>,
+    incoming_ca_certificates: Option<Vec<PathBuf>>,
     /// The list of certificate authorities certificates for servers.
-    pub server_ca_certificates: Option<Vec<PathBuf>>,
-    /// The `Authenticator` normally just stores public key hashes. If this option is set, it will
-    /// additionally store the full public key.
-    pub authenticator_store_orig_pub_key: bool,
-    /// Enables the `Authenticator`.
-    pub authenticator_enable: bool,
+    outgoing_ca_certificates: Option<Vec<PathBuf>>,
+    /// The list of known remote peers.
+    remote_peers: Vec<SocketAddr>,
 }
 
-impl Config {
+impl ConfigBuilder {
     /// Creates a new `Config` instance.
-    pub fn new() -> Config {
-        Config {
+    fn new() -> ConfigBuilder {
+        ConfigBuilder {
             quic_listen_address: ([0, 0, 0, 0], 0).into(),
             quic_config: picoquic::Config::new(),
-            client_ca_certificates: None,
-            server_ca_certificates: None,
-            authenticator_store_orig_pub_key: false,
-            authenticator_enable: false,
+            incoming_ca_certificates: None,
+            outgoing_ca_certificates: None,
+            remote_peers: Vec::new(),
         }
     }
 
@@ -65,33 +65,66 @@ impl Config {
         self.quic_config.set_key(key, format);
     }
 
-    /// Sets a list of client certificate authorities certificates (in PEM format). These
-    /// certificates are used to authenticate clients. If no certificates are given, all clients
-    /// are successfully authenticated.
-    /// This implicitly enables the `Authenticator`.
-    pub fn set_client_ca_certificates(&mut self, certs: Vec<PathBuf>) {
-        self.client_ca_certificates = Some(certs);
-        self.authenticator_enable = true;
+    /// Sets a list of certificate authorities certificates (in PEM format). These
+    /// certificates are used to authenticate incoming connections. If no certificates are given,
+    /// all incoming connections are successfully authenticated.
+    pub fn set_incoming_ca_certificates(&mut self, certs: Vec<PathBuf>) {
+        self.incoming_ca_certificates = Some(certs);
     }
 
-    /// Sets a list of server certificate authorities certificates (in PEM format). These
-    /// certificates are used to authenticate servers. If no certificates are given, all servers
-    /// are successfully authenticated.
-    /// This implicitly enables the `Authenticator`.
-    pub fn set_server_ca_certificates(&mut self, certs: Vec<PathBuf>) {
-        self.server_ca_certificates = Some(certs);
-        self.authenticator_enable = true;
+    /// Sets a list of certificate authorities certificates (in PEM format). These
+    /// certificates are used to authenticate outgoing connections. If no certificates are given,
+    /// all outgoing connections are successfully authenticated.
+    pub fn set_outgoing_ca_certificates(&mut self, certs: Vec<PathBuf>) {
+        self.outgoing_ca_certificates = Some(certs);
     }
 
-    /// By default the `Authenticator` just store public key hashes. If this option is enabled, it
-    /// will additionally store the full public key.
-    /// See `PubKey::orig_public_key` to retrieve the stored public key.
-    pub fn enable_authenticator_store_orig_pub_key(&mut self, enable: bool) {
-        self.authenticator_store_orig_pub_key = enable;
+    /// Adds a remote peer. The `Context` will always hold a connection to one of the known remote
+    /// peers.
+    pub fn add_remote_peer(&mut self, remote_peer: impl ToSocketAddrs) -> Result<()> {
+        // TODO: For urls we need some kind of update. E.g. the dns record changes.
+        remote_peer
+            .to_socket_addrs()?
+            .for_each(|a| self.remote_peers.push(a));
+        Ok(())
     }
 
-    /// Enable the `Authenticator`.
-    pub fn enable_authenticator(&mut self, enable: bool) {
-        self.authenticator_enable = enable;
+    /// Build the `Config`.
+    pub fn build(self) -> Result<Config> {
+        if self.quic_config.key.is_none() && self.quic_config.key_filename.is_none() {
+            bail!("Private key is required!");
+        }
+
+        if self.quic_config.cert_chain.is_none() && self.quic_config.cert_chain_filename.is_none() {
+            bail!("Certificate chain is required!");
+        }
+
+        Ok(Config {
+            quic_listen_address: self.quic_listen_address,
+            quic_config: self.quic_config,
+            incoming_ca_certificates: self.incoming_ca_certificates,
+            outgoing_ca_certificates: self.outgoing_ca_certificates,
+            remote_peers: self.remote_peers,
+        })
+    }
+}
+
+pub struct Config {
+    /// The address where pcioquic should listen on.
+    /// Default: `0.0.0.0:0`
+    pub(crate) quic_listen_address: SocketAddr,
+    /// The configuration used for picoquic.
+    pub(crate) quic_config: picoquic::Config,
+    /// The list of certificate authorities certificates for incoming connections.
+    pub(crate) incoming_ca_certificates: Option<Vec<PathBuf>>,
+    /// The list of certificate authorities certificates for outgoing connections.
+    pub(crate) outgoing_ca_certificates: Option<Vec<PathBuf>>,
+    /// The list of known remote peers.
+    pub(crate) remote_peers: Vec<SocketAddr>,
+}
+
+impl Config {
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder::new()
     }
 }

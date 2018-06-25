@@ -16,8 +16,9 @@ use pnet_datalink::interfaces;
 use itertools::Itertools;
 
 use futures::{
-    stream::{futures_unordered, FuturesUnordered}, Async::{NotReady, Ready}, Future, Poll, Sink,
-    Stream as FStream,
+    stream::{futures_unordered, FuturesUnordered},
+    Async::{NotReady, Ready},
+    Future, Poll, Sink, Stream as FStream,
 };
 
 use state_machine_future::RentToOwn;

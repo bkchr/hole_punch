@@ -3,6 +3,7 @@ use config::Config;
 use connection::{Connection, NewConnectionHandle};
 use error::*;
 use registry::Registry;
+use remote_registry;
 use strategies::{self, NewConnection};
 use stream::{NewStreamHandle, Stream};
 use PubKeyHash;
@@ -11,9 +12,8 @@ use failure;
 
 use futures::{
     stream::{futures_unordered, FuturesUnordered, StreamFuture},
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
-    Async::{NotReady, Ready},
-    Poll, Stream as FStream,
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender}, Async::{NotReady, Ready}, Poll,
+    Stream as FStream,
 };
 
 use tokio_core::reactor::Handle;
@@ -32,15 +32,19 @@ pub struct Context {
 }
 
 impl Context {
-    pub fn new(local_peer_identifier: PubKeyHash, handle: Handle, config: Config) -> Result<Context> {
+    pub fn new(
+        local_peer_identifier: PubKeyHash,
+        handle: Handle,
+        config: Config,
+    ) -> Result<Context> {
         let registry = Registry::new(local_peer_identifier.clone());
         let (new_stream_send, new_stream_recv) = mpsc::unbounded();
         let pass_stream_to_context = PassStreamToContext::new(new_stream_send);
 
         let authenticator = Authenticator::new(
-            config.server_ca_certificates.as_ref().cloned(),
-            config.client_ca_certificates.as_ref().cloned(),
-            config.authenticator_store_orig_pub_key,
+            config.outgoing_ca_certificates.clone(),
+            config.incoming_ca_certificates.clone(),
+            true,
         )?;
 
         let strats = strategies::init(handle.clone(), &config, authenticator.clone())?;
@@ -57,7 +61,15 @@ impl Context {
                     authenticator.clone(),
                 )
             })
-            .collect();
+            .collect::<Vec<_>>();
+
+        let remote_registry = remote_registry::RemoteRegistry::new(
+            config.remote_peers.clone(),
+            new_connection_handles.clone(),
+            local_peer_identifier.clone(),
+            handle.clone(),
+        );
+        registry.add_registry_provider(remote_registry);
 
         Ok(Context {
             new_stream_recv,

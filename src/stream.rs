@@ -39,10 +39,7 @@ impl NewStreamHandle {
         self.proxy_stream = proxy;
     }
 
-    pub(crate) fn new_stream_with_hello(
-        &mut self,
-        stream_hello: StreamHello,
-    ) -> NewStreamFuture {
+    pub(crate) fn new_stream_with_hello(&mut self, stream_hello: StreamHello) -> NewStreamFuture {
         NewStreamFuture::new(
             self.peer_identifier.clone(),
             self.new_stream_handle.new_stream(),
@@ -206,8 +203,12 @@ impl Stream {
         self.stream.local_addr()
     }
 
-    pub fn new_stream_handle(&self) -> NewStreamHandle {
-        self.new_stream_handle.clone()
+    pub fn new_stream_handle(&self) -> &NewStreamHandle {
+        &self.new_stream_handle
+    }
+
+    pub fn peer_identifier(&self) -> &PubKeyHash {
+        &self.peer_identifier
     }
 }
 

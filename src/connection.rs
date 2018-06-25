@@ -11,7 +11,8 @@ use PubKeyHash;
 use std::{net::SocketAddr, time::Duration};
 
 use futures::{
-    Async::{NotReady, Ready}, Future, Poll, Stream as FStream,
+    Async::{NotReady, Ready},
+    Future, Poll, Stream as FStream,
 };
 
 use tokio_core::reactor::Handle;
@@ -87,7 +88,7 @@ impl NewConnectionFuture {
             handle,
             registry,
             authenticator,
-            local_peer_identifier
+            local_peer_identifier,
         }
     }
 }
