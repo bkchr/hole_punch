@@ -32,7 +32,6 @@ impl StrategyWrapper {
 
         config.enable_keep_alive(Duration::from_secs(15));
         config.enable_client_authentication();
-
         config.set_verify_certificate_handler(authenticator);
 
         let context = picoquic::Context::new(&hconfig.quic_listen_address, &handle, config)?;

@@ -42,15 +42,9 @@ mod strategies;
 mod stream;
 mod timeout;
 
-pub use authenticator::Authenticator;
 pub use config::Config;
-pub use connection::ConnectionId;
 pub use context::Context;
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;
 pub use stream::Stream;
-
-pub mod plain {
-    pub use strategies::Stream;
-}

@@ -17,8 +17,6 @@ use futures::{
 
 use tokio_core::reactor::Handle;
 
-pub type ConnectionId = u64;
-
 #[derive(Clone)]
 pub struct NewConnectionHandle {
     new_con: strategies::NewConnectionHandle,

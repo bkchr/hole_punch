@@ -33,16 +33,14 @@ def run_tests(topologies, extra_client_args):
         client = net.get("client")
         peer = net.get("peer")
 
-        server.cmd("./bin/server --listen_port 22222 2>&1 > server.log &")
-        peer.cmd("./bin/peer --server_address " + server_ip + ":22222 2>&1 > peer.log &")
+        server.cmd("RUST_BACKTRACE=full ./bin/peer --listen_port 22222 --timeout 120 --peer_id 0 > server.log 2>&1 &")
+        peer.cmd("RUST_BACKTRACE=full ./bin/peer --remote_peer " + server_ip + ":22222 --expect_connection --timeout 120 --peer_id 1 > peer.log 2>&1 &")
 
-        # wait until the peer is connected
-        while not os.path.isfile("server.log") or not "New peer: peer" in open("server.log").read():
-            pass
+        time.sleep(10)
 
         client_output = client.cmd(
-            "RUST_BACKTRACE=full ./bin/client --server_address " + server_ip +
-            ":22222 " + extra_client_args)
+            "RUST_BACKTRACE=full ./bin/peer --remote_peer " + server_ip +
+            ":22222 --peer_id 2 --request_peer 1 --timeout 20 " + extra_client_args)
 
         print("Client exited with:\n" + client_output)
         if not "Client finished successfully!" in client_output:

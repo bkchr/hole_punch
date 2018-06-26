@@ -2,5 +2,4 @@
 pub enum Protocol {
     SendMessage(String),
     ReceiveMessage(String),
-    Register(String),
 }

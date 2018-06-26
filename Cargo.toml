@@ -12,7 +12,7 @@ serde = "^1.0.66"
 futures = "0.1"
 tokio-io = "0.1"
 tokio-timer = { "git" = "https://github.com/bkchr/tokio-timer.git", "branch" = "interval_range" }
-tokio-serde-json = { git = "https://github.com/bkchr/tokio-serde-json.git", branch = "do_not_require_io_error" }
+tokio-serde-json = { git = "https://github.com/carllerche/tokio-serde-json.git" }
 itertools = "0.7"
 state_machine_future = "^0.1.6"
 bincode = "0.8"

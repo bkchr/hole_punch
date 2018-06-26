@@ -16,9 +16,8 @@ use pnet_datalink::interfaces;
 use itertools::Itertools;
 
 use futures::{
-    stream::{futures_unordered, FuturesUnordered},
-    Async::{NotReady, Ready},
-    Future, Poll, Sink, Stream as FStream,
+    stream::{futures_unordered, FuturesUnordered}, Async::{NotReady, Ready}, Future, Poll, Sink,
+    Stream as FStream,
 };
 
 use state_machine_future::RentToOwn;
@@ -260,7 +259,11 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
     fn poll_proxy_stream<'a>(
         wait: &'a mut RentToOwn<'a, ProxyStream>,
     ) -> Poll<AfterProxyStream, Error> {
-        let wait = wait.take();
+        let mut wait = wait.take();
+
+        wait.proxy_stream
+            .start_send(BuildConnectionToPeerProtocol::ProxyConnection)?;
+        wait.proxy_stream.poll_complete()?;
 
         transition!(ConnectionBuilt(Stream::new(
             wait.proxy_stream,

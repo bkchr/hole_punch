@@ -1,7 +1,7 @@
 use connect::ConnectWithStrategies;
 use connection::NewConnectionHandle;
 use error::*;
-use protocol::Registry as RegistryProtocol;
+use protocol::{Registry as RegistryProtocol, StreamHello};
 use registry::{Registry, RegistryProvider, RegistryResult};
 use strategies;
 use stream::{NewStreamHandle, ProtocolStream};
@@ -10,17 +10,13 @@ use PubKeyHash;
 
 use futures::{
     sync::{
-        mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
-        oneshot,
+        mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, oneshot,
     },
-    Async::{NotReady, Ready},
-    Future, Poll, Sink, Stream as FStream,
+    Async::{NotReady, Ready}, Future, Poll, Sink, Stream as FStream,
 };
 
 use std::{
-    collections::{hash_map::Entry, HashMap},
-    net::SocketAddr,
-    time::Duration,
+    collections::{hash_map::Entry, HashMap}, net::SocketAddr, time::Duration,
 };
 
 use tokio_core::reactor::Handle;
@@ -128,6 +124,7 @@ impl RemoteRegistryConnectionHandler {
                 .next()
                 .expect("next_remote_peer should always return a `SocketAddr`."),
             local_peer_identifier.clone(),
+            StreamHello::Registry,
         );
 
         RemoteRegistryConnectionHandler {
@@ -170,6 +167,7 @@ impl Future for RemoteRegistryConnectionHandler {
                         .next()
                         .expect("next_remote_peer should always return a `SocketAddr`."),
                     self.local_peer_identifier.clone(),
+                    StreamHello::Registry,
                 );
                 self.wait_for_new_peer = Some((connect, find_peer_request));
             } else {
@@ -187,6 +185,7 @@ impl Future for RemoteRegistryConnectionHandler {
                                 .next()
                                 .expect("next_remote_peer should always return a `SocketAddr`."),
                             self.local_peer_identifier.clone(),
+                            StreamHello::Registry,
                         );
                         self.wait_for_new_peer = Some((connect, find_peer_request));
                     }

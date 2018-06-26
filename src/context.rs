@@ -66,13 +66,15 @@ impl Context {
             })
             .collect::<Vec<_>>();
 
-        let remote_registry = remote_registry::RemoteRegistry::new(
-            config.remote_peers.clone(),
-            new_connection_handles.clone(),
-            local_peer_identifier.clone(),
-            handle.clone(),
-        );
-        registry.add_registry_provider(remote_registry);
+        if !config.remote_peers.is_empty() {
+            let remote_registry = remote_registry::RemoteRegistry::new(
+                config.remote_peers.clone(),
+                new_connection_handles.clone(),
+                local_peer_identifier.clone(),
+                handle.clone(),
+            );
+            registry.add_registry_provider(remote_registry);
+        }
 
         Ok(Context {
             new_stream_recv,

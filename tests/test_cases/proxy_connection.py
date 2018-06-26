@@ -12,6 +12,6 @@ topologies = [
     "internet_multi_level_nat_without_hairpin"
 ]
 
-run_tests(topologies, "--expect_relay_connection")
+run_tests(topologies, "--expect_proxy_connection")
 
 sys.exit(0)

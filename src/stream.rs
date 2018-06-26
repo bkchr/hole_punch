@@ -3,13 +3,15 @@ use protocol::StreamHello;
 use strategies::{self, AddressInformation, NewStream};
 use PubKeyHash;
 
-use std::net::SocketAddr;
+use std::{
+    io::{self, Read, Write}, net::SocketAddr,
+};
 
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_serde_json::{ReadJson, WriteJson};
 
-use tokio_io::codec::length_delimited;
+use tokio_io::{codec::length_delimited, AsyncRead, AsyncWrite};
 
 use serde::{Deserialize, Serialize};
 
@@ -35,8 +37,9 @@ impl NewStreamHandle {
         }
     }
 
-    pub(crate) fn set_proxy_stream(&mut self, proxy: bool) {
+    pub(crate) fn set_proxy_stream(&mut self, proxy: bool, peer_identifier: PubKeyHash) {
         self.proxy_stream = proxy;
+        self.peer_identifier = peer_identifier;
     }
 
     pub(crate) fn new_stream_with_hello(&mut self, stream_hello: StreamHello) -> NewStreamFuture {
@@ -177,7 +180,7 @@ impl Stream {
     where
         T: Into<strategies::Stream>,
     {
-        new_stream_handle.set_proxy_stream(is_proxy_stream);
+        new_stream_handle.set_proxy_stream(is_proxy_stream, peer_identifier.clone());
 
         Stream {
             stream: stream.into(),
@@ -187,16 +190,8 @@ impl Stream {
         }
     }
 
-    pub fn send_and_poll(&mut self, item: <strategies::Stream as Sink>::SinkItem) -> Result<()> {
-        if self.stream.start_send(item.into()).is_err() || self.stream.poll_complete().is_err() {
-            bail!("could not send message.");
-        }
-
-        Ok(())
-    }
-
     pub fn is_p2p(&self) -> bool {
-        self.is_proxy_stream
+        !self.is_proxy_stream
     }
 
     pub fn local_addr(&self) -> SocketAddr {
@@ -231,5 +226,29 @@ impl Sink for Stream {
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
         self.stream.poll_complete().map_err(|e| e.into())
+    }
+}
+
+impl Read for Stream {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.stream.read(buf)
+    }
+}
+
+impl Write for Stream {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Write::flush(&mut self.stream)
+    }
+}
+
+impl AsyncRead for Stream {}
+
+impl AsyncWrite for Stream {
+    fn shutdown(&mut self) -> Poll<(), io::Error> {
+        self.stream.shutdown()
     }
 }

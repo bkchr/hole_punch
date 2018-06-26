@@ -116,24 +116,14 @@ impl VerifyCertificate for Authenticator {
     ) -> result::Result<bool, ErrorStack> {
         let mut inner = self.inner.lock().unwrap();
 
-        match connection_type {
+        let res = match connection_type {
             ConnectionType::Incoming => {
-                let res = if let Some(ref store) = (*inner).incoming_certificates {
+                if let Some(ref store) = (*inner).incoming_certificates {
                     default_verify_certificate(cert, chain, store)
                 } else {
                     // We trust all incoming connections
                     Ok(true)
-                };
-
-                if res.is_ok() {
-                    let store_orig = (*inner).store_orig_pub_key;
-                    inner.add_incoming_con_pub_key(
-                        connection_id,
-                        PubKeyHash::from_pkey(cert.public_key()?, store_orig)?,
-                    );
                 }
-
-                res
             }
             ConnectionType::Outgoing => {
                 if let Some(ref store) = (*inner).outgoing_certificates {
@@ -143,6 +133,16 @@ impl VerifyCertificate for Authenticator {
                     Ok(true)
                 }
             }
+        };
+
+        if res.is_ok() {
+            let store_orig = (*inner).store_orig_pub_key;
+            inner.add_incoming_con_pub_key(
+                connection_id,
+                PubKeyHash::from_pkey(cert.public_key()?, store_orig)?,
+            );
         }
+
+        res
     }
 }

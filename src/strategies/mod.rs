@@ -2,12 +2,13 @@ use authenticator::Authenticator;
 use config::Config;
 use error::*;
 
-use std::cmp::min;
-use std::io::{self, Read, Write};
-use std::net::SocketAddr;
+use std::{
+    cmp::min, io::{self, Read, Write}, net::SocketAddr,
+};
 
-use futures::Async::{NotReady, Ready};
-use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
+use futures::{
+    Async::{NotReady, Ready}, Future, Poll, Sink, StartSend, Stream as FStream,
+};
 
 use tokio_core::reactor::Handle;
 
@@ -62,7 +63,8 @@ trait ConnectionTrait:
 impl<
         T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId,
     > ConnectionTrait for T
-{}
+{
+}
 
 pub type ConnectionId = u64;
 
@@ -131,7 +133,8 @@ impl<
             + Send
             + GetConnectionId,
     > StreamTrait for T
-{}
+{
+}
 
 pub struct Stream {
     inner: Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>>,

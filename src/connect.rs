@@ -10,8 +10,7 @@ use std::{net::SocketAddr, time::Duration};
 use tokio_core::reactor::Handle;
 
 use futures::{
-    Async::{NotReady, Ready},
-    Future, Poll,
+    Async::{NotReady, Ready}, Future, Poll,
 };
 
 use state_machine_future::RentToOwn;
@@ -24,6 +23,7 @@ enum ConnectStateMachine {
         addr: SocketAddr,
         handle: Handle,
         local_peer_identifier: PubKeyHash,
+        hello_msg: StreamHello,
     },
     #[state_machine_future(transitions(WaitForConnectStream))]
     WaitForConnection {
@@ -31,6 +31,7 @@ enum ConnectStateMachine {
         timeout: Timeout,
         handle: Handle,
         local_peer_identifier: PubKeyHash,
+        hello_msg: StreamHello,
     },
     #[state_machine_future(transitions(ConnectionCreated))]
     WaitForConnectStream {
@@ -58,6 +59,7 @@ impl PollConnectStateMachine for ConnectStateMachine {
             timeout,
             handle,
             local_peer_identifier: init.local_peer_identifier,
+            hello_msg: init.hello_msg
         })
     }
 
@@ -71,7 +73,7 @@ impl PollConnectStateMachine for ConnectStateMachine {
         let wait_old = wait.take();
         let timeout = wait_old.timeout.new_reset();
 
-        let wait = con.new_stream_with_hello(StreamHello::User(wait_old.local_peer_identifier));
+        let wait = con.new_stream_with_hello(wait_old.hello_msg);
 
         wait_old.handle.spawn(con);
 
@@ -95,6 +97,7 @@ pub struct ConnectWithStrategies {
     addr: SocketAddr,
     handle: Handle,
     local_peer_identifier: PubKeyHash,
+    hello_msg: StreamHello,
 }
 
 impl ConnectWithStrategies {
@@ -103,6 +106,7 @@ impl ConnectWithStrategies {
         handle: Handle,
         addr: SocketAddr,
         local_peer_identifier: PubKeyHash,
+        hello_msg: StreamHello,
     ) -> ConnectWithStrategies {
         let strategy = strategies
             .pop()
@@ -116,9 +120,11 @@ impl ConnectWithStrategies {
                 addr,
                 handle.clone(),
                 local_peer_identifier.clone(),
+                hello_msg.clone(),
             ),
             handle,
             local_peer_identifier,
+            hello_msg,
         }
     }
 }
@@ -141,6 +147,7 @@ impl Future for ConnectWithStrategies {
                             self.addr,
                             self.handle.clone(),
                             self.local_peer_identifier.clone(),
+                            self.hello_msg.clone(),
                         );
                         let _ = self.connect.poll()?;
                         Ok(NotReady)
