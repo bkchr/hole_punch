@@ -42,7 +42,7 @@ mod strategies;
 mod stream;
 mod timeout;
 
-pub use config::Config;
+pub use config::{Config, ConfigBuilder};
 pub use context::Context;
 pub use error::Error;
 pub use picoquic::FileFormat;
