@@ -92,35 +92,22 @@ impl Context {
         &self,
         peer: PubKeyHash,
     ) -> impl Future<Item = Stream, Error = Error> {
-        let handle = self.handle.clone();
-        // TODO: Don't do that.
-        let new_connection_handle = self.new_connection_handles.get(0).unwrap().clone();
-        let local_peer_identifier = self.local_peer_identifier.clone();
+        create_connection_to_peer(
+            peer,
+            self.handle.clone(),
+            &self.new_connection_handles,
+            &self.registry,
+            self.local_peer_identifier.clone(),
+        )
+    }
 
-        self.registry
-            .find_peer(&peer)
-            .map_err(|_| Error::from("Unknown error while finding a peer"))
-            .and_then(
-                move |find| -> Result<Box<Future<Item = Stream, Error = Error>>> {
-                    match find {
-                        RegistryResult::Found(mut new_stream_handle) => {
-                            return Ok(Box::new(new_stream_handle.new_stream()))
-                        }
-                        RegistryResult::FoundRemote(new_stream_handle) => {
-                            return Ok(Box::new(BuildConnectionToPeer::new(
-                                local_peer_identifier,
-                                peer,
-                                new_connection_handle,
-                                new_stream_handle,
-                                Duration::from_secs(20),
-                                handle,
-                            )))
-                        }
-                        RegistryResult::NotFound => bail!("Could not find peer: {:?}", peer),
-                    }
-                },
-            )
-            .flatten()
+    pub fn create_connection_to_peer_handle(&self) -> CreateConnectionToPeerHandle {
+        CreateConnectionToPeerHandle::new(
+            self.registry.clone(),
+            self.new_connection_handles.clone(),
+            self.handle.clone(),
+            self.local_peer_identifier.clone(),
+        )
     }
 
     fn poll_strategies(&mut self) -> Result<()> {
@@ -157,6 +144,43 @@ impl Context {
             }
         }
     }
+}
+
+fn create_connection_to_peer(
+    peer: PubKeyHash,
+    handle: Handle,
+    new_con_handles: &Vec<NewConnectionHandle>,
+    registry: &Registry,
+    local_peer_identifier: PubKeyHash,
+) -> impl Future<Item = Stream, Error = Error> {
+    let handle = handle.clone();
+    // TODO: Don't do that.
+    let new_connection_handle = new_con_handles.get(0).unwrap().clone();
+
+    registry
+        .find_peer(&peer)
+        .map_err(|_| Error::from("Unknown error while finding a peer"))
+        .and_then(
+            move |find| -> Result<Box<Future<Item = Stream, Error = Error>>> {
+                match find {
+                    RegistryResult::Found(mut new_stream_handle) => {
+                        return Ok(Box::new(new_stream_handle.new_stream()))
+                    }
+                    RegistryResult::FoundRemote(new_stream_handle) => {
+                        return Ok(Box::new(BuildConnectionToPeer::new(
+                            local_peer_identifier,
+                            peer,
+                            new_connection_handle,
+                            new_stream_handle,
+                            Duration::from_secs(20),
+                            handle,
+                        )))
+                    }
+                    RegistryResult::NotFound => bail!("Could not find peer: {:?}", peer),
+                }
+            },
+        )
+        .flatten()
 }
 
 impl FStream for Context {
@@ -200,5 +224,42 @@ impl PassStreamToContext {
         let _ =
             self.send
                 .unbounded_send((stream, peer_identifier, new_stream_handle, is_proxy_stream));
+    }
+}
+
+#[derive(Clone)]
+pub struct CreateConnectionToPeerHandle {
+    handle: Handle,
+    registry: Registry,
+    new_con_handles: Vec<NewConnectionHandle>,
+    local_peer_identifier: PubKeyHash,
+}
+
+impl CreateConnectionToPeerHandle {
+    fn new(
+        registry: Registry,
+        new_con_handles: Vec<NewConnectionHandle>,
+        handle: Handle,
+        local_peer_identifier: PubKeyHash,
+    ) -> CreateConnectionToPeerHandle {
+        CreateConnectionToPeerHandle {
+            registry,
+            new_con_handles,
+            handle,
+            local_peer_identifier,
+        }
+    }
+
+    pub fn create_connection_to_peer(
+        &self,
+        peer: PubKeyHash,
+    ) -> impl Future<Item = Stream, Error = Error> {
+        create_connection_to_peer(
+            peer,
+            self.handle.clone(),
+            &self.new_con_handles,
+            &self.registry,
+            self.local_peer_identifier.clone(),
+        )
     }
 }

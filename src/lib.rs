@@ -43,7 +43,7 @@ mod stream;
 mod timeout;
 
 pub use config::{Config, ConfigBuilder};
-pub use context::Context;
+pub use context::{Context, CreateConnectionToPeerHandle};
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;
