@@ -139,7 +139,7 @@ impl VerifyCertificate for Authenticator {
             let store_orig = (*inner).store_orig_pub_key;
             inner.add_incoming_con_pub_key(
                 connection_id,
-                PubKeyHash::from_pkey(cert.public_key()?, store_orig)?,
+                PubKeyHash::from_public_key(cert.public_key()?, store_orig)?,
             );
         }
 

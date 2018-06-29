@@ -1,16 +1,12 @@
 use error::*;
 
 use std::{
-    fmt,
-    hash::{Hash, Hasher as StdHasher},
-    ops::Deref,
-    result,
+    fmt, hash::{Hash, Hasher as StdHasher}, ops::Deref, result,
 };
 
-use openssl::error::ErrorStack;
-use openssl::hash::{Hasher, MessageDigest};
-use openssl::pkey::{PKey, Public};
-use openssl::x509::X509;
+use openssl::{
+    error::ErrorStack, hash::{Hasher, MessageDigest}, pkey::{PKey, Private, Public}, x509::X509,
+};
 
 use openssl_sys;
 
@@ -108,23 +104,41 @@ impl fmt::Debug for PubKeyHash {
 }
 
 impl PubKeyHash {
-    /// Create the public key hash from a openssl `PKey<Public>`.
+    /// Create the public key hash from a Openssl `PKey<Public>`.
     /// If `store_orig` is set, the public key will be stored internally.
-    pub fn from_pkey(
+    pub fn from_public_key(
         orig_key: PKey<Public>,
         store_orig: bool,
     ) -> result::Result<PubKeyHash, ErrorStack> {
+        Self::from_public_key_der(orig_key.public_key_to_der()?, store_orig)
+    }
+
+    /// Create the public key hash from a public key in DER format.
+    /// If `store_orig` is set, the public key will be stored internally.
+    pub fn from_public_key_der(
+        pub_der: Vec<u8>,
+        store_orig: bool,
+    ) -> result::Result<PubKeyHash, ErrorStack> {
         let mut hasher = Hasher::new(MessageDigest::sha256())?;
-        hasher.update(&orig_key.public_key_to_der()?)?;
+        hasher.update(&pub_der)?;
         let bytes = hasher.finish()?;
 
         let mut key = Self::from_hashed_checked(&bytes);
 
         if store_orig {
-            key.pub_key = Some(Bytes::from(orig_key.public_key_to_der()?));
+            key.pub_key = Some(Bytes::from(pub_der));
         }
 
         Ok(key)
+    }
+
+    /// Create the public key hash from a Openssl `PKey<Private>`.
+    /// If `store_orig` is set, the public key will be stored internally.
+    pub fn from_private_key(
+        orig_key: PKey<Private>,
+        store_orig: bool,
+    ) -> result::Result<PubKeyHash, ErrorStack> {
+        Self::from_public_key_der(orig_key.public_key_to_der()?, store_orig)
     }
 
     /// Construct the public key hash from a public key hash.
@@ -150,7 +164,7 @@ impl PubKeyHash {
     pub fn from_x509_pem(cert: &[u8], store_orig: bool) -> Result<PubKeyHash> {
         let cert = X509::from_pem(cert)?;
 
-        Ok(Self::from_pkey(cert.public_key()?, store_orig)?)
+        Ok(Self::from_public_key(cert.public_key()?, store_orig)?)
     }
 
     /// The hash length is checked and we can safely construct the public key hash.
