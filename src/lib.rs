@@ -47,4 +47,4 @@ pub use context::{Context, CreateConnectionToPeerHandle};
 pub use error::Error;
 pub use picoquic::FileFormat;
 pub use pubkey::PubKeyHash;
-pub use stream::Stream;
+pub use stream::{NewStreamFuture, NewStreamHandle, Stream};
