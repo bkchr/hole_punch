@@ -2,9 +2,9 @@ use authenticator::Authenticator;
 use config::Config;
 use error::*;
 use strategies::{
-    AddressInformation, Connection, ConnectionId, GetConnectionId, NewConnection,
+    Connection, ConnectionId, GetConnectionId, LocalAddressInformation, NewConnection,
     NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture, NewStreamHandle,
-    Strategy, Stream,
+    PeerAddressInformation, Strategy, Stream,
 };
 
 use std::net::SocketAddr;
@@ -69,6 +69,12 @@ impl NewConnection for StrategyWrapper {
     }
 }
 
+impl LocalAddressInformation for StrategyWrapper {
+    fn local_addr(&self) -> SocketAddr {
+        self.context.local_addr()
+    }
+}
+
 struct ConnectionWrapper {
     con: picoquic::Connection,
 }
@@ -122,11 +128,13 @@ impl NewStream for ConnectionWrapper {
     }
 }
 
-impl AddressInformation for ConnectionWrapper {
+impl LocalAddressInformation for ConnectionWrapper {
     fn local_addr(&self) -> SocketAddr {
         self.con.local_addr()
     }
+}
 
+impl PeerAddressInformation for ConnectionWrapper {
     fn peer_addr(&self) -> SocketAddr {
         self.con.peer_addr()
     }
@@ -180,11 +188,13 @@ impl Sink for StreamWrapper {
     }
 }
 
-impl AddressInformation for StreamWrapper {
+impl LocalAddressInformation for StreamWrapper {
     fn local_addr(&self) -> SocketAddr {
         self.stream.local_addr()
     }
+}
 
+impl PeerAddressInformation for StreamWrapper {
     fn peer_addr(&self) -> SocketAddr {
         self.stream.peer_addr()
     }

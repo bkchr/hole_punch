@@ -20,8 +20,8 @@ use objekt;
 
 mod udp;
 
-trait StrategyTrait: FStream<Item = Connection, Error = Error> + NewConnection {}
-impl<T: NewConnection + FStream<Item = Connection, Error = Error>> StrategyTrait for T {}
+trait StrategyTrait: FStream + LocalAddressInformation + NewConnection {}
+impl<T: NewConnection + FStream + LocalAddressInformation> StrategyTrait for T {}
 
 pub struct Strategy {
     inner: Box<StrategyTrait<Item = Connection, Error = Error>>,
@@ -53,15 +53,21 @@ impl NewConnection for Strategy {
     }
 }
 
+impl LocalAddressInformation for Strategy {
+    fn local_addr(&self) -> SocketAddr {
+        self.inner.local_addr()
+    }
+}
+
 /// The super `Connection` trait. We need this hack, to store the `inner` of the connection
 /// in a `Box`.
 trait ConnectionTrait:
-    FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId
+    FStream + LocalAddressInformation + PeerAddressInformation + NewStream + GetConnectionId
 {
 }
 
 impl<
-        T: FStream<Item = Stream, Error = Error> + AddressInformation + NewStream + GetConnectionId,
+        T: FStream + LocalAddressInformation + PeerAddressInformation + NewStream + GetConnectionId,
     > ConnectionTrait for T
 {
 }
@@ -79,13 +85,15 @@ impl Connection {
     }
 }
 
-impl AddressInformation for Connection {
-    fn peer_addr(&self) -> SocketAddr {
-        self.inner.peer_addr()
-    }
-
+impl LocalAddressInformation for Connection {
     fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr()
+    }
+}
+
+impl PeerAddressInformation for Connection {
+    fn peer_addr(&self) -> SocketAddr {
+        self.inner.peer_addr()
     }
 }
 
@@ -116,9 +124,10 @@ impl GetConnectionId for Connection {
 
 /// The super `Stream` trait. We need this hack, to store the `inner` of the stream in a `Box`.
 trait StreamTrait:
-    FStream<Item = BytesMut, Error = Error>
-    + AddressInformation
-    + Sink<SinkItem = BytesMut, SinkError = Error>
+    FStream
+    + LocalAddressInformation
+    + PeerAddressInformation
+    + Sink
     + NewStream
     + Send
     + GetConnectionId
@@ -126,9 +135,10 @@ trait StreamTrait:
 }
 
 impl<
-        T: FStream<Item = BytesMut, Error = Error>
-            + AddressInformation
-            + Sink<SinkItem = BytesMut, SinkError = Error>
+        T: FStream
+            + LocalAddressInformation
+            + PeerAddressInformation
+            + Sink
             + NewStream
             + Send
             + GetConnectionId,
@@ -156,16 +166,21 @@ impl Stream {
     }
 }
 
-pub trait AddressInformation {
+pub trait LocalAddressInformation {
     fn local_addr(&self) -> SocketAddr;
+}
+
+pub trait PeerAddressInformation {
     fn peer_addr(&self) -> SocketAddr;
 }
 
-impl AddressInformation for Stream {
+impl LocalAddressInformation for Stream {
     fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr()
     }
+}
 
+impl PeerAddressInformation for Stream {
     fn peer_addr(&self) -> SocketAddr {
         self.inner.peer_addr()
     }

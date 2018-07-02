@@ -5,7 +5,7 @@ use connection::{Connection, NewConnectionHandle};
 use error::*;
 use registry::{Registry, RegistryProvider, RegistryResult};
 use remote_registry;
-use strategies::{self, NewConnection};
+use strategies::{self, LocalAddressInformation, NewConnection};
 use stream::{NewStreamHandle, Stream};
 use PubKeyHash;
 
@@ -17,7 +17,7 @@ use futures::{
     Stream as FStream,
 };
 
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 
 use tokio_core::reactor::Handle;
 
@@ -32,6 +32,7 @@ pub struct Context {
     authenticator: Authenticator,
     registry: Registry,
     local_peer_identifier: PubKeyHash,
+    quic_local_addr: SocketAddr,
 }
 
 impl Context {
@@ -51,6 +52,9 @@ impl Context {
         )?;
 
         let strats = strategies::init(handle.clone(), &config, authenticator.clone())?;
+
+        // TODO!!!
+        let quic_local_addr = strats.get(0).unwrap().local_addr();
 
         let new_connection_handles = strats
             .iter()
@@ -85,6 +89,7 @@ impl Context {
             authenticator,
             registry,
             local_peer_identifier,
+            quic_local_addr,
         })
     }
 
@@ -108,6 +113,10 @@ impl Context {
             self.handle.clone(),
             self.local_peer_identifier.clone(),
         )
+    }
+
+    pub fn quic_local_addr(&self) -> SocketAddr {
+        self.quic_local_addr
     }
 
     fn poll_strategies(&mut self) -> Result<()> {

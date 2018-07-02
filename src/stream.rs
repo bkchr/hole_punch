@@ -1,6 +1,6 @@
 use error::*;
 use protocol::StreamHello;
-use strategies::{self, AddressInformation, NewStream};
+use strategies::{self, LocalAddressInformation, NewStream};
 use PubKeyHash;
 
 use std::{

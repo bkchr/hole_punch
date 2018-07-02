@@ -2,7 +2,7 @@ use connection::{NewConnectionFuture, NewConnectionHandle};
 use context::PassStreamToContext;
 use error::*;
 use protocol::{BuildConnectionToPeer as BuildConnectionToPeerProtocol, StreamHello};
-use strategies::{self, AddressInformation};
+use strategies::{self, LocalAddressInformation, PeerAddressInformation};
 use stream::{NewStreamFuture, NewStreamHandle, ProtocolStream, Stream};
 use timeout::Timeout;
 use PubKeyHash;
