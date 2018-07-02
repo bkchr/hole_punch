@@ -18,7 +18,7 @@ use bytes::BytesMut;
 
 use objekt;
 
-mod udp;
+mod quic;
 
 trait StrategyTrait: FStream + LocalAddressInformation + NewConnection {}
 impl<T: NewConnection + FStream + LocalAddressInformation> StrategyTrait for T {}
@@ -389,7 +389,7 @@ pub fn init(
     config: &Config,
     authenticator: Authenticator,
 ) -> Result<Vec<Strategy>> {
-    Ok(vec![udp::init(handle, config, authenticator)?])
+    Ok(vec![quic::init(handle, config, authenticator)?])
 }
 
 pub trait GetConnectionId {
