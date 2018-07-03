@@ -236,8 +236,11 @@ fn main() {
                         println!("New Stream from Context");
 
                         if options.expect_connection {
+                            let stream = into_stream(s);
+                            check_stream(&stream, &options);
+
                             handle.spawn(
-                                RecvAndSendMessage::new(into_stream(s))
+                                RecvAndSendMessage::new(stream)
                                     .map_err(|e| panic!("RecvAndSendMessage error: {:?}", e)),
                             );
                         } else {

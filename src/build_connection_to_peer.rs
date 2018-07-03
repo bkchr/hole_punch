@@ -224,7 +224,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
 
         let wait = wait.take();
         let new_stream =
-            new_con.new_stream_with_hello(StreamHello::User(wait.peer_identifier.clone()));
+            new_con.new_stream_with_hello(StreamHello::User(wait.local_peer_identifier.clone()));
 
         wait.handle.spawn(new_con);
 
