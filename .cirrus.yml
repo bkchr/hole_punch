@@ -1,0 +1,7 @@
+container:
+  image: bkchr/hole_punch_tester:latest
+  cpu: 4
+  memory: 10G
+
+test_task:
+  test_script: cd tests && ./run_in_docker.sh
