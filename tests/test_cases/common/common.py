@@ -38,8 +38,6 @@ def run_tests(topologies, extra_client_args):
                  + ":22222 --expect_connection --timeout 120 --peer_id 1 "
                  + extra_client_args + " > peer.log 2>&1 &")
 
-        time.sleep(10)
-
         client_output = client.cmd(
             "RUST_BACKTRACE=full ./bin/peer --remote_peer " + server_ip +
             ":22222 --peer_id 2 --request_peer 1 --timeout 20 " + extra_client_args)

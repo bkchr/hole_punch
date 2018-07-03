@@ -15,7 +15,7 @@ use hole_punch::{Config, Context, Error, FileFormat, PubKeyHash};
 
 use tokio_core::reactor::Core;
 
-use std::net::ToSocketAddrs;
+use std::{net::ToSocketAddrs, thread, time::Duration};
 
 use futures::Async::Ready;
 use futures::{Future, Poll, Sink, Stream as FStream};
@@ -28,7 +28,7 @@ use tokio_io::codec::length_delimited;
 
 type Stream = WriteJson<ReadJson<length_delimited::Framed<hole_punch::Stream>, Protocol>, Protocol>;
 
-fn into_stream(stream: hole_punch::Stream)->Stream {
+fn into_stream(stream: hole_punch::Stream) -> Stream {
     WriteJson::new(ReadJson::new(length_delimited::Framed::new(stream)))
 }
 
@@ -174,8 +174,8 @@ fn main() {
             let key = &keys[peer_id];
 
             let mut config_builder = Config::builder()
-            .set_cert_chain(vec![cert.to_vec()], FileFormat::PEM)
-            .set_key(key.to_vec(), FileFormat::PEM);
+                .set_cert_chain(vec![cert.to_vec()], FileFormat::PEM)
+                .set_key(key.to_vec(), FileFormat::PEM);
 
             if let Some(remote_peer) = remote_peer {
                 config_builder = config_builder.add_remote_peer(remote_peer).unwrap();
@@ -197,36 +197,52 @@ fn main() {
             if let Some(request_peer) = options.request_peer {
                 let peer_key = PubKeyHash::from_x509_pem(&certs[request_peer], true)
                     .expect("Create peer identifier");
-                let peer_con = evt_loop
-                    .run(context.create_connection_to_peer(peer_key.clone()))
-                    .expect("Creates connection to peer");
 
-                println!("Created connection to peer{}", request_peer);
+                for _ in 0..3 {
+                    let res = evt_loop.run(context.create_connection_to_peer(peer_key.clone()));
 
-                let mut peer_handle = peer_con.new_stream_handle().clone();
-                let peer_con: Stream = into_stream(peer_con);
+                    let peer_con = match res {
+                        Ok(p) => p,
+                        Err(e) => match e {
+                            Error::PeerNotFound(_) => {
+                                // Sleep and give the Peer some time to connect.
+                                thread::sleep(Duration::from_secs(5));
+                                continue;
+                            }
+                            e @ _ => panic!(e),
+                        },
+                    };
 
-                check_stream(&peer_con, &options);
+                    println!("Created connection to peer{}", request_peer);
 
-                // Check that we actually can send messages
-                evt_loop
-                    .run(SendAndRecvMessage::new(peer_con, "herp and derp".into()))
-                    .expect("Send and receives message");
+                    let mut peer_handle = peer_con.new_stream_handle().clone();
+                    let peer_con: Stream = into_stream(peer_con);
 
-                println!("Creates new Stream");
+                    check_stream(&peer_con, &options);
 
-                // Check that we can create a new Stream
-                let stream = evt_loop
-                    .run(peer_handle.new_stream())
-                    .expect("Creates new Stream");
-                let stream: Stream = into_stream(stream);
+                    // Check that we actually can send messages
+                    evt_loop
+                        .run(SendAndRecvMessage::new(peer_con, "herp and derp".into()))
+                        .expect("Send and receives message");
 
-                check_stream(&stream, &options);
+                    println!("Creates new Stream");
 
-                // Check that we actually can send messages
-                evt_loop
-                    .run(SendAndRecvMessage::new(stream, "herp and derp2".into()))
-                    .expect("Send and receives message 2");
+                    // Check that we can create a new Stream
+                    let stream = evt_loop
+                        .run(peer_handle.new_stream())
+                        .expect("Creates new Stream");
+                    let stream: Stream = into_stream(stream);
+
+                    check_stream(&stream, &options);
+
+                    // Check that we actually can send messages
+                    evt_loop
+                        .run(SendAndRecvMessage::new(stream, "herp and derp2".into()))
+                        .expect("Send and receives message 2");
+                    return;
+                }
+
+                panic!("Could not connect to requested peer!");
             } else {
                 let handle = evt_loop.handle();
                 println!("Running the Context");
