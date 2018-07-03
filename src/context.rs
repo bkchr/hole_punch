@@ -181,7 +181,7 @@ fn create_connection_to_peer(
                             peer,
                             new_connection_handle,
                             new_stream_handle,
-                            Duration::from_secs(20),
+                            Duration::from_secs(4),
                             handle,
                         )))
                     }

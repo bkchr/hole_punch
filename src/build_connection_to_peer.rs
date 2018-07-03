@@ -208,6 +208,16 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
     fn poll_waiting_for_connection<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForConnection>,
     ) -> Poll<AfterWaitingForConnection, Error> {
+        if let Err(_) = wait.timeout.poll() {
+            let wait = wait.take();
+
+            transition!(ProxyStream {
+                proxy_stream: wait.proxy_stream,
+                peer_identifier: wait.peer_identifier,
+                new_stream_handle: wait.new_stream_handle,
+            });
+        }
+
         let mut new_con = match wait.new_cons.poll() {
             Ok(Ready(Some(con))) => con,
             Err(_) | Ok(Ready(None)) => {
@@ -217,7 +227,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
                     proxy_stream: wait.proxy_stream,
                     peer_identifier: wait.peer_identifier,
                     new_stream_handle: wait.new_stream_handle,
-                })
+                });
             }
             Ok(NotReady) => return Ok(NotReady),
         };
