@@ -199,7 +199,10 @@ fn main() {
                     .expect("Create peer identifier");
 
                 for _ in 0..3 {
-                    let res = evt_loop.run(context.create_connection_to_peer(peer_key.clone()));
+                    let res = evt_loop.run(context.create_connection_to_peer_with_custom_timeout(
+                        peer_key.clone(),
+                        Duration::from_secs(15),
+                    ));
 
                     let peer_con = match res {
                         Ok(p) => p,

@@ -40,7 +40,7 @@ def run_tests(topologies, extra_client_args):
 
         client_output = client.cmd(
             "RUST_BACKTRACE=full ./bin/peer --remote_peer " + server_ip +
-            ":22222 --peer_id 2 --request_peer 1 --timeout 20 " + extra_client_args)
+            ":22222 --peer_id 2 --request_peer 1 --timeout 90 " + extra_client_args)
 
         print("Client exited with:\n" + client_output)
         if not "Client finished successfully!" in client_output:

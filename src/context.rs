@@ -97,12 +97,21 @@ impl Context {
         &self,
         peer: PubKeyHash,
     ) -> impl Future<Item = Stream, Error = Error> {
+        self.create_connection_to_peer_with_custom_timeout(peer, Duration::from_secs(4))
+    }
+
+    pub fn create_connection_to_peer_with_custom_timeout(
+        &self,
+        peer: PubKeyHash,
+        switch_to_proxy_timeout: Duration,
+    ) -> impl Future<Item = Stream, Error = Error> {
         create_connection_to_peer(
             peer,
             self.handle.clone(),
             &self.new_connection_handles,
             &self.registry,
             self.local_peer_identifier.clone(),
+            switch_to_proxy_timeout,
         )
     }
 
@@ -161,6 +170,7 @@ fn create_connection_to_peer(
     new_con_handles: &Vec<NewConnectionHandle>,
     registry: &Registry,
     local_peer_identifier: PubKeyHash,
+    switch_to_proxy_timeout: Duration,
 ) -> impl Future<Item = Stream, Error = Error> {
     let handle = handle.clone();
     // TODO: Don't do that.
@@ -181,7 +191,7 @@ fn create_connection_to_peer(
                             peer,
                             new_connection_handle,
                             new_stream_handle,
-                            Duration::from_secs(4),
+                            switch_to_proxy_timeout,
                             handle,
                         )))
                     }
@@ -263,12 +273,21 @@ impl CreateConnectionToPeerHandle {
         &self,
         peer: PubKeyHash,
     ) -> impl Future<Item = Stream, Error = Error> {
+        self.create_connection_to_peer_with_custom_timeout(peer, Duration::from_secs(4))
+    }
+
+    pub fn create_connection_to_peer_with_custom_timeout(
+        &self,
+        peer: PubKeyHash,
+        switch_to_proxy_timeout: Duration,
+    ) -> impl Future<Item = Stream, Error = Error> {
         create_connection_to_peer(
             peer,
             self.handle.clone(),
             &self.new_con_handles,
             &self.registry,
             self.local_peer_identifier.clone(),
+            switch_to_proxy_timeout,
         )
     }
 }
