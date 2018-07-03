@@ -173,10 +173,10 @@ fn create_connection_to_peer(
             move |find| -> Result<Box<Future<Item = Stream, Error = Error>>> {
                 match find {
                     RegistryResult::Found(mut new_stream_handle) => {
-                        return Ok(Box::new(new_stream_handle.new_stream()))
+                        Ok(Box::new(new_stream_handle.new_stream()))
                     }
                     RegistryResult::FoundRemote(new_stream_handle) => {
-                        return Ok(Box::new(BuildConnectionToPeer::new(
+                        Ok(Box::new(BuildConnectionToPeer::new(
                             local_peer_identifier,
                             peer,
                             new_connection_handle,
@@ -185,7 +185,7 @@ fn create_connection_to_peer(
                             handle,
                         )))
                     }
-                    RegistryResult::NotFound => bail!("Could not find peer: {:?}", peer),
+                    RegistryResult::NotFound => Err(Error::PeerNotFound(peer)),
                 }
             },
         )

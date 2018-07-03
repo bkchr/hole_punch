@@ -1,8 +1,9 @@
+use PubKeyHash;
+
 use failure;
 pub use failure::ResultExt;
 
-use std::io;
-use std::result;
+use std::{io, result};
 
 use picoquic;
 
@@ -34,6 +35,8 @@ pub enum Error {
     Openssl(#[cause] openssl::error::ErrorStack),
     #[fail(display = "Hex error {}", _0)]
     Hex(#[cause] hex::FromHexError),
+    #[fail(display = "Peer {} not found.", _0)]
+    PeerNotFound(PubKeyHash),
 }
 
 impl From<Error> for io::Error {
