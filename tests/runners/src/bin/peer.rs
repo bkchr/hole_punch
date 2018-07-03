@@ -173,16 +173,16 @@ fn main() {
             let cert = certs.get(peer_id).unwrap();
             let key = &keys[peer_id];
 
-            let mut config_builder = Config::builder();
-            config_builder.set_cert_chain(vec![cert.to_vec()], FileFormat::PEM);
-            config_builder.set_key(key.to_vec(), FileFormat::PEM);
+            let mut config_builder = Config::builder()
+            .set_cert_chain(vec![cert.to_vec()], FileFormat::PEM)
+            .set_key(key.to_vec(), FileFormat::PEM);
 
             if let Some(remote_peer) = remote_peer {
-                config_builder.add_remote_peer(remote_peer).unwrap();
+                config_builder = config_builder.add_remote_peer(remote_peer).unwrap();
             }
 
             if let Some(listen_port) = options.listen_port {
-                config_builder.set_quic_listen_port(listen_port);
+                config_builder = config_builder.set_quic_listen_port(listen_port);
             }
 
             let config = config_builder.build().unwrap();

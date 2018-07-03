@@ -34,59 +34,67 @@ impl ConfigBuilder {
     }
 
     /// Sets the listen port for picoquic.
-    pub fn set_quic_listen_port(&mut self, port: u16) {
+    pub fn set_quic_listen_port(mut self, port: u16) -> Self {
         self.quic_listen_address.set_port(port);
+        self
     }
 
     /// Sets the listen address for picoquic (overwrites `set_quic_listen_port`).
-    pub fn set_quic_listen_address(&mut self, addr: SocketAddr) {
+    pub fn set_quic_listen_address(mut self, addr: SocketAddr) -> Self {
         self.quic_listen_address = addr;
+        self
     }
 
     /// Sets the certificate (in PEM format) filename for TLS.
-    pub fn set_cert_chain_filename<C: Into<PathBuf>>(&mut self, cert: C) {
+    pub fn set_cert_chain_filename<C: Into<PathBuf>>(mut self, cert: C) -> Self {
         self.quic_config.set_cert_chain_filename(cert);
+        self
     }
 
     /// Sets the key (in PEM format) filename for TLS.
-    pub fn set_key_filename<P: Into<PathBuf>>(&mut self, path: P) {
+    pub fn set_key_filename<P: Into<PathBuf>>(mut self, path: P) -> Self {
         self.quic_config.set_key_filename(path);
+        self
     }
 
     /// Sets the certificate chain.
     /// This option will overwrite `set_cert_chain_filename`.
-    pub fn set_cert_chain(&mut self, certs: Vec<Vec<u8>>, format: FileFormat) {
+    pub fn set_cert_chain(mut self, certs: Vec<Vec<u8>>, format: FileFormat) -> Self {
         self.quic_config.set_cert_chain(certs, format);
+        self
     }
 
     /// Sets the private key.
     /// This option will overwrite `set_key_filename`.
-    pub fn set_key(&mut self, key: Vec<u8>, format: FileFormat) {
+    pub fn set_key(mut self, key: Vec<u8>, format: FileFormat) -> Self {
         self.quic_config.set_key(key, format);
+        self
     }
 
     /// Sets a list of certificate authorities certificates (in PEM format). These
     /// certificates are used to authenticate incoming connections. If no certificates are given,
     /// all incoming connections are successfully authenticated.
-    pub fn set_incoming_ca_certificates(&mut self, certs: Vec<PathBuf>) {
+    pub fn set_incoming_ca_certificates(mut self, certs: Vec<PathBuf>) -> Self {
         self.incoming_ca_certificates = Some(certs);
+        self
     }
 
     /// Sets a list of certificate authorities certificates (in PEM format). These
     /// certificates are used to authenticate outgoing connections. If no certificates are given,
     /// all outgoing connections are successfully authenticated.
-    pub fn set_outgoing_ca_certificates(&mut self, certs: Vec<PathBuf>) {
+    pub fn set_outgoing_ca_certificates(mut self, certs: Vec<PathBuf>) -> Self {
         self.outgoing_ca_certificates = Some(certs);
+        self
     }
 
     /// Adds a remote peer. The `Context` will always hold a connection to one of the known remote
     /// peers.
-    pub fn add_remote_peer(&mut self, remote_peer: impl ToSocketAddrs) -> Result<()> {
+    pub fn add_remote_peer(mut self, remote_peer: impl ToSocketAddrs) -> Result<Self> {
         // TODO: For urls we need some kind of update. E.g. the dns record changes.
         remote_peer
             .to_socket_addrs()?
             .for_each(|a| self.remote_peers.push(a));
-        Ok(())
+        Ok(self)
     }
 
     /// Build the `Config`.
