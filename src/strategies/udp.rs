@@ -29,6 +29,8 @@ use tokio_core::{net::UdpSocket, reactor::Handle};
 
 use bytes::{Buf, BufMut, BytesMut};
 
+use ox::{Certificate, Session, SessionBuilder};
+
 mod udp {
     use super::*;
 
@@ -449,34 +451,58 @@ mod udp {
 }
 
 pub struct StrategyWrapper {
-    server: udp::UdpServer,
+    server: Box<FStream<Item = Connection, Error = Error>>,
     handle: Handle,
     new_connection_handle: NewConnectionHandleWrapper,
+    local_addr: SocketAddr,
 }
 
 impl StrategyWrapper {
     fn new(config: &Config, handle: Handle, _: Authenticator) -> Result<Self> {
         let socket = UdpSocket::bind(&config.shitty_udp_listen_address, &handle)?;
         let (server, connect) = udp::UdpServer::new(socket, 10, &handle);
-        let new_connection_handle = NewConnectionHandleWrapper::new(connect, handle.clone());
+        let new_connection_handle = NewConnectionHandleWrapper::new(
+            connect,
+            handle.clone(),
+            config.shitty_udp_certificate.clone(),
+            config.shitty_udp_private_key.clone(),
+        );
+
+        let certificate = config.shitty_udp_certificate.clone();
+        let private_key = config.shitty_udp_private_key.clone();
+
+        let local_addr = server.local_addr().unwrap();
+        let inner_handle = handle.clone();
+        let server = Box::new(
+            server
+                .map_err(|e| e.into())
+                .and_then(move |v| {
+                    let remote_addr = v.1;
+                    SessionBuilder::new()
+                        .certificate(certificate.clone())
+                        .x25519(private_key.clone())
+                        .accept(v.0)
+                        .map(move |s| (s, remote_addr))
+                })
+                .map(move |v| spawn_reliable_con(v.0, v.1, &inner_handle))
+                .map_err(|e| e.into()),
+        );
+
         Ok(StrategyWrapper {
             server,
             handle,
             new_connection_handle,
+            local_addr,
         })
-    }
-
-    pub fn local_addr(&self) -> Result<SocketAddr> {
-        self.server.local_addr()
     }
 }
 
 fn spawn_reliable_con(
-    con: udp::UdpServerStream,
+    con: Session<udp::UdpServerStream>,
     remote_addr: SocketAddr,
     handle: &Handle,
 ) -> Connection {
-    let local_addr = con.local_addr();
+    let local_addr = con.get_ref().local_addr();
     let (rel_con, con) = ReliableConnection::new(con, handle, local_addr, remote_addr);
 
     handle.spawn(rel_con);
@@ -489,10 +515,7 @@ impl FStream for StrategyWrapper {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.server
-            .poll()
-            .map(|r| r.map(|o| o.map(|con| spawn_reliable_con(con.0, con.1, &self.handle))))
-            .map_err(|e| e.into())
+        self.server.poll()
     }
 }
 
@@ -508,7 +531,7 @@ impl NewConnection for StrategyWrapper {
 
 impl LocalAddressInformation for StrategyWrapper {
     fn local_addr(&self) -> SocketAddr {
-        self.server.local_addr().unwrap()
+        self.local_addr
     }
 }
 
@@ -516,26 +539,46 @@ impl LocalAddressInformation for StrategyWrapper {
 struct NewConnectionHandleWrapper {
     new_con: udp::Connect,
     handle: Handle,
+    certificate: Certificate,
+    private_key: Vec<u8>,
 }
 
 impl NewConnectionHandleWrapper {
-    fn new(new_con: udp::Connect, handle: Handle) -> NewConnectionHandleWrapper {
-        NewConnectionHandleWrapper { new_con, handle }
+    fn new(
+        new_con: udp::Connect,
+        handle: Handle,
+        certificate: Certificate,
+        private_key: Vec<u8>,
+    ) -> NewConnectionHandleWrapper {
+        NewConnectionHandleWrapper {
+            new_con,
+            handle,
+            certificate,
+            private_key,
+        }
     }
 }
 
 impl NewConnection for NewConnectionHandleWrapper {
     fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
         let handle = self.handle.clone();
+        let certificate = self.certificate.clone();
+        let private_key = self.private_key.clone();
+
         NewConnectionFuture::new(
             self.new_con
                 .connect(addr)
                 .into_future()
                 .flatten()
-                .map(move |v| {
-                    let con = spawn_reliable_con(v, addr, &handle);
-                    Connection::new(con)
+                .and_then(|c| {
+                    SessionBuilder::new()
+                        .certificate(certificate)
+                        .x25519(private_key)
+                        .direct_connect(c)
+                        .map_err(|e| e.into())
                 })
+                .flatten()
+                .map(move |v| spawn_reliable_con(v, addr, &handle))
                 .map_err(|e| e.into()),
         )
     }
@@ -861,7 +904,7 @@ impl ReliableStream {
 }
 
 pub struct ReliableConnection {
-    con: udp::UdpServerStream,
+    con: Session<udp::UdpServerStream>,
     handle: Handle,
     next_stream_id: u16,
     streams: HashMap<u16, ReliableStream>,
@@ -876,14 +919,14 @@ pub struct ReliableConnection {
 
 impl ReliableConnection {
     fn new(
-        con: udp::UdpServerStream,
+        con: Session<udp::UdpServerStream>,
         handle: &Handle,
         local_addr: SocketAddr,
         remote_addr: SocketAddr,
     ) -> (ReliableConnection, ConnectionWrapper) {
         let (new_stream_handle, new_stream_recv) = unbounded();
         let (new_stream_inform, new_incoming_stream_recv) = unbounded();
-        let id = con.get_id();
+        let id = con.get_ref().get_id();
 
         let new_stream_handle =
             NewStreamHandle::new(NewStreamHandleWrapper::new(new_stream_handle));
@@ -951,7 +994,7 @@ impl ReliableConnection {
     fn check_send_data(&mut self) {
         fn retain(
             streams: &mut HashMap<u16, ReliableStream>,
-            stream: &mut udp::UdpServerStream,
+            stream: &mut Session<udp::UdpServerStream>,
             handle: &Handle,
         ) {
             streams.retain(|_, s| {

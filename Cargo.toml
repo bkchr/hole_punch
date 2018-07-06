@@ -27,3 +27,4 @@ failure = "0.1"
 openssl = "^0.10.6"
 openssl-sys = "^0.9.28"
 hex = "0.3"
+ox = { git = "https://github.com/bkchr/0x.git", branch = "shitty_udp" }

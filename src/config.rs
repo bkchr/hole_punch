@@ -1,11 +1,12 @@
 use error::*;
 
 use std::{
-    net::{SocketAddr, ToSocketAddrs},
-    path::PathBuf,
+    net::{SocketAddr, ToSocketAddrs}, path::PathBuf,
 };
 
 use picoquic::{self, FileFormat};
+
+use ox;
 
 pub struct ConfigBuilder {
     /// The address where picoquic should listen on.
@@ -14,6 +15,8 @@ pub struct ConfigBuilder {
     /// The address where the shitty udp should listen on.
     /// Default: `0.0.0.0:0`
     shitty_udp_listen_address: SocketAddr,
+    shitty_udp_certificate: Option<ox::Certificate>,
+    shitty_udp_private_key: Option<Vec<u8>>,
     /// The configuration used for picoquic.
     quic_config: picoquic::Config,
     /// The list of certificate authorities certificates for clients.
@@ -30,6 +33,8 @@ impl ConfigBuilder {
         ConfigBuilder {
             quic_listen_address: ([0, 0, 0, 0], 0).into(),
             shitty_udp_listen_address: ([0, 0, 0, 0], 0).into(),
+            shitty_udp_certificate: None,
+            shitty_udp_private_key: None,
             quic_config: picoquic::Config::new(),
             incoming_ca_certificates: None,
             outgoing_ca_certificates: None,
@@ -119,6 +124,8 @@ impl ConfigBuilder {
         Ok(Config {
             quic_listen_address: self.quic_listen_address,
             shitty_udp_listen_address: self.shitty_udp_listen_address,
+            shitty_udp_certificate: self.shitty_udp_certificate.unwrap(),
+            shitty_udp_private_key: self.shitty_udp_private_key.unwrap(),
             quic_config: self.quic_config,
             incoming_ca_certificates: self.incoming_ca_certificates,
             outgoing_ca_certificates: self.outgoing_ca_certificates,
@@ -143,6 +150,8 @@ pub struct Config {
     pub(crate) outgoing_ca_certificates: Option<Vec<PathBuf>>,
     /// The list of known remote peers.
     pub(crate) remote_peers: Vec<SocketAddr>,
+    pub(crate) shitty_udp_certificate: ox::Certificate,
+    pub(crate) shitty_udp_private_key: Vec<u8>,
 }
 
 impl Config {
