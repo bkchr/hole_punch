@@ -609,6 +609,7 @@ struct ConnectionWrapper {
     create_new_stream: NewStreamHandle,
     local_addr: SocketAddr,
     peer_addr: SocketAddr,
+    con_dropped: Option< oneshot::Sender<()> >,
 }
 
 impl ConnectionWrapper {
@@ -618,6 +619,7 @@ impl ConnectionWrapper {
         peer_addr: SocketAddr,
         id: ConnectionId,
         create_new_stream: NewStreamHandle,
+        con_dropped: oneshot::Sender<()>,
     ) -> ConnectionWrapper {
         ConnectionWrapper {
             new_stream_recv,
@@ -625,7 +627,14 @@ impl ConnectionWrapper {
             create_new_stream,
             peer_addr,
             local_addr,
+            con_dropped: Some(con_dropped),
         }
+    }
+}
+
+impl Drop for ConnectionWrapper {
+    fn drop(&mut self) {
+        self.con_dropped.take().unwrap().send(());
     }
 }
 
@@ -926,6 +935,7 @@ pub struct ReliableConnection {
     new_stream_recv: UnboundedReceiver<oneshot::Sender<StreamWrapper>>,
     new_stream_handle: NewStreamHandle,
     new_stream_inform: UnboundedSender<StreamWrapper>,
+    con_dropped: oneshot::Receiver<()>,
     known_streams: Vec<u16>,
     local_addr: SocketAddr,
     remote_addr: SocketAddr,
@@ -946,6 +956,8 @@ impl ReliableConnection {
         let new_stream_handle =
             NewStreamHandle::new(NewStreamHandleWrapper::new(new_stream_handle));
 
+        let (drop_sender, con_dropped) = oneshot::channel();
+
         let con = ReliableConnection {
             con,
             handle: handle.clone(),
@@ -958,6 +970,7 @@ impl ReliableConnection {
             local_addr,
             remote_addr,
             id,
+            con_dropped,
         };
 
         let udp_con = ConnectionWrapper::new(
@@ -966,6 +979,7 @@ impl ReliableConnection {
             remote_addr,
             id,
             new_stream_handle,
+            drop_sender,
         );
 
         (con, udp_con)
@@ -1117,7 +1131,7 @@ impl Future for ReliableConnection {
         self.check_send_data();
         self.check_recv_data()?;
 
-        if self.streams.is_empty() {
+        if self.con_dropped.poll().map(|r| r.is_ready()).unwrap_or(false) {
             eprintln!("Goodbye: {} -> {}", self.local_addr, self.remote_addr);
             // we are done
             Ok(Ready(()))

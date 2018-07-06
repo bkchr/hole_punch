@@ -13,3 +13,4 @@ serde = "1.0"
 timebomb = "0.1.2"
 tokio-io = "0.1"
 tokio-serde-json = { git = "https://github.com/carllerche/tokio-serde-json.git" }
+ox = { git = "https://github.com/bkchr/0x.git", branch = "shitty_udp" }

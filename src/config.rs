@@ -126,14 +126,6 @@ impl ConfigBuilder {
 
     /// Build the `Config`.
     pub fn build(self) -> Result<Config> {
-        if self.quic_config.key.is_none() && self.quic_config.key_filename.is_none() {
-            bail!("Private key is required!");
-        }
-
-        if self.quic_config.cert_chain.is_none() && self.quic_config.cert_chain_filename.is_none() {
-            bail!("Certificate chain is required!");
-        }
-
         Ok(Config {
             quic_listen_address: self.quic_listen_address,
             shitty_udp_listen_address: self.shitty_udp_listen_address,

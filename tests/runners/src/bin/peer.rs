@@ -4,6 +4,7 @@ extern crate hole_punch;
 extern crate runners;
 #[macro_use]
 extern crate structopt;
+extern crate ox;
 extern crate timebomb;
 extern crate tokio_core;
 extern crate tokio_io;
@@ -25,6 +26,8 @@ use structopt::StructOpt;
 use tokio_serde_json::{ReadJson, WriteJson};
 
 use tokio_io::codec::length_delimited;
+
+use ox::{generate_fixed_x25519, Certificate, Secret};
 
 type Stream = WriteJson<ReadJson<length_delimited::Framed<hole_punch::Stream>, Protocol>, Protocol>;
 
@@ -147,15 +150,22 @@ fn main() {
     let options = Options::from_args();
     let timeout = options.timeout * 1000;
 
-    let certs = [
-        include_bytes!("../../certs/peer0_cert.pem").to_vec(),
-        include_bytes!("../../certs/peer1_cert.pem").to_vec(),
-        include_bytes!("../../certs/peer2_cert.pem").to_vec(),
-    ];
-    let keys = [
-        include_bytes!("../../certs/peer0_key.pem").to_vec(),
-        include_bytes!("../../certs/peer1_key.pem").to_vec(),
-        include_bytes!("../../certs/peer2_key.pem").to_vec(),
+    let mut secrets = [
+        [
+            0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c,
+            0xae, 0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92,
+            0xec, 0x2c, 0xf0, 0x0d,
+        ],
+        [
+            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
+            0x2c, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03,
+            0x1c, 0xae, 0xf0, 0x0d,
+        ],
+        [
+            0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec,
+            0x2c, 0xf0, 0x0d, 0xc4, 0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b,
+            0xac, 0x03, 0x1c, 0xae,
+        ],
     ];
 
     timebomb::timeout_ms(
@@ -170,32 +180,41 @@ fn main() {
 
             let mut evt_loop = Core::new().unwrap();
 
-            let cert = certs.get(peer_id).unwrap();
-            let key = &keys[peer_id];
+            let secret = Secret::from_bytes(secrets.get_mut(peer_id).unwrap());
+            let identity = secret.identity();
+
+            let (x25519_secret, x25519_public) = generate_fixed_x25519(peer_id as u8);
+            let certificate = Certificate::new()
+                .identity(&identity)
+                .bind_x25519(&x25519_public)
+                .sign(&secret)
+                .unwrap();
 
             let mut config_builder = Config::builder()
-                .set_cert_chain(vec![cert.to_vec()], FileFormat::PEM)
-                .set_key(key.to_vec(), FileFormat::PEM);
+                .set_shitty_udp_certificate(certificate)
+                .set_shitty_udp_private_key(x25519_secret);
 
             if let Some(remote_peer) = remote_peer {
                 config_builder = config_builder.add_remote_peer(remote_peer).unwrap();
             }
 
             if let Some(listen_port) = options.listen_port {
-                config_builder = config_builder.set_quic_listen_port(listen_port);
+                config_builder = config_builder.set_shitty_udp_listen_port(listen_port);
             }
 
             let config = config_builder.build().unwrap();
 
             println!("Creates hole_punch Context");
             let context = Context::new(
-                PubKeyHash::from_x509_pem(cert, true).expect("Creates local identifier"),
+                PubKeyHash::from_public_key_der(x25519_public.to_vec(), false)
+                    .expect("Creates local identifier"),
                 evt_loop.handle(),
                 config,
             ).expect("Create hole-punch Context");
 
             if let Some(request_peer) = options.request_peer {
-                let peer_key = PubKeyHash::from_x509_pem(&certs[request_peer], true)
+                let (_, peer_public) = generate_fixed_x25519(request_peer as u8);
+                let peer_key = PubKeyHash::from_public_key_der(peer_public.to_vec(), true)
                     .expect("Create peer identifier");
 
                 for _ in 0..3 {
