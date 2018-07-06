@@ -49,8 +49,21 @@ impl ConfigBuilder {
     }
 
     /// Sets the listen port for shitty udp.
-    pub fn set_shitty_udp_listen_port(&mut self, port: u16) {
+    pub fn set_shitty_udp_listen_port(mut self, port: u16) -> Self {
         self.shitty_udp_listen_address.set_port(port);
+        self
+    }
+
+    /// Sets the listen port for shitty udp.
+    pub fn set_shitty_udp_private_key(mut self, key: Vec<u8>) -> Self {
+        self.shitty_udp_private_key = Some(key);
+        self
+    }
+
+    /// Sets the listen port for shitty udp.
+    pub fn set_shitty_udp_certificate(mut self, cert: ox::Certificate) -> Self {
+        self.shitty_udp_certificate = Some(cert);
+        self
     }
 
     /// Sets the listen address for picoquic (overwrites `set_quic_listen_port`).

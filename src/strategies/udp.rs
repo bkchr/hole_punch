@@ -31,6 +31,10 @@ use bytes::{Buf, BufMut, BytesMut};
 
 use ox::{Certificate, Session, SessionBuilder};
 
+pub trait InformPublicKey {
+    fn inform_public_key(&mut self, con: ConnectionId, public_key: &[u8]);
+}
+
 mod udp {
     use super::*;
 
@@ -458,7 +462,7 @@ pub struct StrategyWrapper {
 }
 
 impl StrategyWrapper {
-    fn new(config: &Config, handle: Handle, _: Authenticator) -> Result<Self> {
+    fn new(config: &Config, handle: Handle, mut authenticator: Authenticator) -> Result<Self> {
         let socket = UdpSocket::bind(&config.shitty_udp_listen_address, &handle)?;
         let (server, connect) = udp::UdpServer::new(socket, 10, &handle);
         let new_connection_handle = NewConnectionHandleWrapper::new(
@@ -466,6 +470,7 @@ impl StrategyWrapper {
             handle.clone(),
             config.shitty_udp_certificate.clone(),
             config.shitty_udp_private_key.clone(),
+            authenticator.clone(),
         );
 
         let certificate = config.shitty_udp_certificate.clone();
@@ -484,7 +489,10 @@ impl StrategyWrapper {
                         .accept(v.0)
                         .map(move |s| (s, remote_addr))
                 })
-                .map(move |v| spawn_reliable_con(v.0, v.1, &inner_handle))
+                .map(move |v| {
+                    authenticator.inform_pub_key(v.0.get_ref().get_id(), v.0.peer_pub_key());
+                    spawn_reliable_con(v.0, v.1, &inner_handle)
+                })
                 .map_err(|e| e.into()),
         );
 
@@ -541,6 +549,7 @@ struct NewConnectionHandleWrapper {
     handle: Handle,
     certificate: Certificate,
     private_key: Vec<u8>,
+    authenticator: Authenticator,
 }
 
 impl NewConnectionHandleWrapper {
@@ -549,12 +558,14 @@ impl NewConnectionHandleWrapper {
         handle: Handle,
         certificate: Certificate,
         private_key: Vec<u8>,
+        authenticator: Authenticator,
     ) -> NewConnectionHandleWrapper {
         NewConnectionHandleWrapper {
             new_con,
             handle,
             certificate,
             private_key,
+            authenticator
         }
     }
 }
@@ -564,6 +575,7 @@ impl NewConnection for NewConnectionHandleWrapper {
         let handle = self.handle.clone();
         let certificate = self.certificate.clone();
         let private_key = self.private_key.clone();
+        let mut authenticator = self.authenticator.clone();
 
         NewConnectionFuture::new(
             self.new_con
@@ -578,7 +590,10 @@ impl NewConnection for NewConnectionHandleWrapper {
                         .map_err(|e| e.into())
                 })
                 .flatten()
-                .map(move |v| spawn_reliable_con(v, addr, &handle))
+                .map(move |v| {
+                    authenticator.inform_pub_key(v.get_ref().get_id(), v.peer_pub_key());
+                    spawn_reliable_con(v, addr, &handle)
+                })
                 .map_err(|e| e.into()),
         )
     }
