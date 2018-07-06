@@ -11,6 +11,9 @@ pub struct ConfigBuilder {
     /// The address where picoquic should listen on.
     /// Default: `0.0.0.0:0`
     quic_listen_address: SocketAddr,
+    /// The address where the shitty udp should listen on.
+    /// Default: `0.0.0.0:0`
+    shitty_udp_listen_address: SocketAddr,
     /// The configuration used for picoquic.
     quic_config: picoquic::Config,
     /// The list of certificate authorities certificates for clients.
@@ -26,6 +29,7 @@ impl ConfigBuilder {
     fn new() -> ConfigBuilder {
         ConfigBuilder {
             quic_listen_address: ([0, 0, 0, 0], 0).into(),
+            shitty_udp_listen_address: ([0, 0, 0, 0], 0).into(),
             quic_config: picoquic::Config::new(),
             incoming_ca_certificates: None,
             outgoing_ca_certificates: None,
@@ -37,6 +41,11 @@ impl ConfigBuilder {
     pub fn set_quic_listen_port(mut self, port: u16) -> Self {
         self.quic_listen_address.set_port(port);
         self
+    }
+
+    /// Sets the listen port for shitty udp.
+    pub fn set_shitty_udp_listen_port(&mut self, port: u16) {
+        self.shitty_udp_listen_address.set_port(port);
     }
 
     /// Sets the listen address for picoquic (overwrites `set_quic_listen_port`).
@@ -109,6 +118,7 @@ impl ConfigBuilder {
 
         Ok(Config {
             quic_listen_address: self.quic_listen_address,
+            shitty_udp_listen_address: self.shitty_udp_listen_address,
             quic_config: self.quic_config,
             incoming_ca_certificates: self.incoming_ca_certificates,
             outgoing_ca_certificates: self.outgoing_ca_certificates,
@@ -121,6 +131,10 @@ pub struct Config {
     /// The address where pcioquic should listen on.
     /// Default: `0.0.0.0:0`
     pub(crate) quic_listen_address: SocketAddr,
+    /// The address where shitty udp should listen on.
+    /// Default: `0.0.0.0:0`
+    pub(crate) shitty_udp_listen_address: SocketAddr,
+    /// The configuration used for picoquic.
     /// The configuration used for picoquic.
     pub(crate) quic_config: picoquic::Config,
     /// The list of certificate authorities certificates for incoming connections.

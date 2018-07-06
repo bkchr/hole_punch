@@ -19,6 +19,7 @@ use bytes::BytesMut;
 use objekt;
 
 mod quic;
+mod udp;
 
 trait StrategyTrait: FStream + LocalAddressInformation + NewConnection {}
 impl<T: NewConnection + FStream + LocalAddressInformation> StrategyTrait for T {}
@@ -352,8 +353,8 @@ impl NewConnection for NewConnectionHandle {
     }
 }
 
-trait NewStreamHandleTrait: NewStream + objekt::Clone {}
-impl<T: NewStream + objekt::Clone> NewStreamHandleTrait for T {}
+trait NewStreamHandleTrait: NewStream + objekt::Clone + Send {}
+impl<T: NewStream + objekt::Clone + Send> NewStreamHandleTrait for T {}
 
 pub struct NewStreamHandle {
     inner: Box<NewStreamHandleTrait>,
@@ -368,7 +369,7 @@ impl Clone for NewStreamHandle {
 }
 
 impl NewStreamHandle {
-    fn new<T: NewStream + Clone + 'static>(inner: T) -> NewStreamHandle {
+    fn new<T: NewStreamHandleTrait + 'static>(inner: T) -> NewStreamHandle {
         let inner = Box::new(inner);
         NewStreamHandle { inner }
     }
@@ -389,7 +390,8 @@ pub fn init(
     config: &Config,
     authenticator: Authenticator,
 ) -> Result<Vec<Strategy>> {
-    Ok(vec![quic::init(handle, config, authenticator)?])
+    //Ok(vec![quic::init(handle, config, authenticator)?])
+    Ok(vec![udp::init(handle, config, authenticator)?])
 }
 
 pub trait GetConnectionId {
