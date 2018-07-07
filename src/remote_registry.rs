@@ -329,9 +329,12 @@ impl Future for IncomingStream {
 
             match msg {
                 RegistryProtocol::Find(peer) => {
+                    println!("SEARCH: {}", peer);
                     let answer = if self.registry.has_peer(&peer) {
+                        println!("FOUND");
                         RegistryProtocol::Found(peer)
                     } else {
+                        println!("NOTFOUND");
                         RegistryProtocol::NotFound(peer)
                     };
                     self.stream.start_send(answer)?;

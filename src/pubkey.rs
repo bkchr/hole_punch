@@ -16,6 +16,8 @@ use serde::{de::Error, Deserialize, Deserializer, Serialize, Serializer};
 
 use bytes::Bytes;
 
+use ox::{ConstantTimeEq, Identity};
+
 /// A hashed public key.
 /// We store the public key as `sha256` hash. If original public key is available at
 /// construction and the user requests it, the original public key is also stored in `DER` format.
@@ -77,11 +79,11 @@ impl Deref for PubKeyHash {
 
 impl PartialEq for PubKeyHash {
     fn eq(&self, other: &PubKeyHash) -> bool {
-        if self.len == other.len {
-            self.buf[..self.len] == other.buf[..other.len]
-        } else {
-            false
-        }
+        Identity::from_ed25519_bytes(&self)
+            .ct_eq(&Identity::from_ed25519_bytes(
+                &other,
+            ))
+            .unwrap_u8() == 1
     }
 }
 
@@ -119,11 +121,8 @@ impl PubKeyHash {
         pub_der: Vec<u8>,
         store_orig: bool,
     ) -> result::Result<PubKeyHash, ErrorStack> {
-        let mut hasher = Hasher::new(MessageDigest::sha256())?;
-        hasher.update(&pub_der)?;
-        let bytes = hasher.finish()?;
-
-        let mut key = Self::from_hashed_checked(&bytes);
+        println!("from_public: {:?}", pub_der);
+        let mut key = Self::from_hashed_checked(&pub_der);
 
         if store_orig {
             key.pub_key = Some(Bytes::from(pub_der));

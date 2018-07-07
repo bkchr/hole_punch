@@ -204,18 +204,19 @@ fn main() {
 
             let config = config_builder.build().unwrap();
 
-            println!("Creates hole_punch Context");
-            let context = Context::new(
-                PubKeyHash::from_public_key_der(x25519_public.to_vec(), false)
-                    .expect("Creates local identifier"),
-                evt_loop.handle(),
-                config,
-            ).expect("Create hole-punch Context");
+            let key = PubKeyHash::from_public_key_der(identity.public_key().to_vec(), true)
+                .expect("Creates local identifier");
+            println!("Creates hole_punch Context: {}", key);
+            let context =
+                Context::new(key, evt_loop.handle(), config).expect("Create hole-punch Context");
 
             if let Some(request_peer) = options.request_peer {
-                let (_, peer_public) = generate_fixed_x25519(request_peer as u8);
-                let peer_key = PubKeyHash::from_public_key_der(peer_public.to_vec(), true)
-                    .expect("Create peer identifier");
+                let peer_identity = secret.identity();
+                let peer_key =
+                    PubKeyHash::from_public_key_der(peer_identity.public_key().to_vec(), true)
+                        .expect("Create peer identifier");
+
+                println!("REQUEST: {}", peer_key);
 
                 for _ in 0..3 {
                     let res = evt_loop.run(context.create_connection_to_peer_with_custom_timeout(

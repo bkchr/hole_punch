@@ -107,9 +107,11 @@ impl Authenticator {
 
     pub(crate) fn inform_pub_key(&mut self, con_id: ConnectionId, pub_key: &[u8]) {
         // HACKY HACKY HACK
+        let key = PubKeyHash::from_public_key_der(pub_key.to_vec(), true).unwrap();
+        println!("registering: {}", key);
         self.inner.lock().unwrap().add_incoming_con_pub_key(
             con_id,
-            PubKeyHash::from_public_key_der(pub_key.to_vec(), false).unwrap(),
+            key,
         );
     }
 }
