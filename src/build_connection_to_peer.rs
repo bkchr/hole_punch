@@ -1,3 +1,53 @@
+/*!
+For building a connection between two peers, it is required to have a third peer. The third peer
+needs to be reachable by both peers.
+`BuildConnectionToPeer` is the state machine that drives the creation of the new connection from
+the initiating peer(`peer0`). It requires a `NewStreamHandle` that creates a `Stream` to the peer
+in the middle(`peer1`).
+`BuildConnectionToPeerRemote` is the instance that runs on the peer(`peer2`), where `peer0` wants
+to connect to.
+
+Protocol
+--------
+
+```
+[peer0]                            [peer1]                            [peer2]
+   |                                  |                                  |
+   |  [init proxy stream] -->         |                                  |
+   |  - id of peer2                   |                                  |
+   |                                  |                                  |
+   |  <-- [ack proxy stream]          |  [init new stream] -->           |
+   |  - address and port of peer0     |  - id of peer0                   |
+   |    known by peer1                |  - address and port of peer2     |
+   |                                  |    known by peer1                |
+   |                                  |                                  |
+   |  [send all addresses] -->        |                                  |
+   |  - all addresses where peer0     |                                  |
+   |    is reachable                  |                                  |
+   |                                  |                                  |
+   |                                  |  <-- [send all addresses]        |
+   |                                  |  - all addresses where peer2     |
+   |                                  |    is reachable                  |
+   |                                  |                                  |
+   |  [create connections]            |  [create connections]            |
+   |  - try to reach peer2 via all    |  - try to reach peer1 via all    |
+   |    known addresses               |    known addresses               |
+   |                                  |                                  |
+   |  [wait for connection]           |                                  |
+   |  - select successful created     |                                  |
+   |    connection                    |                                  |
+   |  - create stream and use as      |                                  |
+   |    result                        |                                  |
+   |  - finish                        |                                  |
+   |                                  |                                  |
+   |  [timeout or no connection] -->  |                                  |
+   |  - use proxy stream as           |                                  |
+   |    result                        |                                  |
+   |  - finish                        |                                  |
+   |                                  |                                  |
+```
+*/
+
 use connection::{NewConnectionFuture, NewConnectionHandle};
 use context::PassStreamToContext;
 use error::*;
