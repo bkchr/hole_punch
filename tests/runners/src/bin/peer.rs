@@ -228,20 +228,24 @@ fn main() {
                         .run(SendAndRecvMessage::new(peer_con, "herp and derp".into()))
                         .expect("Send and receives message");
 
-                    println!("Creates new Stream");
+                    for i in 0..2 {
+                        println!("Creates Stream: {}", i);
 
-                    // Check that we can create a new Stream
-                    let stream = evt_loop
-                        .run(peer_handle.new_stream())
-                        .expect("Creates new Stream");
-                    let stream: Stream = into_stream(stream);
+                        // Check that we can create Streams
+                        let stream = evt_loop
+                            .run(peer_handle.new_stream())
+                            .expect("Creates new Stream");
+                        peer_handle = stream.new_stream_handle().clone();
 
-                    check_stream(&stream, &options);
+                        let stream: Stream = into_stream(stream);
 
-                    // Check that we actually can send messages
-                    evt_loop
-                        .run(SendAndRecvMessage::new(stream, "herp and derp2".into()))
-                        .expect("Send and receives message 2");
+                        check_stream(&stream, &options);
+
+                        // Check that we actually can send messages
+                        evt_loop
+                            .run(SendAndRecvMessage::new(stream, "herp and derp".into()))
+                            .expect(&format!("Send and receives message {}", i));
+                    }
                     return;
                 }
 
