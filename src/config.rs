@@ -1,8 +1,7 @@
 use error::*;
 
 use std::{
-    net::{SocketAddr, ToSocketAddrs},
-    path::PathBuf,
+    net::{SocketAddr, ToSocketAddrs}, path::PathBuf,
 };
 
 use picoquic::{self, FileFormat};
@@ -45,29 +44,29 @@ impl ConfigBuilder {
         self
     }
 
-    /// Sets the certificate (in PEM format) filename for TLS.
-    pub fn set_cert_chain_filename<C: Into<PathBuf>>(mut self, cert: C) -> Self {
-        self.quic_config.set_cert_chain_filename(cert);
+    /// Sets the certificate chain(in PEM format) filename for TLS.
+    pub fn set_certificate_chain_filename<C: Into<PathBuf>>(mut self, cert: C) -> Self {
+        self.quic_config.set_certificate_chain_filename(cert);
         self
     }
 
-    /// Sets the key (in PEM format) filename for TLS.
-    pub fn set_key_filename<P: Into<PathBuf>>(mut self, path: P) -> Self {
-        self.quic_config.set_key_filename(path);
+    /// Sets the private key(in PEM format) filename for TLS.
+    pub fn set_private_key_filename<P: Into<PathBuf>>(mut self, path: P) -> Self {
+        self.quic_config.set_private_key_filename(path);
         self
     }
 
     /// Sets the certificate chain.
     /// This option will overwrite `set_cert_chain_filename`.
-    pub fn set_cert_chain(mut self, certs: Vec<Vec<u8>>, format: FileFormat) -> Self {
-        self.quic_config.set_cert_chain(certs, format);
+    pub fn set_certificate_chain(mut self, certs: Vec<Vec<u8>>, format: FileFormat) -> Self {
+        self.quic_config.set_certificate_chain(certs, format);
         self
     }
 
     /// Sets the private key.
     /// This option will overwrite `set_key_filename`.
-    pub fn set_key(mut self, key: Vec<u8>, format: FileFormat) -> Self {
-        self.quic_config.set_key(key, format);
+    pub fn set_private_key(mut self, key: Vec<u8>, format: FileFormat) -> Self {
+        self.quic_config.set_private_key(key, format);
         self
     }
 
@@ -99,11 +98,14 @@ impl ConfigBuilder {
 
     /// Build the `Config`.
     pub fn build(self) -> Result<Config> {
-        if self.quic_config.key.is_none() && self.quic_config.key_filename.is_none() {
+        if self.quic_config.private_key.is_none() && self.quic_config.private_key_filename.is_none()
+        {
             bail!("Private key is required!");
         }
 
-        if self.quic_config.cert_chain.is_none() && self.quic_config.cert_chain_filename.is_none() {
+        if self.quic_config.certificate_chain.is_none()
+            && self.quic_config.certificate_chain_filename.is_none()
+        {
             bail!("Certificate chain is required!");
         }
 

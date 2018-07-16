@@ -174,8 +174,8 @@ fn main() {
             let key = &keys[peer_id];
 
             let mut config_builder = Config::builder()
-                .set_cert_chain(vec![cert.to_vec()], FileFormat::PEM)
-                .set_key(key.to_vec(), FileFormat::PEM);
+                .set_certificate_chain(vec![cert.to_vec()], FileFormat::PEM)
+                .set_private_key(key.to_vec(), FileFormat::PEM);
 
             if let Some(remote_peer) = remote_peer {
                 config_builder = config_builder.add_remote_peer(remote_peer).unwrap();

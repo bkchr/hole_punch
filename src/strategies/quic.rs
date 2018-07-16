@@ -56,7 +56,7 @@ impl NewConnection for StrategyWrapper {
     fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
         NewConnectionFuture::new(
             self.context
-                .new_connection(addr)
+                .new_connection(addr, "hole_punch")
                 .map(|v| Connection::new(ConnectionWrapper::new(v)))
                 .map_err(|e| e.into()),
         )
@@ -243,7 +243,7 @@ impl NewConnection for NewConnectionHandleWrapper {
     fn new_connection(&mut self, addr: SocketAddr) -> NewConnectionFuture {
         NewConnectionFuture::new(
             self.new_con
-                .new_connection(addr)
+                .new_connection(addr, "hole_punch")
                 .map(|v| Connection::new(ConnectionWrapper::new(v)))
                 .map_err(|e| e.into()),
         )
