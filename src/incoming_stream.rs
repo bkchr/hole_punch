@@ -153,8 +153,13 @@ fn handle_proxy_stream<F>(
                     let (sink0, fstream0) = stream.split();
                     let (sink1, fstream1) = stream2.split();
 
-                    inner_handle.spawn(sink0.send_all(fstream1).map_err(|_| ()).map(|_| ()));
-                    inner_handle.spawn(sink1.send_all(fstream0).map_err(|_| ()).map(|_| ()));
+                    inner_handle.spawn(
+                        sink0
+                            .send_all(fstream1)
+                            .select(sink1.send_all(fstream0))
+                            .map_err(|_| ())
+                            .map(|_| ()),
+                    );
                     Ok(())
                 })
                 .map_err(|e| println!("{:?}", e)),
