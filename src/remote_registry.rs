@@ -60,7 +60,7 @@ impl RegistryProvider for RemoteRegistry {
             .unbounded_send((peer.clone(), sender));
         Box::new(TimeoutRequest::new(
             receiver,
-            Duration::from_secs(20),
+            Duration::from_secs(10),
             &self.handle,
         ))
     }
@@ -91,6 +91,7 @@ impl Future for TimeoutRequest {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         if let Err(_) = self.timeout.poll() {
             println!("RemoteRegistry request timed out.");
+            Err(())?;
         }
 
         self.result_recv.poll().map_err(|_| ())

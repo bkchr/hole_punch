@@ -9,7 +9,7 @@ use std::{
 use futures::{
     future,
     stream::{futures_unordered, FuturesUnordered},
-    Async::Ready,
+    Async::{NotReady, Ready},
     Future, Poll, Stream as FStream,
 };
 
@@ -124,9 +124,11 @@ impl Future for SearchRemoteRegistries {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            let res = match try_ready!(self.futures.poll()) {
-                Some(res) => res,
-                None => return Ok(Ready(RegistryResult::NotFound)),
+            let res = match self.futures.poll() {
+                Ok(Ready(Some(res))) => res,
+                Ok(Ready(None)) => return Ok(Ready(RegistryResult::NotFound)),
+                Err(_) => continue,
+                Ok(NotReady) => return Ok(NotReady),
             };
 
             match res {
