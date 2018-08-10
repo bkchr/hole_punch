@@ -3,7 +3,7 @@ use context::PassStreamToContext;
 use error::*;
 use incoming_stream::IncomingStream;
 use protocol::StreamHello;
-use registry::Registry;
+use registry::{RegistrationToken, Registry};
 use strategies::{self, NewConnection, NewStream};
 use stream::{NewStreamFuture, NewStreamHandle};
 use PubKeyHash;
@@ -121,6 +121,7 @@ pub struct Connection {
     registry: Registry,
     /// The identifier of the peer this Connection is connected to.
     peer_identifier: PubKeyHash,
+    registration_token: RegistrationToken,
 }
 
 impl Connection {
@@ -143,7 +144,8 @@ impl Connection {
             con.get_new_stream_handle(),
         );
 
-        registry.register_peer(peer_identifier.clone(), new_stream_handle.clone());
+        let registration_token =
+            registry.register_peer(peer_identifier.clone(), new_stream_handle.clone());
 
         Connection {
             con,
@@ -153,6 +155,7 @@ impl Connection {
             new_stream_handle,
             registry,
             peer_identifier,
+            registration_token,
         }
     }
 
@@ -188,12 +191,14 @@ impl Future for Connection {
             match self.poll_impl() {
                 Ok(NotReady) => return Ok(NotReady),
                 Err(e) => {
-                    self.registry.unregister_peer(&self.peer_identifier);
+                    self.registry
+                        .unregister_peer(self.peer_identifier.clone(), self.registration_token);
                     println!("Connection: {:?}", e);
                     return Ok(Ready(()));
                 }
                 Ok(Ready(None)) => {
-                    self.registry.unregister_peer(&self.peer_identifier);
+                    self.registry
+                        .unregister_peer(self.peer_identifier.clone(), self.registration_token);
                     return Ok(Ready(()));
                 }
                 Ok(Ready(Some(stream))) => {
