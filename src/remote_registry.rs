@@ -198,6 +198,7 @@ impl RemoteRegistryConnectionHandler {
     }
 }
 
+//TODO: Implement as state machine
 impl Future for RemoteRegistryConnectionHandler {
     type Item = ();
     type Error = ();
@@ -205,7 +206,14 @@ impl Future for RemoteRegistryConnectionHandler {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             if let Some(find_peer_request) = self.select_next_peer.take() {
-                let addr = try_ready!(self.next_addr.poll());
+                let addr = match self.next_addr.poll() {
+                    Ok(NotReady) => {
+                        self.select_next_peer = Some(find_peer_request);
+                        return Ok(NotReady);
+                    },
+                    Err(_) => unimplemented!(),
+                    Ok(Ready(addr)) => addr,
+                };
 
                 let connect = ConnectWithStrategies::new(
                     self.strategies.clone(),

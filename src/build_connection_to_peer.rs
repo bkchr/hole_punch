@@ -10,7 +10,7 @@ to connect to.
 Protocol
 --------
 
-```
+```ignore
 [peer0]                            [peer1]                            [peer2]
    |                                  |                                  |
    |  [init proxy stream] -->         |                                  |
