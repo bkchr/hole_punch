@@ -1,4 +1,5 @@
 use error::*;
+use remote_registry::Resolve;
 
 use std::{
     net::{SocketAddr, ToSocketAddrs}, path::PathBuf,
@@ -17,7 +18,7 @@ pub struct ConfigBuilder {
     /// The list of certificate authorities certificates for servers.
     outgoing_ca_certificates: Option<Vec<PathBuf>>,
     /// The list of known remote peers.
-    remote_peers: Vec<SocketAddr>,
+    remote_peers: Vec<Box<dyn Resolve>>,
 }
 
 impl ConfigBuilder {
@@ -88,12 +89,9 @@ impl ConfigBuilder {
 
     /// Adds a remote peer. The `Context` will always hold a connection to one of the known remote
     /// peers.
-    pub fn add_remote_peer(mut self, remote_peer: impl ToSocketAddrs) -> Result<Self> {
-        // TODO: For urls we need some kind of update. E.g. the dns record changes.
-        remote_peer
-            .to_socket_addrs()?
-            .for_each(|a| self.remote_peers.push(a));
-        Ok(self)
+    pub fn add_remote_peer(mut self, remote_peer: impl ToSocketAddrs + 'static) -> Self {
+        self.remote_peers.push(Box::new(remote_peer));
+        self
     }
 
     /// Build the `Config`.
@@ -130,7 +128,7 @@ pub struct Config {
     /// The list of certificate authorities certificates for outgoing connections.
     pub(crate) outgoing_ca_certificates: Option<Vec<PathBuf>>,
     /// The list of known remote peers.
-    pub(crate) remote_peers: Vec<SocketAddr>,
+    pub(crate) remote_peers: Vec<Box<dyn Resolve>>,
 }
 
 impl Config {

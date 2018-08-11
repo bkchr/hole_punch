@@ -72,7 +72,7 @@ impl Context {
 
         if !config.remote_peers.is_empty() {
             let remote_registry = remote_registry::RemoteRegistry::new(
-                config.remote_peers.clone(),
+                config.remote_peers,
                 new_connection_handles.clone(),
                 local_peer_identifier.clone(),
                 handle.clone(),

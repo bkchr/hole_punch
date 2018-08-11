@@ -10,18 +10,36 @@ use PubKeyHash;
 
 use futures::{
     sync::{
-        mpsc::{unbounded, UnboundedReceiver, UnboundedSender}, oneshot,
+        mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+        oneshot,
     },
-    Async::{NotReady, Ready}, Future, Poll, Sink, Stream as FStream,
+    Async::{NotReady, Ready},
+    Future, Poll, Sink, Stream as FStream,
 };
 
 use std::{
-    collections::{hash_map::Entry, HashMap}, net::SocketAddr, time::Duration,
+    collections::{hash_map::Entry, HashMap},
+    net::{SocketAddr, ToSocketAddrs},
+    time::Duration,
 };
 
 use tokio_core::reactor::Handle;
 
 type ResultSender = oneshot::Sender<RegistryResult>;
+
+/// A common trait for resolving `Url`s and `SocketAddr`s to `SocketAddr`s.
+pub trait Resolve {
+    /// Resolve the addresses, if possible.
+    fn resolve(&self) -> Result<Vec<SocketAddr>>;
+}
+
+impl<T: ToSocketAddrs> Resolve for T {
+    fn resolve(&self) -> Result<Vec<SocketAddr>> {
+        self.to_socket_addrs()
+            .map(|v| v.collect::<Vec<_>>())
+            .map_err(|e| e.into())
+    }
+}
 
 pub struct RemoteRegistry {
     find_peer_request: UnboundedSender<(PubKeyHash, ResultSender)>,
@@ -30,14 +48,14 @@ pub struct RemoteRegistry {
 
 impl RemoteRegistry {
     pub fn new(
-        remote_peers: Vec<SocketAddr>,
+        resolvers: Vec<Box<dyn Resolve>>,
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         handle: Handle,
     ) -> RemoteRegistry {
         let (find_peer_request_send, find_peer_request_recv) = unbounded();
         let con_handler = RemoteRegistryConnectionHandler::new(
-            remote_peers,
+            resolvers,
             strategies,
             local_peer_identifier,
             find_peer_request_recv,
@@ -100,10 +118,61 @@ impl Future for TimeoutRequest {
 
 type FindPeerRequest = UnboundedReceiver<(PubKeyHash, ResultSender)>;
 
+struct GetNextAddr {
+    resolvers: Vec<Box<dyn Resolve>>,
+    resolved_addrs: Vec<SocketAddr>,
+    last_resolver: usize,
+    /// Timeout between calling the resolvers.
+    timeout: Timeout,
+}
+
+impl GetNextAddr {
+    fn new(resolvers: Vec<Box<dyn Resolve>>, timeout: Duration, handle: &Handle) -> Self {
+        let resolved_addrs = resolvers[0].resolve().unwrap_or_else(|_| Vec::new());
+
+        GetNextAddr {
+            resolvers,
+            resolved_addrs,
+            last_resolver: 0,
+            timeout: Timeout::new(timeout, handle),
+        }
+    }
+}
+
+impl Future for GetNextAddr {
+    type Item = SocketAddr;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        // Check in maximum one extra resolver per call.
+        for _ in 0..2 {
+            if !self.resolved_addrs.is_empty() {
+                return Ok(Ready(self.resolved_addrs.pop().unwrap()));
+            } else if self.timeout.poll().is_err() {
+                self.timeout.reset();
+
+                let next_resolver = if self.last_resolver + 1 == self.resolvers.len() {
+                    0
+                } else {
+                    self.last_resolver + 1
+                };
+
+                self.resolved_addrs = self.resolvers[next_resolver]
+                    .resolve()
+                    .unwrap_or_else(|_| Vec::new());
+                self.last_resolver = next_resolver;
+            }
+        }
+
+        Ok(NotReady)
+    }
+}
+
 struct RemoteRegistryConnectionHandler {
-    next_remote_peer: Box<dyn Iterator<Item = SocketAddr>>,
+    next_addr: GetNextAddr,
     current_peer: Option<OutgoingStream>,
     wait_for_new_peer: Option<(ConnectWithStrategies, FindPeerRequest)>,
+    select_next_peer: Option<FindPeerRequest>,
     strategies: Vec<NewConnectionHandle>,
     handle: Handle,
     local_peer_identifier: PubKeyHash,
@@ -111,30 +180,20 @@ struct RemoteRegistryConnectionHandler {
 
 impl RemoteRegistryConnectionHandler {
     fn new(
-        remote_peers: Vec<SocketAddr>,
+        resolvers: Vec<Box<dyn Resolve>>,
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         find_peer_request: FindPeerRequest,
         handle: Handle,
     ) -> RemoteRegistryConnectionHandler {
-        let mut next_remote_peer = Box::new(remote_peers.into_iter().cycle());
-        let connect = ConnectWithStrategies::new(
-            strategies.clone(),
-            handle.clone(),
-            next_remote_peer
-                .next()
-                .expect("next_remote_peer should always return a `SocketAddr`."),
-            local_peer_identifier.clone(),
-            StreamHello::Registry,
-        );
-
         RemoteRegistryConnectionHandler {
-            next_remote_peer,
+            next_addr: GetNextAddr::new(resolvers, Duration::from_secs(5), &handle),
             strategies,
             local_peer_identifier,
             handle,
             current_peer: None,
-            wait_for_new_peer: Some((connect, find_peer_request)),
+            wait_for_new_peer: None,
+            select_next_peer: Some(find_peer_request),
         }
     }
 }
@@ -145,7 +204,18 @@ impl Future for RemoteRegistryConnectionHandler {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            if let Some(mut current_peer) = self.current_peer.take() {
+            if let Some(find_peer_request) = self.select_next_peer.take() {
+                let addr = try_ready!(self.next_addr.poll());
+
+                let connect = ConnectWithStrategies::new(
+                    self.strategies.clone(),
+                    self.handle.clone(),
+                    addr,
+                    self.local_peer_identifier.clone(),
+                    StreamHello::Registry,
+                );
+                self.wait_for_new_peer = Some((connect, find_peer_request));
+            } else if let Some(mut current_peer) = self.current_peer.take() {
                 match current_peer.poll() {
                     Ok(NotReady) => {
                         self.current_peer = Some(current_peer);
@@ -161,34 +231,16 @@ impl Future for RemoteRegistryConnectionHandler {
                 };
 
                 let find_peer_request = current_peer.into_find_peer_request();
-                let connect = ConnectWithStrategies::new(
-                    self.strategies.clone(),
-                    self.handle.clone(),
-                    self.next_remote_peer
-                        .next()
-                        .expect("next_remote_peer should always return a `SocketAddr`."),
-                    self.local_peer_identifier.clone(),
-                    StreamHello::Registry,
-                );
-                self.wait_for_new_peer = Some((connect, find_peer_request));
+                self.select_next_peer = Some(find_peer_request);
             } else {
                 let (mut connect, find_peer_request) = self
                     .wait_for_new_peer
                     .take()
-                    .expect("wait_for_new_peer can not be None!");
+                    .expect("wait_for_new_peer can not be `None`!");
                 match connect.poll() {
                     Err(e) => {
                         println!("RemoteRegistryConnectionHandler connection error: {:?}", e);
-                        let connect = ConnectWithStrategies::new(
-                            self.strategies.clone(),
-                            self.handle.clone(),
-                            self.next_remote_peer
-                                .next()
-                                .expect("next_remote_peer should always return a `SocketAddr`."),
-                            self.local_peer_identifier.clone(),
-                            StreamHello::Registry,
-                        );
-                        self.wait_for_new_peer = Some((connect, find_peer_request));
+                        self.select_next_peer = Some(find_peer_request);
                     }
                     Ok(NotReady) => {
                         self.wait_for_new_peer = Some((connect, find_peer_request));
