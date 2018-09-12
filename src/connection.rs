@@ -96,18 +96,17 @@ impl Future for NewConnectionFuture {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.new_con_recv.poll().map(|r| {
-            r.map(|v| {
-                Connection::new(
-                    v,
-                    self.local_peer_identifier.clone(),
-                    self.new_con_handle.clone(),
-                    self.pass_stream_to_context.clone(),
-                    self.registry.clone(),
-                    self.handle.clone(),
-                    self.authenticator.clone(),
-                )
-            })
+        self.new_con_recv.poll().and_then(|r| match r {
+            Ready(v) => Ok(Ready(Connection::new(
+                v,
+                self.local_peer_identifier.clone(),
+                self.new_con_handle.clone(),
+                self.pass_stream_to_context.clone(),
+                self.registry.clone(),
+                self.handle.clone(),
+                self.authenticator.clone(),
+            )?)),
+            NotReady => Ok(NotReady),
         })
     }
 }
@@ -133,10 +132,11 @@ impl Connection {
         registry: Registry,
         handle: Handle,
         mut authenticator: Authenticator,
-    ) -> Connection {
-        let peer_identifier = authenticator
-            .incoming_con_pub_key(&con)
-            .expect("Could not find public key for connection!");
+    ) -> Result<Connection> {
+        let peer_identifier = match authenticator.incoming_con_pub_key(&con) {
+            Some(key) => key,
+            None => bail!("Could not find public key for connection!"),
+        };
 
         let new_stream_handle = NewStreamHandle::new(
             peer_identifier.clone(),
@@ -147,7 +147,7 @@ impl Connection {
         let registration_token =
             registry.register_peer(peer_identifier.clone(), new_stream_handle.clone());
 
-        Connection {
+        Ok(Connection {
             con,
             handle,
             pass_stream_to_context,
@@ -156,7 +156,7 @@ impl Connection {
             registry,
             peer_identifier,
             registration_token,
-        }
+        })
     }
 
     pub fn new_stream_with_hello(&mut self, stream_hello: StreamHello) -> NewStreamFuture {

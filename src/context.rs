@@ -13,8 +13,9 @@ use failure;
 
 use futures::{
     stream::{futures_unordered, FuturesUnordered, StreamFuture},
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender}, Async::{NotReady, Ready}, Future, Poll,
-    Stream as FStream,
+    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    Async::{NotReady, Ready},
+    Future, Poll, Stream as FStream,
 };
 
 use std::{net::SocketAddr, time::Duration};
@@ -67,8 +68,7 @@ impl Context {
                     handle.clone(),
                     authenticator.clone(),
                 )
-            })
-            .collect::<Vec<_>>();
+            }).collect::<Vec<_>>();
 
         if !config.remote_peers.is_empty() {
             let remote_registry = remote_registry::RemoteRegistry::new(
@@ -150,7 +150,11 @@ impl Context {
                         self.handle.clone(),
                         self.authenticator.clone(),
                     );
-                    self.handle.spawn(con);
+
+                    match con {
+                        Ok(con) => self.handle.spawn(con),
+                        Err(e) => eprintln!("{:?}", e),
+                    }
                     self.strategies.push(strat.into_future());
                 }
                 Ok(Ready(Some((None, _)))) => {
@@ -198,8 +202,7 @@ fn create_connection_to_peer(
                     RegistryResult::NotFound => Err(Error::PeerNotFound(peer)),
                 }
             },
-        )
-        .flatten()
+        ).flatten()
 }
 
 impl FStream for Context {
