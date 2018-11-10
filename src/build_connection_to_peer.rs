@@ -59,8 +59,6 @@ use PubKeyHash;
 
 use std::{net::SocketAddr, time::Duration};
 
-use tokio_core::reactor::Handle;
-
 use pnet_datalink::interfaces;
 
 use itertools::Itertools;
@@ -72,6 +70,8 @@ use futures::{
 
 use state_machine_future::RentToOwn;
 
+use tokio;
+
 /// `BuildConnectionToPeer` is used by the initiating side of the new connection.
 #[derive(StateMachineFuture)]
 pub enum BuildConnectionToPeer {
@@ -79,7 +79,6 @@ pub enum BuildConnectionToPeer {
     WaitingForProxyStream {
         proxy_stream: NewStreamFuture,
         timeout: Duration,
-        handle: Handle,
         new_con_handle: NewConnectionHandle,
         new_stream_handle: NewStreamHandle,
         peer_identifier: PubKeyHash,
@@ -89,7 +88,6 @@ pub enum BuildConnectionToPeer {
     WaitingForInternetAddressInformation {
         proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
         timeout: Duration,
-        handle: Handle,
         new_con_handle: NewConnectionHandle,
         new_stream_handle: NewStreamHandle,
         peer_identifier: PubKeyHash,
@@ -99,7 +97,6 @@ pub enum BuildConnectionToPeer {
     WaitingForExchangeAddressInformation {
         proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
         timeout: Duration,
-        handle: Handle,
         new_con_handle: NewConnectionHandle,
         new_stream_handle: NewStreamHandle,
         peer_identifier: PubKeyHash,
@@ -109,7 +106,6 @@ pub enum BuildConnectionToPeer {
     WaitingForConnection {
         timeout: Timeout,
         new_cons: FuturesUnordered<NewConnectionFuture>,
-        handle: Handle,
         proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
         local_peer_identifier: PubKeyHash,
         peer_identifier: PubKeyHash,
@@ -153,7 +149,6 @@ impl BuildConnectionToPeer {
         new_con_handle: NewConnectionHandle,
         mut new_stream_handle: NewStreamHandle,
         timeout: Duration,
-        handle: Handle,
     ) -> BuildConnectionToPeerFuture {
         let proxy_stream = new_stream_handle.new_stream_with_hello(
             StreamHello::ProxyBuildConnectionToPeer(peer_identifier.clone()),
@@ -162,7 +157,6 @@ impl BuildConnectionToPeer {
         BuildConnectionToPeer::start(
             proxy_stream,
             timeout,
-            handle,
             new_con_handle,
             new_stream_handle,
             peer_identifier,
@@ -179,7 +173,6 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
         let wait = wait.take();
         transition!(WaitingForInternetAddressInformation {
             proxy_stream: proxy_stream.into(),
-            handle: wait.handle,
             new_stream_handle: wait.new_stream_handle,
             new_con_handle: wait.new_con_handle,
             timeout: wait.timeout,
@@ -214,7 +207,6 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
 
         transition!(WaitingForExchangeAddressInformation {
             proxy_stream: wait.proxy_stream,
-            handle: wait.handle,
             new_stream_handle: wait.new_stream_handle,
             new_con_handle: wait.new_con_handle,
             timeout: wait.timeout,
@@ -237,7 +229,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
         };
 
         let mut wait = wait.take();
-        let timeout = Timeout::new(wait.timeout, &wait.handle);
+        let timeout = Timeout::new(wait.timeout);
         let new_cons = futures_unordered(
             addresses
                 .into_iter()
@@ -248,7 +240,6 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
             proxy_stream: wait.proxy_stream,
             timeout,
             new_cons,
-            handle: wait.handle,
             local_peer_identifier: wait.local_peer_identifier,
             peer_identifier: wait.peer_identifier,
             new_stream_handle: wait.new_stream_handle,
@@ -286,7 +277,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
         let new_stream =
             new_con.new_stream_with_hello(StreamHello::User(wait.local_peer_identifier.clone()));
 
-        wait.handle.spawn(new_con);
+        tokio::spawn(new_con);
 
         transition!(WaitingForStream {
             new_stream,

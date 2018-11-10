@@ -12,11 +12,11 @@ use std::time::Duration;
 
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
-use tokio_core::reactor::Handle;
-
 use picoquic;
 
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut};
+
+use tokio::runtime::TaskExecutor;
 
 struct StrategyWrapper {
     context: picoquic::Context,
@@ -25,7 +25,7 @@ struct StrategyWrapper {
 impl StrategyWrapper {
     fn new(
         hconfig: &Config,
-        handle: Handle,
+        handle: TaskExecutor,
         authenticator: Authenticator,
     ) -> Result<StrategyWrapper> {
         let mut config = picoquic::Config::clone_from(&hconfig.quic_config);
@@ -34,7 +34,7 @@ impl StrategyWrapper {
         config.enable_client_authentication();
         config.set_verify_certificate_handler(authenticator);
 
-        let context = picoquic::Context::new(&hconfig.quic_listen_address, &handle, config)?;
+        let context = picoquic::Context::new(&hconfig.quic_listen_address, handle, config)?;
 
         Ok(StrategyWrapper { context })
     }
@@ -102,8 +102,7 @@ impl FStream for ConnectionWrapper {
                         ))
                     })
                 })
-            })
-            .map_err(|e| e.into())
+            }).map_err(|e| e.into())
     }
 }
 
@@ -176,7 +175,7 @@ impl FStream for StreamWrapper {
 }
 
 impl Sink for StreamWrapper {
-    type SinkItem = BytesMut;
+    type SinkItem = Bytes;
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
@@ -284,7 +283,11 @@ impl NewStream for NewStreamHandleWrapper {
     }
 }
 
-pub fn init(handle: Handle, config: &Config, authenticator: Authenticator) -> Result<Strategy> {
+pub fn init(
+    handle: TaskExecutor,
+    config: &Config,
+    authenticator: Authenticator,
+) -> Result<Strategy> {
     Ok(Strategy::new(StrategyWrapper::new(
         config,
         handle,

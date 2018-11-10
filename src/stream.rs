@@ -11,7 +11,7 @@ use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_serde_json::{ReadJson, WriteJson};
 
-use tokio_io::{codec::length_delimited, AsyncRead, AsyncWrite};
+use tokio::{codec::{Framed, LengthDelimitedCodec}, io::{AsyncRead, AsyncWrite}};
 
 use serde::{Deserialize, Serialize};
 
@@ -125,14 +125,14 @@ impl Future for NewStreamFuture {
 }
 
 pub type ProtocolStream<P> =
-    WriteJson<ReadJson<length_delimited::Framed<strategies::Stream>, P>, P>;
+    WriteJson<ReadJson<Framed<strategies::Stream, LengthDelimitedCodec>, P>, P>;
 
 impl<P> Into<ProtocolStream<P>> for strategies::Stream
 where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     fn into(self) -> ProtocolStream<P> {
-        WriteJson::new(ReadJson::new(length_delimited::Framed::new(self)))
+        WriteJson::new(ReadJson::new(Framed::new(self, LengthDelimitedCodec::new())))
     }
 }
 
@@ -141,7 +141,7 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     fn into(self) -> ProtocolStream<P> {
-        WriteJson::new(ReadJson::new(length_delimited::Framed::new(self.into())))
+        WriteJson::new(ReadJson::new(Framed::new(self.into(), LengthDelimitedCodec::new())))
     }
 }
 

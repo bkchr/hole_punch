@@ -7,13 +7,13 @@ use PubKeyHash;
 
 use std::{net::SocketAddr, time::Duration};
 
-use tokio_core::reactor::Handle;
-
 use futures::{
     Async::{NotReady, Ready}, Future, Poll,
 };
 
 use state_machine_future::RentToOwn;
+
+use tokio;
 
 #[derive(StateMachineFuture)]
 enum ConnectStateMachine {
@@ -21,7 +21,6 @@ enum ConnectStateMachine {
     InitConnect {
         strat: NewConnectionHandle,
         addr: SocketAddr,
-        handle: Handle,
         local_peer_identifier: PubKeyHash,
         hello_msg: StreamHello,
     },
@@ -29,7 +28,6 @@ enum ConnectStateMachine {
     WaitForConnection {
         wait: NewConnectionFuture,
         timeout: Timeout,
-        handle: Handle,
         local_peer_identifier: PubKeyHash,
         hello_msg: StreamHello,
     },
@@ -51,13 +49,11 @@ impl PollConnectStateMachine for ConnectStateMachine {
         let mut init = init.take();
 
         let wait = init.strat.new_connection(init.addr);
-        let timeout = Timeout::new(Duration::from_secs(2), &init.handle);
-        let handle = init.handle;
+        let timeout = Timeout::new(Duration::from_secs(2));
 
         transition!(WaitForConnection {
             wait,
             timeout,
-            handle,
             local_peer_identifier: init.local_peer_identifier,
             hello_msg: init.hello_msg
         })
@@ -75,7 +71,7 @@ impl PollConnectStateMachine for ConnectStateMachine {
 
         let wait = con.new_stream_with_hello(wait_old.hello_msg);
 
-        wait_old.handle.spawn(con);
+        tokio::spawn(con);
 
         transition!(WaitForConnectStream { timeout, wait })
     }
@@ -95,7 +91,6 @@ pub struct ConnectWithStrategies {
     strategies: Vec<NewConnectionHandle>,
     connect: ConnectStateMachineFuture,
     addr: SocketAddr,
-    handle: Handle,
     local_peer_identifier: PubKeyHash,
     hello_msg: StreamHello,
 }
@@ -103,7 +98,6 @@ pub struct ConnectWithStrategies {
 impl ConnectWithStrategies {
     pub(crate) fn new(
         mut strategies: Vec<NewConnectionHandle>,
-        handle: Handle,
         addr: SocketAddr,
         local_peer_identifier: PubKeyHash,
         hello_msg: StreamHello,
@@ -118,11 +112,9 @@ impl ConnectWithStrategies {
             connect: ConnectStateMachine::start(
                 strategy,
                 addr,
-                handle.clone(),
                 local_peer_identifier.clone(),
                 hello_msg.clone(),
             ),
-            handle,
             local_peer_identifier,
             hello_msg,
         }
@@ -145,7 +137,6 @@ impl Future for ConnectWithStrategies {
                         self.connect = ConnectStateMachine::start(
                             strat,
                             self.addr,
-                            self.handle.clone(),
                             self.local_peer_identifier.clone(),
                             self.hello_msg.clone(),
                         );

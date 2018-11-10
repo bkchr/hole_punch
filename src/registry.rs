@@ -28,7 +28,7 @@ pub enum RegistryResult {
     NotFound,
 }
 
-pub trait RegistryProvider {
+pub trait RegistryProvider: Send {
     fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>>;
 }
 

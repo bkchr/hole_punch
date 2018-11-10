@@ -10,11 +10,9 @@ use futures::{
     Async::{NotReady, Ready}, Future, Poll, Sink, StartSend, Stream as FStream,
 };
 
-use tokio_core::reactor::Handle;
+use tokio::{runtime::TaskExecutor, io::{AsyncRead, AsyncWrite} };
 
-use tokio_io::{AsyncRead, AsyncWrite};
-
-use bytes::BytesMut;
+use bytes::{Bytes, BytesMut };
 
 use objekt;
 
@@ -62,12 +60,12 @@ impl LocalAddressInformation for Strategy {
 /// The super `Connection` trait. We need this hack, to store the `inner` of the connection
 /// in a `Box`.
 trait ConnectionTrait:
-    FStream + LocalAddressInformation + PeerAddressInformation + NewStream + GetConnectionId
+    FStream + LocalAddressInformation + PeerAddressInformation + NewStream + GetConnectionId + Send
 {
 }
 
 impl<
-        T: FStream + LocalAddressInformation + PeerAddressInformation + NewStream + GetConnectionId,
+        T: FStream + LocalAddressInformation + PeerAddressInformation + NewStream + GetConnectionId + Send,
     > ConnectionTrait for T
 {
 }
@@ -147,13 +145,13 @@ impl<
 }
 
 pub struct Stream {
-    inner: Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>>,
+    inner: Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = Bytes, SinkError = Error>>,
     read_overflow: Option<BytesMut>,
 }
 
 impl Stream {
     fn new<
-        C: StreamTrait<Item = BytesMut, Error = Error, SinkItem = BytesMut, SinkError = Error>
+        C: StreamTrait<Item = BytesMut, Error = Error, SinkItem = Bytes, SinkError = Error>
             + 'static,
     >(
         inner: C,
@@ -196,7 +194,7 @@ impl FStream for Stream {
 }
 
 impl Sink for Stream {
-    type SinkItem = BytesMut;
+    type SinkItem = Bytes;
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
@@ -257,7 +255,7 @@ impl Read for Stream {
 impl Write for Stream {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         // TODO find a way to check if the Sink can send, before we try to write!
-        let res = self.inner.start_send(BytesMut::from(buf))?;
+        let res = self.inner.start_send(Bytes::from(buf))?;
 
         if res.is_ready() {
             Ok(buf.len())
@@ -298,7 +296,7 @@ pub trait NewConnection {
 }
 
 pub struct NewTypeFuture<T> {
-    inner: Box<Future<Item = T, Error = Error>>,
+    inner: Box<Future<Item = T, Error = Error> + Send>,
 }
 
 impl<T> Future for NewTypeFuture<T> {
@@ -310,8 +308,8 @@ impl<T> Future for NewTypeFuture<T> {
     }
 }
 
-impl<T> NewTypeFuture<T> {
-    fn new<F: Future<Item = T, Error = Error> + 'static>(inner: F) -> NewTypeFuture<T> {
+impl<T: Send> NewTypeFuture<T> {
+    fn new<F: Future<Item = T, Error = Error> + 'static + Send>(inner: F) -> NewTypeFuture<T> {
         let inner = Box::new(inner);
         NewTypeFuture { inner }
     }
@@ -320,8 +318,8 @@ impl<T> NewTypeFuture<T> {
 pub type NewStreamFuture = NewTypeFuture<Stream>;
 pub type NewConnectionFuture = NewTypeFuture<Connection>;
 
-trait NewConnectionHandleTrait: NewConnection + objekt::Clone {}
-impl<T: NewConnection + objekt::Clone> NewConnectionHandleTrait for T {}
+trait NewConnectionHandleTrait: NewConnection + objekt::Clone + Send {}
+impl<T: NewConnection + objekt::Clone + Send> NewConnectionHandleTrait for T {}
 
 pub struct NewConnectionHandle {
     inner: Box<NewConnectionHandleTrait>,
@@ -336,7 +334,7 @@ impl Clone for NewConnectionHandle {
 }
 
 impl NewConnectionHandle {
-    fn new<T: NewConnection + Clone + 'static>(inner: T) -> NewConnectionHandle {
+    fn new<T: NewConnection + Clone + 'static + Send>(inner: T) -> NewConnectionHandle {
         let inner = Box::new(inner);
         NewConnectionHandle { inner }
     }
@@ -352,8 +350,8 @@ impl NewConnection for NewConnectionHandle {
     }
 }
 
-trait NewStreamHandleTrait: NewStream + objekt::Clone {}
-impl<T: NewStream + objekt::Clone> NewStreamHandleTrait for T {}
+trait NewStreamHandleTrait: NewStream + objekt::Clone + Send {}
+impl<T: NewStream + objekt::Clone + Send> NewStreamHandleTrait for T {}
 
 pub struct NewStreamHandle {
     inner: Box<NewStreamHandleTrait>,
@@ -368,7 +366,7 @@ impl Clone for NewStreamHandle {
 }
 
 impl NewStreamHandle {
-    fn new<T: NewStream + Clone + 'static>(inner: T) -> NewStreamHandle {
+    fn new<T: NewStream + Clone + 'static + Send>(inner: T) -> NewStreamHandle {
         let inner = Box::new(inner);
         NewStreamHandle { inner }
     }
@@ -385,7 +383,7 @@ impl NewStream for NewStreamHandle {
 }
 
 pub fn init(
-    handle: Handle,
+    handle: TaskExecutor,
     config: &Config,
     authenticator: Authenticator,
 ) -> Result<Vec<Strategy>> {

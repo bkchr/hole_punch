@@ -2,16 +2,16 @@ use error::*;
 
 use std::time::{Duration, Instant};
 
-use tokio_core::reactor::{self, Handle};
+use tokio::timer::Delay;
 
 use futures::{Future, Poll};
 
-pub struct Timeout(reactor::Timeout, Duration);
+pub struct Timeout(Delay, Duration);
 
 impl Timeout {
-    pub fn new(dur: Duration, handle: &Handle) -> Timeout {
+    pub fn new(dur: Duration) -> Timeout {
         Timeout(
-            reactor::Timeout::new(dur, handle).expect("no timeout!!"),
+            Delay::new(Instant::now() + dur),
             dur,
         )
     }

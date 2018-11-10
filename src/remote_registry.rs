@@ -23,17 +23,17 @@ use std::{
     time::Duration,
 };
 
-use tokio_core::reactor::Handle;
+use tokio::{ runtime::TaskExecutor};
 
 type ResultSender = oneshot::Sender<RegistryResult>;
 
 /// A common trait for resolving `Url`s and `SocketAddr`s to `SocketAddr`s.
-pub trait Resolve {
+pub trait Resolve: Send {
     /// Resolve the addresses, if possible.
     fn resolve(&self) -> Result<Vec<SocketAddr>>;
 }
 
-impl<T: ToSocketAddrs> Resolve for T {
+impl<T: ToSocketAddrs + Send> Resolve for T {
     fn resolve(&self) -> Result<Vec<SocketAddr>> {
         self.to_socket_addrs()
             .map(|v| v.collect::<Vec<_>>())
@@ -43,7 +43,6 @@ impl<T: ToSocketAddrs> Resolve for T {
 
 pub struct RemoteRegistry {
     find_peer_request: UnboundedSender<(PubKeyHash, ResultSender)>,
-    handle: Handle,
 }
 
 impl RemoteRegistry {
@@ -51,7 +50,7 @@ impl RemoteRegistry {
         resolvers: Vec<Box<dyn Resolve>>,
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
-        handle: Handle,
+        handle: TaskExecutor,
     ) -> RemoteRegistry {
         let (find_peer_request_send, find_peer_request_recv) = unbounded();
         let con_handler = RemoteRegistryConnectionHandler::new(
@@ -59,12 +58,10 @@ impl RemoteRegistry {
             strategies,
             local_peer_identifier,
             find_peer_request_recv,
-            handle.clone(),
         );
         handle.spawn(con_handler);
 
         RemoteRegistry {
-            handle,
             find_peer_request: find_peer_request_send,
         }
     }
@@ -79,7 +76,6 @@ impl RegistryProvider for RemoteRegistry {
         Box::new(TimeoutRequest::new(
             receiver,
             Duration::from_secs(10),
-            &self.handle,
         ))
     }
 }
@@ -93,11 +89,10 @@ impl TimeoutRequest {
     fn new(
         result_recv: oneshot::Receiver<RegistryResult>,
         timeout: Duration,
-        handle: &Handle,
     ) -> TimeoutRequest {
         TimeoutRequest {
             result_recv,
-            timeout: Timeout::new(timeout, handle),
+            timeout: Timeout::new(timeout),
         }
     }
 }
@@ -127,14 +122,14 @@ struct GetNextAddr {
 }
 
 impl GetNextAddr {
-    fn new(resolvers: Vec<Box<dyn Resolve>>, timeout: Duration, handle: &Handle) -> Self {
+    fn new(resolvers: Vec<Box<dyn Resolve>>, timeout: Duration) -> Self {
         let resolved_addrs = resolvers[0].resolve().unwrap_or_else(|_| Vec::new());
 
         GetNextAddr {
             resolvers,
             resolved_addrs,
             last_resolver: 0,
-            timeout: Timeout::new(timeout, handle),
+            timeout: Timeout::new(timeout),
         }
     }
 }
@@ -174,7 +169,6 @@ struct RemoteRegistryConnectionHandler {
     wait_for_new_peer: Option<(ConnectWithStrategies, FindPeerRequest)>,
     select_next_peer: Option<FindPeerRequest>,
     strategies: Vec<NewConnectionHandle>,
-    handle: Handle,
     local_peer_identifier: PubKeyHash,
 }
 
@@ -184,13 +178,11 @@ impl RemoteRegistryConnectionHandler {
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         find_peer_request: FindPeerRequest,
-        handle: Handle,
     ) -> RemoteRegistryConnectionHandler {
         RemoteRegistryConnectionHandler {
-            next_addr: GetNextAddr::new(resolvers, Duration::from_secs(5), &handle),
+            next_addr: GetNextAddr::new(resolvers, Duration::from_secs(5)),
             strategies,
             local_peer_identifier,
-            handle,
             current_peer: None,
             wait_for_new_peer: None,
             select_next_peer: Some(find_peer_request),
@@ -217,7 +209,6 @@ impl Future for RemoteRegistryConnectionHandler {
 
                 let connect = ConnectWithStrategies::new(
                     self.strategies.clone(),
-                    self.handle.clone(),
                     addr,
                     self.local_peer_identifier.clone(),
                     StreamHello::Registry,

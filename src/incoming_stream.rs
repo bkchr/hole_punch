@@ -14,14 +14,15 @@ use std::time::Duration;
 
 use futures::{Async::Ready, Future, Poll, Sink, Stream as FStream};
 
-use tokio_core::reactor::Handle;
+use bytes::BytesMut;
+
+use tokio;
 
 pub struct IncomingStream {
     stream: Option<ProtocolStream<StreamHello>>,
     timeout: Timeout,
     pass_stream_to_context: PassStreamToContext,
     registry: Registry,
-    handle: Handle,
     peer_identifier: PubKeyHash,
     new_stream_handle: NewStreamHandle,
     new_con_handle: NewConnectionHandle,
@@ -36,14 +37,12 @@ impl IncomingStream {
         peer_identifier: PubKeyHash,
         new_stream_handle: NewStreamHandle,
         new_con_handle: NewConnectionHandle,
-        handle: Handle,
     ) -> IncomingStream {
         IncomingStream {
             stream: Some(stream.into()),
-            timeout: Timeout::new(timeout, &handle),
+            timeout: Timeout::new(timeout),
             pass_stream_to_context,
             registry,
-            handle,
             peer_identifier,
             new_stream_handle,
             new_con_handle,
@@ -83,7 +82,6 @@ impl Future for IncomingStream {
             Some(StreamHello::UserProxy(peer)) => {
                 handle_proxy_stream(
                     peer,
-                    self.handle.clone(),
                     self.stream.take().unwrap().into(),
                     &self.registry,
                     StreamHello::User(self.peer_identifier.clone()),
@@ -91,7 +89,7 @@ impl Future for IncomingStream {
                 );
             }
             Some(StreamHello::Registry) => {
-                self.handle.spawn(
+                tokio::spawn(
                     remote_registry::IncomingStream::new(
                         self.stream.take().unwrap(),
                         self.registry.clone(),
@@ -99,7 +97,7 @@ impl Future for IncomingStream {
                 );
             }
             Some(StreamHello::BuildConnectionToPeer(peer)) => {
-                self.handle.spawn(
+                tokio::spawn(
                     BuildConnectionToPeerRemote::new(
                         self.stream.take().unwrap().into(),
                         peer,
@@ -112,7 +110,6 @@ impl Future for IncomingStream {
             Some(StreamHello::ProxyBuildConnectionToPeer(peer)) => {
                 handle_proxy_stream(
                     peer,
-                    self.handle.clone(),
                     self.stream.take().unwrap().into(),
                     &self.registry,
                     StreamHello::BuildConnectionToPeer(self.peer_identifier.clone()),
@@ -128,7 +125,6 @@ impl Future for IncomingStream {
 
 fn handle_proxy_stream<F>(
     target_peer_identifier: PubKeyHash,
-    handle: Handle,
     stream: strategies::Stream,
     registry: &Registry,
     hello_msg: StreamHello,
@@ -136,11 +132,11 @@ fn handle_proxy_stream<F>(
 ) where
     F: 'static
         + Fn(strategies::Stream, strategies::Stream)
-            -> Result<(strategies::Stream, strategies::Stream)>,
+            -> Result<(strategies::Stream, strategies::Stream)>
+        + Send,
 {
     if let Some(mut peer_new_stream_handle) = registry.peer(&target_peer_identifier) {
-        let inner_handle = handle.clone();
-        handle.spawn(
+        tokio::spawn(
             peer_new_stream_handle
                 .new_stream_with_hello(hello_msg)
                 .and_then(move |stream2| {
@@ -153,16 +149,15 @@ fn handle_proxy_stream<F>(
                     let (sink0, fstream0) = stream.split();
                     let (sink1, fstream1) = stream2.split();
 
-                    inner_handle.spawn(
+                    tokio::spawn(
                         sink0
-                            .send_all(fstream1)
-                            .select(sink1.send_all(fstream0))
+                            .send_all(fstream1.map(BytesMut::freeze))
+                            .select(sink1.send_all(fstream0.map(BytesMut::freeze)))
                             .map_err(|_| ())
                             .map(|_| ()),
                     );
                     Ok(())
-                })
-                .map_err(|e| println!("{:?}", e)),
+                }).map_err(|e| println!("{:?}", e)),
         );
     } else {
         // TODO: We should notify the other side and not just drop.

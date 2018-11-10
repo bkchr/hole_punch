@@ -20,7 +20,7 @@ use futures::{
 
 use std::{net::SocketAddr, time::Duration};
 
-use tokio_core::reactor::Handle;
+use tokio::{self, runtime::TaskExecutor };
 
 type NewStreamChannel = (strategies::Stream, PubKeyHash, NewStreamHandle, bool);
 
@@ -28,7 +28,6 @@ pub struct Context {
     new_stream_recv: UnboundedReceiver<NewStreamChannel>,
     pass_stream_to_context: PassStreamToContext,
     strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
-    handle: Handle,
     new_connection_handles: Vec<NewConnectionHandle>,
     authenticator: Authenticator,
     registry: Registry,
@@ -39,7 +38,7 @@ pub struct Context {
 impl Context {
     pub fn new(
         local_peer_identifier: PubKeyHash,
-        handle: Handle,
+        handle: TaskExecutor,
         config: Config,
     ) -> Result<Context> {
         let registry = Registry::new();
@@ -65,7 +64,6 @@ impl Context {
                     s.get_new_connection_handle(),
                     pass_stream_to_context.clone(),
                     registry.clone(),
-                    handle.clone(),
                     authenticator.clone(),
                 )
             }).collect::<Vec<_>>();
@@ -75,7 +73,7 @@ impl Context {
                 config.remote_peers,
                 new_connection_handles.clone(),
                 local_peer_identifier.clone(),
-                handle.clone(),
+                handle,
             );
             registry.add_registry_provider(remote_registry);
         }
@@ -84,7 +82,6 @@ impl Context {
             new_stream_recv,
             pass_stream_to_context,
             strategies: futures_unordered(strats.into_iter().map(|s| s.into_future())),
-            handle,
             new_connection_handles,
             authenticator,
             registry,
@@ -107,7 +104,6 @@ impl Context {
     ) -> impl Future<Item = Stream, Error = Error> {
         create_connection_to_peer(
             peer,
-            self.handle.clone(),
             &self.new_connection_handles,
             &self.registry,
             self.local_peer_identifier.clone(),
@@ -119,7 +115,6 @@ impl Context {
         CreateConnectionToPeerHandle::new(
             self.registry.clone(),
             self.new_connection_handles.clone(),
-            self.handle.clone(),
             self.local_peer_identifier.clone(),
         )
     }
@@ -142,17 +137,15 @@ impl Context {
                             strat.get_new_connection_handle(),
                             self.pass_stream_to_context.clone(),
                             self.registry.clone(),
-                            self.handle.clone(),
                             self.authenticator.clone(),
                         ),
                         self.pass_stream_to_context.clone(),
                         self.registry.clone(),
-                        self.handle.clone(),
                         self.authenticator.clone(),
                     );
 
                     match con {
-                        Ok(con) => self.handle.spawn(con),
+                        Ok(con) => { tokio::spawn(con); },
                         Err(e) => eprintln!("{:?}", e),
                     }
                     self.strategies.push(strat.into_future());
@@ -170,13 +163,11 @@ impl Context {
 
 fn create_connection_to_peer(
     peer: PubKeyHash,
-    handle: Handle,
     new_con_handles: &Vec<NewConnectionHandle>,
     registry: &Registry,
     local_peer_identifier: PubKeyHash,
     switch_to_proxy_timeout: Duration,
 ) -> impl Future<Item = Stream, Error = Error> {
-    let handle = handle.clone();
     // TODO: Don't do that.
     let new_connection_handle = new_con_handles.get(0).unwrap().clone();
 
@@ -196,7 +187,6 @@ fn create_connection_to_peer(
                             new_connection_handle,
                             new_stream_handle,
                             switch_to_proxy_timeout,
-                            handle,
                         )))
                     }
                     RegistryResult::NotFound => Err(Error::PeerNotFound(peer)),
@@ -251,7 +241,6 @@ impl PassStreamToContext {
 
 #[derive(Clone)]
 pub struct CreateConnectionToPeerHandle {
-    handle: Handle,
     registry: Registry,
     new_con_handles: Vec<NewConnectionHandle>,
     local_peer_identifier: PubKeyHash,
@@ -261,13 +250,11 @@ impl CreateConnectionToPeerHandle {
     fn new(
         registry: Registry,
         new_con_handles: Vec<NewConnectionHandle>,
-        handle: Handle,
         local_peer_identifier: PubKeyHash,
     ) -> CreateConnectionToPeerHandle {
         CreateConnectionToPeerHandle {
             registry,
             new_con_handles,
-            handle,
             local_peer_identifier,
         }
     }
@@ -286,7 +273,6 @@ impl CreateConnectionToPeerHandle {
     ) -> impl Future<Item = Stream, Error = Error> {
         create_connection_to_peer(
             peer,
-            self.handle.clone(),
             &self.new_con_handles,
             &self.registry,
             self.local_peer_identifier.clone(),

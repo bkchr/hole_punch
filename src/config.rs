@@ -89,7 +89,7 @@ impl ConfigBuilder {
 
     /// Adds a remote peer. The `Context` will always hold a connection to one of the known remote
     /// peers.
-    pub fn add_remote_peer(mut self, remote_peer: impl ToSocketAddrs + 'static) -> Self {
+    pub fn add_remote_peer(mut self, remote_peer: impl ToSocketAddrs + 'static + Send) -> Self {
         self.remote_peers.push(Box::new(remote_peer));
         self
     }

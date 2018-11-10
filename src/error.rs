@@ -11,11 +11,11 @@ use serde_json;
 
 use futures;
 
-use bincode;
-
 use openssl;
 
 use hex;
+
+use tokio::timer;
 
 pub type Result<T> = result::Result<T, Error>;
 
@@ -37,6 +37,8 @@ pub enum Error {
     Hex(#[cause] hex::FromHexError),
     #[fail(display = "Peer {} not found.", _0)]
     PeerNotFound(PubKeyHash),
+    #[fail(display = "Timeout error {}.", _0)]
+    Timeout(timer::Error),
 }
 
 impl From<Error> for io::Error {
@@ -75,12 +77,6 @@ impl From<failure::Error> for Error {
     }
 }
 
-impl From<bincode::Error> for Error {
-    fn from(err: bincode::Error) -> Error {
-        Error::Custom(err.into())
-    }
-}
-
 impl From<openssl::error::ErrorStack> for Error {
     fn from(err: openssl::error::ErrorStack) -> Error {
         Error::Openssl(err.into())
@@ -96,6 +92,12 @@ impl From<hex::FromHexError> for Error {
 impl From<&'static str> for Error {
     fn from(err: &'static str) -> Error {
         Error::Custom(::failure::err_msg::<&'static str>(err).into())
+    }
+}
+
+impl From<timer::Error> for Error {
+    fn from(err: timer::Error) -> Error {
+        Error::Timeout(err)
     }
 }
 

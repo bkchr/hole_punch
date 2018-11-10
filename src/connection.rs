@@ -15,12 +15,11 @@ use futures::{
     Future, Poll, Stream as FStream,
 };
 
-use tokio_core::reactor::Handle;
+use tokio;
 
 #[derive(Clone)]
 pub struct NewConnectionHandle {
     new_con: strategies::NewConnectionHandle,
-    handle: Handle,
     pass_stream_to_context: PassStreamToContext,
     registry: Registry,
     authenticator: Authenticator,
@@ -33,13 +32,11 @@ impl NewConnectionHandle {
         new_con: strategies::NewConnectionHandle,
         pass_stream_to_context: PassStreamToContext,
         registry: Registry,
-        handle: Handle,
         authenticator: Authenticator,
     ) -> NewConnectionHandle {
         NewConnectionHandle {
             new_con,
             pass_stream_to_context,
-            handle,
             registry,
             authenticator,
             local_peer_identifier,
@@ -53,7 +50,6 @@ impl NewConnectionHandle {
             self.clone(),
             self.pass_stream_to_context.clone(),
             self.registry.clone(),
-            self.handle.clone(),
             self.authenticator.clone(),
         )
     }
@@ -63,7 +59,6 @@ pub struct NewConnectionFuture {
     new_con_recv: strategies::NewConnectionFuture,
     pass_stream_to_context: PassStreamToContext,
     new_con_handle: NewConnectionHandle,
-    handle: Handle,
     registry: Registry,
     authenticator: Authenticator,
     local_peer_identifier: PubKeyHash,
@@ -76,14 +71,12 @@ impl NewConnectionFuture {
         new_con_handle: NewConnectionHandle,
         pass_stream_to_context: PassStreamToContext,
         registry: Registry,
-        handle: Handle,
         authenticator: Authenticator,
     ) -> NewConnectionFuture {
         NewConnectionFuture {
             new_con_recv,
             new_con_handle,
             pass_stream_to_context,
-            handle,
             registry,
             authenticator,
             local_peer_identifier,
@@ -103,7 +96,6 @@ impl Future for NewConnectionFuture {
                 self.new_con_handle.clone(),
                 self.pass_stream_to_context.clone(),
                 self.registry.clone(),
-                self.handle.clone(),
                 self.authenticator.clone(),
             )?)),
             NotReady => Ok(NotReady),
@@ -113,7 +105,6 @@ impl Future for NewConnectionFuture {
 
 pub struct Connection {
     con: strategies::Connection,
-    handle: Handle,
     pass_stream_to_context: PassStreamToContext,
     new_con_handle: NewConnectionHandle,
     new_stream_handle: NewStreamHandle,
@@ -130,7 +121,6 @@ impl Connection {
         new_con_handle: NewConnectionHandle,
         pass_stream_to_context: PassStreamToContext,
         registry: Registry,
-        handle: Handle,
         mut authenticator: Authenticator,
     ) -> Result<Connection> {
         let peer_identifier = match authenticator.incoming_con_pub_key(&con) {
@@ -149,7 +139,6 @@ impl Connection {
 
         Ok(Connection {
             con,
-            handle,
             pass_stream_to_context,
             new_con_handle,
             new_stream_handle,
@@ -210,9 +199,8 @@ impl Future for Connection {
                         self.peer_identifier.clone(),
                         self.new_stream_handle.clone(),
                         self.new_con_handle.clone(),
-                        self.handle.clone(),
                     );
-                    self.handle.spawn(
+                    tokio::spawn(
                         incoming_stream.map_err(|e| println!("IncomingStream error: {:?}", e)),
                     );
                 }
