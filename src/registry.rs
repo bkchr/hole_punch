@@ -1,3 +1,4 @@
+use context::SendFuture;
 use stream::NewStreamHandle;
 use PubKeyHash;
 
@@ -30,7 +31,7 @@ pub enum RegistryResult {
 
 pub trait RegistryProvider: Send {
     fn find_peer(&self, peer: &PubKeyHash)
-        -> Box<Future<Item = RegistryResult, Error = ()> + Send>;
+        -> Box<SendFuture<Item = RegistryResult, Error = ()>>;
 }
 
 struct Inner {
@@ -97,7 +98,7 @@ impl RegistryProvider for Inner {
     fn find_peer(
         &self,
         peer: &PubKeyHash,
-    ) -> Box<Future<Item = RegistryResult, Error = ()> + Send> {
+    ) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
         if let Some(handle) = self.connected_peers.get(peer) {
             Box::new(future::ok(RegistryResult::Found(handle.0.clone())))
         } else {
@@ -109,12 +110,12 @@ impl RegistryProvider for Inner {
 }
 
 struct SearchRemoteRegistries {
-    futures: FuturesUnordered<Box<Future<Item = RegistryResult, Error = ()> + Send>>,
+    futures: FuturesUnordered<Box<SendFuture<Item = RegistryResult, Error = ()>>>,
 }
 
 impl SearchRemoteRegistries {
     fn new(
-        itr: impl Iterator<Item = Box<Future<Item = RegistryResult, Error = ()> + Send>>,
+        itr: impl Iterator<Item = Box<SendFuture<Item = RegistryResult, Error = ()>>>,
     ) -> SearchRemoteRegistries {
         SearchRemoteRegistries {
             futures: futures_unordered(itr),
@@ -187,7 +188,7 @@ impl RegistryProvider for Registry {
     fn find_peer(
         &self,
         peer: &PubKeyHash,
-    ) -> Box<Future<Item = RegistryResult, Error = ()> + Send> {
+    ) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
         self.inner.lock().unwrap().find_peer(peer)
     }
 }

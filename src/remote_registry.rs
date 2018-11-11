@@ -1,5 +1,6 @@
 use connect::ConnectWithStrategies;
 use connection::NewConnectionHandle;
+use context::SendFuture;
 use error::*;
 use protocol::{Registry as RegistryProtocol, StreamHello};
 use registry::{Registry, RegistryProvider, RegistryResult};
@@ -71,7 +72,7 @@ impl RegistryProvider for RemoteRegistry {
     fn find_peer(
         &self,
         peer: &PubKeyHash,
-    ) -> Box<Future<Item = RegistryResult, Error = ()> + Send> {
+    ) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
         let (sender, receiver) = oneshot::channel();
         let _ = self
             .find_peer_request

@@ -1,3 +1,4 @@
+use context::SendFuture;
 use authenticator::Authenticator;
 use config::Config;
 use error::*;
@@ -304,7 +305,7 @@ pub trait NewConnection {
 }
 
 pub struct NewTypeFuture<T> {
-    inner: Box<Future<Item = T, Error = Error> + Send>,
+    inner: Box<SendFuture<Item = T, Error = Error>>,
 }
 
 impl<T> Future for NewTypeFuture<T> {
@@ -317,7 +318,7 @@ impl<T> Future for NewTypeFuture<T> {
 }
 
 impl<T: Send> NewTypeFuture<T> {
-    fn new<F: Future<Item = T, Error = Error> + 'static + Send>(inner: F) -> NewTypeFuture<T> {
+    fn new<F: SendFuture<Item = T, Error = Error> + 'static>(inner: F) -> NewTypeFuture<T> {
         let inner = Box::new(inner);
         NewTypeFuture { inner }
     }

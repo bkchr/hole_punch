@@ -24,6 +24,10 @@ use tokio::{self, runtime::TaskExecutor };
 
 type NewStreamChannel = (strategies::Stream, PubKeyHash, NewStreamHandle, bool);
 
+/// A `Future` that implements `Send`.
+pub trait SendFuture: Future + Send {}
+impl<T: Future + Send> SendFuture for T {}
+
 pub struct Context {
     new_stream_recv: UnboundedReceiver<NewStreamChannel>,
     pass_stream_to_context: PassStreamToContext,
@@ -93,7 +97,7 @@ impl Context {
     pub fn create_connection_to_peer(
         &self,
         peer: PubKeyHash,
-    ) -> impl Future<Item = Stream, Error = Error> {
+    ) -> impl SendFuture<Item = Stream, Error = Error> {
         self.create_connection_to_peer_with_custom_timeout(peer, Duration::from_secs(4))
     }
 
@@ -101,7 +105,7 @@ impl Context {
         &self,
         peer: PubKeyHash,
         switch_to_proxy_timeout: Duration,
-    ) -> impl Future<Item = Stream, Error = Error> {
+    ) -> impl SendFuture<Item = Stream, Error = Error> {
         create_connection_to_peer(
             peer,
             &self.new_connection_handles,
@@ -167,7 +171,7 @@ fn create_connection_to_peer(
     registry: &Registry,
     local_peer_identifier: PubKeyHash,
     switch_to_proxy_timeout: Duration,
-) -> impl Future<Item = Stream, Error = Error> {
+) -> impl SendFuture<Item = Stream, Error = Error> {
     // TODO: Don't do that.
     let new_connection_handle = new_con_handles.get(0).unwrap().clone();
 
@@ -175,7 +179,7 @@ fn create_connection_to_peer(
         .find_peer(&peer)
         .map_err(|_| Error::from("Unknown error while finding a peer"))
         .and_then(
-            move |find| -> Result<Box<Future<Item = Stream, Error = Error>>> {
+            move |find| -> Result<Box<SendFuture<Item = Stream, Error = Error>>> {
                 match find {
                     RegistryResult::Found(mut new_stream_handle) => {
                         Ok(Box::new(new_stream_handle.new_stream()))
@@ -262,7 +266,7 @@ impl CreateConnectionToPeerHandle {
     pub fn create_connection_to_peer(
         &self,
         peer: PubKeyHash,
-    ) -> impl Future<Item = Stream, Error = Error> {
+    ) -> impl SendFuture<Item = Stream, Error = Error> {
         self.create_connection_to_peer_with_custom_timeout(peer, Duration::from_secs(4))
     }
 
@@ -270,7 +274,7 @@ impl CreateConnectionToPeerHandle {
         &self,
         peer: PubKeyHash,
         switch_to_proxy_timeout: Duration,
-    ) -> impl Future<Item = Stream, Error = Error> {
+    ) -> impl SendFuture<Item = Stream, Error = Error> {
         create_connection_to_peer(
             peer,
             &self.new_con_handles,
