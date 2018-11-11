@@ -29,7 +29,8 @@ pub enum RegistryResult {
 }
 
 pub trait RegistryProvider: Send {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>>;
+    fn find_peer(&self, peer: &PubKeyHash)
+        -> Box<Future<Item = RegistryResult, Error = ()> + Send>;
 }
 
 struct Inner {
@@ -93,7 +94,10 @@ impl Inner {
 }
 
 impl RegistryProvider for Inner {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>> {
+    fn find_peer(
+        &self,
+        peer: &PubKeyHash,
+    ) -> Box<Future<Item = RegistryResult, Error = ()> + Send> {
         if let Some(handle) = self.connected_peers.get(peer) {
             Box::new(future::ok(RegistryResult::Found(handle.0.clone())))
         } else {
@@ -105,12 +109,12 @@ impl RegistryProvider for Inner {
 }
 
 struct SearchRemoteRegistries {
-    futures: FuturesUnordered<Box<Future<Item = RegistryResult, Error = ()>>>,
+    futures: FuturesUnordered<Box<Future<Item = RegistryResult, Error = ()> + Send>>,
 }
 
 impl SearchRemoteRegistries {
     fn new(
-        itr: impl Iterator<Item = Box<Future<Item = RegistryResult, Error = ()>>>,
+        itr: impl Iterator<Item = Box<Future<Item = RegistryResult, Error = ()> + Send>>,
     ) -> SearchRemoteRegistries {
         SearchRemoteRegistries {
             futures: futures_unordered(itr),
@@ -180,7 +184,10 @@ impl Registry {
 }
 
 impl RegistryProvider for Registry {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>> {
+    fn find_peer(
+        &self,
+        peer: &PubKeyHash,
+    ) -> Box<Future<Item = RegistryResult, Error = ()> + Send> {
         self.inner.lock().unwrap().find_peer(peer)
     }
 }
