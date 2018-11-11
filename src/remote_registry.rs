@@ -23,7 +23,7 @@ use std::{
     time::Duration,
 };
 
-use tokio::{ runtime::TaskExecutor};
+use tokio::runtime::TaskExecutor;
 
 type ResultSender = oneshot::Sender<RegistryResult>;
 
@@ -68,15 +68,15 @@ impl RemoteRegistry {
 }
 
 impl RegistryProvider for RemoteRegistry {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<Future<Item = RegistryResult, Error = ()>> {
+    fn find_peer(
+        &self,
+        peer: &PubKeyHash,
+    ) -> Box<Future<Item = RegistryResult, Error = ()> + Send> {
         let (sender, receiver) = oneshot::channel();
         let _ = self
             .find_peer_request
             .unbounded_send((peer.clone(), sender));
-        Box::new(TimeoutRequest::new(
-            receiver,
-            Duration::from_secs(10),
-        ))
+        Box::new(TimeoutRequest::new(receiver, Duration::from_secs(10)))
     }
 }
 
@@ -86,10 +86,7 @@ struct TimeoutRequest {
 }
 
 impl TimeoutRequest {
-    fn new(
-        result_recv: oneshot::Receiver<RegistryResult>,
-        timeout: Duration,
-    ) -> TimeoutRequest {
+    fn new(result_recv: oneshot::Receiver<RegistryResult>, timeout: Duration) -> TimeoutRequest {
         TimeoutRequest {
             result_recv,
             timeout: Timeout::new(timeout),
@@ -202,7 +199,7 @@ impl Future for RemoteRegistryConnectionHandler {
                     Ok(NotReady) => {
                         self.select_next_peer = Some(find_peer_request);
                         return Ok(NotReady);
-                    },
+                    }
                     Err(_) => unimplemented!(),
                     Ok(Ready(addr)) => addr,
                 };
