@@ -6,6 +6,7 @@ extern crate failure;
 extern crate futures;
 extern crate hex;
 extern crate itertools;
+#[macro_use]
 extern crate log;
 extern crate objekt;
 extern crate openssl;

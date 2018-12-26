@@ -182,7 +182,7 @@ impl Future for Connection {
                 Err(e) => {
                     self.registry
                         .unregister_peer(self.peer_identifier.clone(), self.registration_token);
-                    println!("Connection: {:?}", e);
+                    error!("Connection: {:?}", e);
                     return Ok(Ready(()));
                 }
                 Ok(Ready(None)) => {
@@ -201,7 +201,7 @@ impl Future for Connection {
                         self.new_con_handle.clone(),
                     );
                     tokio::spawn(
-                        incoming_stream.map_err(|e| println!("IncomingStream error: {:?}", e)),
+                        incoming_stream.map_err(|e| error!("IncomingStream error: {:?}", e)),
                     );
                 }
             }

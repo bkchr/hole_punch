@@ -93,7 +93,7 @@ impl Future for IncomingStream {
                     remote_registry::IncomingStream::new(
                         self.stream.take().unwrap(),
                         self.registry.clone(),
-                    ).map_err(|e| println!("remote_registry::IncomingStream error: {:?}", e)),
+                    ).map_err(|e| error!("IncomingStream error: {:?}", e)),
                 );
             }
             Some(StreamHello::BuildConnectionToPeer(peer)) => {
@@ -104,7 +104,7 @@ impl Future for IncomingStream {
                         self.new_stream_handle.clone(),
                         self.pass_stream_to_context.clone(),
                         self.new_con_handle.clone(),
-                    ).map_err(|e| println!("BuildConnectionToPeerRemote error: {:?}", e)),
+                    ).map_err(|e| error!("BuildConnectionToPeerRemote error: {:?}", e)),
                 );
             }
             Some(StreamHello::ProxyBuildConnectionToPeer(peer)) => {
@@ -157,10 +157,10 @@ fn handle_proxy_stream<F>(
                             .map(|_| ()),
                     );
                     Ok(())
-                }).map_err(|e| println!("{:?}", e)),
+                }).map_err(|e| error!("{:?}", e)),
         );
     } else {
         // TODO: We should notify the other side and not just drop.
-        println!("Could not find requested peer in registry.");
+        info!("Could not find requested peer in registry.");
     }
 }

@@ -150,7 +150,7 @@ impl Context {
 
                     match con {
                         Ok(con) => { tokio::spawn(con); },
-                        Err(e) => eprintln!("{:?}", e),
+                        Err(e) => error!("{:?}", e),
                     }
                     self.strategies.push(strat.into_future());
                 }

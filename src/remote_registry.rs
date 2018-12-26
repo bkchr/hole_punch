@@ -69,10 +69,7 @@ impl RemoteRegistry {
 }
 
 impl RegistryProvider for RemoteRegistry {
-    fn find_peer(
-        &self,
-        peer: &PubKeyHash,
-    ) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
         let (sender, receiver) = oneshot::channel();
         let _ = self
             .find_peer_request
@@ -101,7 +98,7 @@ impl Future for TimeoutRequest {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         if let Err(_) = self.timeout.poll() {
-            println!("RemoteRegistry request timed out.");
+            error!("RemoteRegistry request timed out.");
             Err(())?;
         }
 
@@ -219,7 +216,7 @@ impl Future for RemoteRegistryConnectionHandler {
                         return Ok(NotReady);
                     }
                     Err(e) => {
-                        println!(
+                        error!(
                             "RemoteRegistryConnectionHandler current peer error: {:?}",
                             e
                         );
@@ -236,7 +233,7 @@ impl Future for RemoteRegistryConnectionHandler {
                     .expect("wait_for_new_peer can not be `None`!");
                 match connect.poll() {
                     Err(e) => {
-                        println!("RemoteRegistryConnectionHandler connection error: {:?}", e);
+                        error!("RemoteRegistryConnectionHandler connection error: {:?}", e);
                         self.select_next_peer = Some(find_peer_request);
                     }
                     Ok(NotReady) => {
@@ -281,11 +278,11 @@ impl OutgoingStream {
 
     fn poll_find_peer_request(&mut self) -> Poll<(), Error> {
         loop {
-            let (peer, sender) = match try_ready!(
-                self.find_peer_request
-                    .poll()
-                    .map_err(|_| Error::from("poll_find_peer_request: Unknown error"))
-            ) {
+            let (peer, sender) = match try_ready!(self
+                .find_peer_request
+                .poll()
+                .map_err(|_| Error::from("poll_find_peer_request: Unknown error")))
+            {
                 Some(req) => req,
                 None => {
                     return Ok(Ready(()));

@@ -1,4 +1,4 @@
-use connection::{NewConnectionFuture, NewConnectionHandle};
+    use connection::{NewConnectionFuture, NewConnectionHandle};
 use error::*;
 use protocol::StreamHello;
 use stream::{NewStreamFuture, Stream};
@@ -130,7 +130,7 @@ impl Future for ConnectWithStrategies {
             Ok(Ready(con)) => Ok(Ready(con)),
             Ok(NotReady) => Ok(NotReady),
             Err(e) => {
-                eprintln!("error: {:?}", e);
+                error!("error: {:?}", e);
 
                 match self.strategies.pop() {
                     Some(mut strat) => {
