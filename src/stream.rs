@@ -4,14 +4,18 @@ use strategies::{self, LocalAddressInformation, NewStream};
 use PubKeyHash;
 
 use std::{
-    io::{self, Read, Write}, net::SocketAddr,
+    io::{self, Read, Write},
+    net::SocketAddr,
 };
 
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
 
 use tokio_serde_json::{ReadJson, WriteJson};
 
-use tokio::{codec::{Framed, LengthDelimitedCodec}, io::{AsyncRead, AsyncWrite}};
+use tokio::{
+    codec::{Framed, LengthDelimitedCodec},
+    io::{AsyncRead, AsyncWrite},
+};
 
 use serde::{Deserialize, Serialize};
 
@@ -132,7 +136,10 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     fn into(self) -> ProtocolStream<P> {
-        WriteJson::new(ReadJson::new(Framed::new(self, LengthDelimitedCodec::new())))
+        WriteJson::new(ReadJson::new(Framed::new(
+            self,
+            LengthDelimitedCodec::new(),
+        )))
     }
 }
 
@@ -141,7 +148,10 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     fn into(self) -> ProtocolStream<P> {
-        WriteJson::new(ReadJson::new(Framed::new(self.into(), LengthDelimitedCodec::new())))
+        WriteJson::new(ReadJson::new(Framed::new(
+            self.into(),
+            LengthDelimitedCodec::new(),
+        )))
     }
 }
 

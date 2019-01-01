@@ -20,7 +20,7 @@ use futures::{
 
 use std::{net::SocketAddr, time::Duration};
 
-use tokio::{self, runtime::TaskExecutor };
+use tokio::{self, runtime::TaskExecutor};
 
 type NewStreamChannel = (strategies::Stream, PubKeyHash, NewStreamHandle, bool);
 
@@ -70,7 +70,8 @@ impl Context {
                     registry.clone(),
                     authenticator.clone(),
                 )
-            }).collect::<Vec<_>>();
+            })
+            .collect::<Vec<_>>();
 
         if !config.remote_peers.is_empty() {
             let remote_registry = remote_registry::RemoteRegistry::new(
@@ -149,7 +150,9 @@ impl Context {
                     );
 
                     match con {
-                        Ok(con) => { tokio::spawn(con); },
+                        Ok(con) => {
+                            tokio::spawn(con);
+                        }
                         Err(e) => error!("{:?}", e),
                     }
                     self.strategies.push(strat.into_future());
@@ -196,7 +199,8 @@ fn create_connection_to_peer(
                     RegistryResult::NotFound => Err(Error::PeerNotFound(peer)),
                 }
             },
-        ).flatten()
+        )
+        .flatten()
 }
 
 impl FStream for Context {

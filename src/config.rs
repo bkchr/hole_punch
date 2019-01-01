@@ -2,7 +2,8 @@ use error::*;
 use remote_registry::Resolve;
 
 use std::{
-    net::{SocketAddr, ToSocketAddrs}, path::PathBuf,
+    net::{SocketAddr, ToSocketAddrs},
+    path::PathBuf,
 };
 
 use picoquic::{self, FileFormat};

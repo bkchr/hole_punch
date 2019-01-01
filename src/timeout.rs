@@ -10,10 +10,7 @@ pub struct Timeout(Delay, Duration);
 
 impl Timeout {
     pub fn new(dur: Duration) -> Timeout {
-        Timeout(
-            Delay::new(Instant::now() + dur),
-            dur,
-        )
+        Timeout(Delay::new(Instant::now() + dur), dur)
     }
 
     pub fn reset(&mut self) {

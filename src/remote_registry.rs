@@ -71,9 +71,9 @@ impl RemoteRegistry {
 impl RegistryProvider for RemoteRegistry {
     fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
         let (sender, receiver) = oneshot::channel();
-        let _ = self
-            .find_peer_request
-            .unbounded_send((peer.clone(), sender));
+        self.find_peer_request
+            .unbounded_send((peer.clone(), sender))
+            .expect("RemoteRegistryConnectionHandler should never end!");
         Box::new(TimeoutRequest::new(receiver, Duration::from_secs(10)))
     }
 }
@@ -202,6 +202,7 @@ impl Future for RemoteRegistryConnectionHandler {
                     Ok(Ready(addr)) => addr,
                 };
 
+                info!("RemoteRegistryConnectionHandler connects to: {}", addr);
                 let connect = ConnectWithStrategies::new(
                     self.strategies.clone(),
                     addr,
@@ -224,6 +225,7 @@ impl Future for RemoteRegistryConnectionHandler {
                     _ => {}
                 };
 
+                info!("RemoteRegistryConnectionHandler connection to peer closed!");
                 let find_peer_request = current_peer.into_find_peer_request();
                 self.select_next_peer = Some(find_peer_request);
             } else {

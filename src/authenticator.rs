@@ -14,7 +14,7 @@ use picoquic::{default_verify_certificate, ConnectionId, ConnectionType, VerifyC
 use openssl::error::ErrorStack;
 use openssl::stack::StackRef;
 use openssl::x509::store::{X509Store, X509StoreBuilder};
-use openssl::x509::{X509, X509Ref};
+use openssl::x509::{X509Ref, X509};
 
 fn create_certificate_store(certs: Option<Vec<PathBuf>>) -> Result<Option<X509Store>> {
     let certs = match certs {

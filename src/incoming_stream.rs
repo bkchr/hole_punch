@@ -59,12 +59,11 @@ impl Future for IncomingStream {
             bail!("timeout at IncomingStream::poll()");
         }
 
-        let msg = try_ready!(
-            self.stream
-                .as_mut()
-                .expect("Can not be polled twice!")
-                .poll()
-        );
+        let msg = try_ready!(self
+            .stream
+            .as_mut()
+            .expect("Can not be polled twice!")
+            .poll());
 
         match msg {
             Some(StreamHello::User(peer)) => {
@@ -93,7 +92,8 @@ impl Future for IncomingStream {
                     remote_registry::IncomingStream::new(
                         self.stream.take().unwrap(),
                         self.registry.clone(),
-                    ).map_err(|e| error!("IncomingStream error: {:?}", e)),
+                    )
+                    .map_err(|e| error!("IncomingStream error: {:?}", e)),
                 );
             }
             Some(StreamHello::BuildConnectionToPeer(peer)) => {
@@ -104,7 +104,8 @@ impl Future for IncomingStream {
                         self.new_stream_handle.clone(),
                         self.pass_stream_to_context.clone(),
                         self.new_con_handle.clone(),
-                    ).map_err(|e| error!("BuildConnectionToPeerRemote error: {:?}", e)),
+                    )
+                    .map_err(|e| error!("BuildConnectionToPeerRemote error: {:?}", e)),
                 );
             }
             Some(StreamHello::ProxyBuildConnectionToPeer(peer)) => {
@@ -131,8 +132,10 @@ fn handle_proxy_stream<F>(
     prepare_streams: F,
 ) where
     F: 'static
-        + Fn(strategies::Stream, strategies::Stream)
-            -> Result<(strategies::Stream, strategies::Stream)>
+        + Fn(
+            strategies::Stream,
+            strategies::Stream,
+        ) -> Result<(strategies::Stream, strategies::Stream)>
         + Send,
 {
     if let Some(mut peer_new_stream_handle) = registry.peer(&target_peer_identifier) {
@@ -157,7 +160,8 @@ fn handle_proxy_stream<F>(
                             .map(|_| ()),
                     );
                     Ok(())
-                }).map_err(|e| error!("{:?}", e)),
+                })
+                .map_err(|e| error!("{:?}", e)),
         );
     } else {
         // TODO: We should notify the other side and not just drop.

@@ -64,8 +64,9 @@ use pnet_datalink::interfaces;
 use itertools::Itertools;
 
 use futures::{
-    stream::{futures_unordered, FuturesUnordered}, Async::{NotReady, Ready}, Future, Poll, Sink,
-    Stream as FStream,
+    stream::{futures_unordered, FuturesUnordered},
+    Async::{NotReady, Ready},
+    Future, Poll, Sink, Stream as FStream,
 };
 
 use state_machine_future::RentToOwn;
@@ -370,12 +371,12 @@ impl Future for BuildConnectionToPeerRemote {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            match try_ready!(
-                self.stream
-                    .as_mut()
-                    .expect("Can not be polled twice!")
-                    .poll()
-            ) {
+            match try_ready!(self
+                .stream
+                .as_mut()
+                .expect("Can not be polled twice!")
+                .poll())
+            {
                 Some(BuildConnectionToPeerProtocol::InternetAddressInformation(addr)) => {
                     self.internet_addr = Some(addr);
                 }

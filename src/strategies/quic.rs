@@ -102,7 +102,8 @@ impl FStream for ConnectionWrapper {
                         ))
                     })
                 })
-            }).map_err(|e| e.into())
+            })
+            .map_err(|e| e.into())
     }
 }
 

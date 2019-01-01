@@ -1,11 +1,17 @@
 use error::*;
 
 use std::{
-    fmt, hash::{Hash, Hasher as StdHasher}, ops::Deref, result,
+    fmt,
+    hash::{Hash, Hasher as StdHasher},
+    ops::Deref,
+    result,
 };
 
 use openssl::{
-    error::ErrorStack, hash::{Hasher, MessageDigest}, pkey::{PKey, Private, Public}, x509::X509,
+    error::ErrorStack,
+    hash::{Hasher, MessageDigest},
+    pkey::{PKey, Private, Public},
+    x509::X509,
 };
 
 use openssl_sys;
@@ -202,7 +208,8 @@ mod tests {
     fn serialize_deserialize_pubkey_hash() {
         let hash = PubKeyHash::from_hashed_hex(
             "A9106DC0EE32264A045CF96B15DD25069B2A112FA5A464DA2F4F9FE5755DA23D",
-        ).unwrap();
+        )
+        .unwrap();
 
         let json = to_string(&hash).unwrap();
         let des_hash: PubKeyHash = from_str(&json).unwrap();

@@ -1,4 +1,5 @@
-    use connection::{NewConnectionFuture, NewConnectionHandle};
+
+use connection::{NewConnectionFuture, NewConnectionHandle};
 use error::*;
 use protocol::StreamHello;
 use stream::{NewStreamFuture, Stream};
@@ -8,7 +9,8 @@ use PubKeyHash;
 use std::{net::SocketAddr, time::Duration};
 
 use futures::{
-    Async::{NotReady, Ready}, Future, Poll,
+    Async::{NotReady, Ready},
+    Future, Poll,
 };
 
 use state_machine_future::RentToOwn;

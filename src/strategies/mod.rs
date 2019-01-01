@@ -1,6 +1,6 @@
-use context::SendFuture;
 use authenticator::Authenticator;
 use config::Config;
+use context::SendFuture;
 use error::*;
 
 use std::{
@@ -79,7 +79,8 @@ impl<
             + GetConnectionId
             + Send,
     > ConnectionTrait for T
-{}
+{
+}
 
 pub type ConnectionId = u64;
 
@@ -152,7 +153,8 @@ impl<
             + Send
             + GetConnectionId,
     > StreamTrait for T
-{}
+{
+}
 
 pub struct Stream {
     inner: Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = Bytes, SinkError = Error>>,

@@ -30,8 +30,7 @@ pub enum RegistryResult {
 }
 
 pub trait RegistryProvider: Send {
-    fn find_peer(&self, peer: &PubKeyHash)
-        -> Box<SendFuture<Item = RegistryResult, Error = ()>>;
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>>;
 }
 
 struct Inner {
@@ -63,14 +62,16 @@ impl Inner {
         peer: PubKeyHash,
         new_stream_handle: NewStreamHandle,
     ) -> RegistrationToken {
-        match self.connected_peers.entry(peer) {
+        match self.connected_peers.entry(peer.clone()) {
             Entry::Occupied(mut e) => {
+                info!("Overwrites peer: {}.", peer);
                 // Increase the token, if we already have an registered stream handle.
                 let token = e.get().1 + 1;
                 e.insert((new_stream_handle, token));
                 token
             }
             Entry::Vacant(e) => {
+                info!("Registers peer: {}.", peer);
                 e.insert((new_stream_handle, 0));
                 0
             }
@@ -82,6 +83,7 @@ impl Inner {
             Entry::Occupied(e) => {
                 // If the token is correct, we remove it
                 if e.get().1 == token {
+                    info!("Unregisters peer: {}.", peer);
                     e.remove();
                 }
             }
@@ -95,10 +97,7 @@ impl Inner {
 }
 
 impl RegistryProvider for Inner {
-    fn find_peer(
-        &self,
-        peer: &PubKeyHash,
-    ) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
         if let Some(handle) = self.connected_peers.get(peer) {
             Box::new(future::ok(RegistryResult::Found(handle.0.clone())))
         } else {
@@ -185,10 +184,7 @@ impl Registry {
 }
 
 impl RegistryProvider for Registry {
-    fn find_peer(
-        &self,
-        peer: &PubKeyHash,
-    ) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
         self.inner.lock().unwrap().find_peer(peer)
     }
 }
