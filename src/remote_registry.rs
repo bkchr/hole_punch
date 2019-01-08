@@ -21,10 +21,13 @@ use futures::{
 use std::{
     collections::{hash_map::Entry, HashMap},
     net::{SocketAddr, ToSocketAddrs},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
-use tokio::runtime::TaskExecutor;
+use tokio::{
+    runtime::TaskExecutor,
+    timer::{Delay, Interval},
+};
 
 use state_machine_future::RentToOwn;
 
@@ -279,6 +282,8 @@ struct OutgoingStream {
     requests: HashMap<PubKeyHash, Vec<ResultSender>>,
     new_stream_handle: NewStreamHandle,
     find_peer_request: FindPeerRequest,
+    ping_interval: Interval,
+    pong_timeout: Delay,
 }
 
 impl OutgoingStream {
@@ -295,6 +300,8 @@ impl OutgoingStream {
             new_stream_handle,
             find_peer_request,
             requests: HashMap::new(),
+            ping_interval: Interval::new(Instant::now(), Duration::from_secs(1)),
+            pong_timeout: Delay::new(Instant::now() + Duration::from_secs(3)),
         }
     }
 
@@ -331,6 +338,15 @@ impl OutgoingStream {
     fn into_find_peer_request(self) -> FindPeerRequest {
         self.find_peer_request
     }
+
+    fn poll_ping_and_pong(&mut self) -> Result<()> {
+        if let Ready(Some(_)) = self.ping_interval.poll()? {
+            self.stream.start_send(RegistryProtocol::Ping)?;
+            self.stream.poll_complete()?;
+        }
+
+        self.pong_timeout.poll().map(|_| ()).map_err(Into::into)
+    }
 }
 
 impl Future for OutgoingStream {
@@ -339,6 +355,7 @@ impl Future for OutgoingStream {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.poll_find_peer_request()?;
+        self.poll_ping_and_pong()?;
 
         loop {
             let msg = match try_ready!(self.stream.poll()) {
@@ -361,6 +378,10 @@ impl Future for OutgoingStream {
                             let _ = req.send(RegistryResult::NotFound);
                         });
                     }
+                }
+                RegistryProtocol::Pong => {
+                    self.pong_timeout
+                        .reset(Instant::now() + Duration::from_secs(3));
                 }
                 _ => {}
             };
