@@ -26,6 +26,8 @@ use std::{
 
 use tokio::runtime::TaskExecutor;
 
+use state_machine_future::RentToOwn;
+
 type ResultSender = oneshot::Sender<RegistryResult>;
 
 /// A common trait for resolving `Url`s and `SocketAddr`s to `SocketAddr`s.
@@ -54,13 +56,13 @@ impl RemoteRegistry {
         handle: TaskExecutor,
     ) -> RemoteRegistry {
         let (find_peer_request_send, find_peer_request_recv) = unbounded();
-        let con_handler = RemoteRegistryConnectionHandler::new(
+        let con_handler = ConnectionHandler::new(
             resolvers,
             strategies,
             local_peer_identifier,
             find_peer_request_recv,
         );
-        handle.spawn(con_handler);
+        handle.spawn(con_handler.map_err(|_| ()).map(|_| ()));
 
         RemoteRegistry {
             find_peer_request: find_peer_request_send,
@@ -131,7 +133,7 @@ impl GetNextAddr {
 
 impl Future for GetNextAddr {
     type Item = SocketAddr;
-    type Error = ();
+    type Error = Never;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         // Check in maximum one extra resolver per call.
@@ -158,99 +160,117 @@ impl Future for GetNextAddr {
     }
 }
 
-struct RemoteRegistryConnectionHandler {
-    next_addr: GetNextAddr,
-    current_peer: Option<OutgoingStream>,
-    wait_for_new_peer: Option<(ConnectWithStrategies, FindPeerRequest)>,
-    select_next_peer: Option<FindPeerRequest>,
+enum Never {}
+
+struct ConnectionHandlerContext {
+    next_peer_addr: GetNextAddr,
     strategies: Vec<NewConnectionHandle>,
     local_peer_identifier: PubKeyHash,
 }
 
-impl RemoteRegistryConnectionHandler {
+/// Handles the connection to the remote peer.
+#[derive(StateMachineFuture)]
+#[state_machine_future(context = "ConnectionHandlerContext")]
+enum ConnectionHandler {
+    /// Request the next peer address.
+    #[state_machine_future(start, transitions(ConnectToPeer))]
+    RequestNextPeerAddr { find_peer_request: FindPeerRequest },
+    /// Connect to a peer.
+    #[state_machine_future(transitions(HandleConnection, RequestNextPeerAddr))]
+    ConnectToPeer {
+        connect: ConnectWithStrategies,
+        find_peer_request: FindPeerRequest,
+    },
+    /// We have a connection to a peer and just poll this connection.
+    #[state_machine_future(transitions(RequestNextPeerAddr, ReadyState))]
+    HandleConnection { connection: OutgoingStream },
+    #[state_machine_future(ready)]
+    ReadyState(Never),
+    #[state_machine_future(error)]
+    ErrorState(Never),
+}
+
+impl ConnectionHandler {
     fn new(
         resolvers: Vec<Box<dyn Resolve>>,
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         find_peer_request: FindPeerRequest,
-    ) -> RemoteRegistryConnectionHandler {
-        RemoteRegistryConnectionHandler {
-            next_addr: GetNextAddr::new(resolvers, Duration::from_secs(5)),
+    ) -> ConnectionHandlerFuture {
+        let next_peer_addr = GetNextAddr::new(resolvers, Duration::from_secs(2));
+        let context = ConnectionHandlerContext {
+            next_peer_addr,
             strategies,
             local_peer_identifier,
-            current_peer: None,
-            wait_for_new_peer: None,
-            select_next_peer: Some(find_peer_request),
-        }
+        };
+
+        Self::start(find_peer_request, context)
     }
 }
 
-//TODO: Implement as state machine
-impl Future for RemoteRegistryConnectionHandler {
-    type Item = ();
-    type Error = ();
+impl PollConnectionHandler for ConnectionHandler {
+    fn poll_request_next_peer_addr<'a, 'c>(
+        state: &'a mut RentToOwn<'a, RequestNextPeerAddr>,
+        context: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
+    ) -> Poll<AfterRequestNextPeerAddr, Never> {
+        let addr = match context.next_peer_addr.poll() {
+            Ok(Ready(addr)) => addr,
+            _ => return Ok(NotReady),
+        };
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            if let Some(find_peer_request) = self.select_next_peer.take() {
-                let addr = match self.next_addr.poll() {
-                    Ok(NotReady) => {
-                        self.select_next_peer = Some(find_peer_request);
-                        return Ok(NotReady);
-                    }
-                    Err(_) => unimplemented!(),
-                    Ok(Ready(addr)) => addr,
-                };
+        info!("ConnectionHandler connects to: {}", addr);
 
-                info!("RemoteRegistryConnectionHandler connects to: {}", addr);
-                let connect = ConnectWithStrategies::new(
-                    self.strategies.clone(),
-                    addr,
-                    self.local_peer_identifier.clone(),
-                    StreamHello::Registry,
-                );
-                self.wait_for_new_peer = Some((connect, find_peer_request));
-            } else if let Some(mut current_peer) = self.current_peer.take() {
-                match current_peer.poll() {
-                    Ok(NotReady) => {
-                        self.current_peer = Some(current_peer);
-                        return Ok(NotReady);
-                    }
-                    Err(e) => {
-                        error!(
-                            "RemoteRegistryConnectionHandler current peer error: {:?}",
-                            e
-                        );
-                    }
-                    _ => {}
-                };
+        let find_peer_request = state.take().find_peer_request;
+        let connect = ConnectWithStrategies::new(
+            context.strategies.clone(),
+            addr,
+            context.local_peer_identifier.clone(),
+            StreamHello::Registry,
+        );
+        transition!(ConnectToPeer {
+            connect,
+            find_peer_request
+        })
+    }
 
-                info!("RemoteRegistryConnectionHandler connection to peer closed!");
-                let find_peer_request = current_peer.into_find_peer_request();
-                self.select_next_peer = Some(find_peer_request);
-            } else {
-                let (mut connect, find_peer_request) = self
-                    .wait_for_new_peer
-                    .take()
-                    .expect("wait_for_new_peer can not be `None`!");
-                match connect.poll() {
-                    Err(e) => {
-                        error!("RemoteRegistryConnectionHandler connection error: {:?}", e);
-                        self.select_next_peer = Some(find_peer_request);
-                    }
-                    Ok(NotReady) => {
-                        self.wait_for_new_peer = Some((connect, find_peer_request));
-                        return Ok(NotReady);
-                    }
-                    Ok(Ready(stream)) => {
-                        let new_stream_handle = stream.new_stream_handle().clone();
-                        let current_peer =
-                            OutgoingStream::new(stream, new_stream_handle, find_peer_request);
-                        self.current_peer = Some(current_peer);
-                    }
-                }
+    fn poll_connect_to_peer<'a, 'c>(
+        state: &'a mut RentToOwn<'a, ConnectToPeer>,
+        _: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
+    ) -> Poll<AfterConnectToPeer, Never> {
+        let stream = match state.connect.poll() {
+            Ok(Ready(stream)) => stream,
+            Err(e) => {
+                error!("ConnectionHandler connect error: {:?}", e);
+
+                let find_peer_request = state.take().find_peer_request;
+
+                transition!(RequestNextPeerAddr { find_peer_request })
             }
-        }
+            Ok(NotReady) => return Ok(NotReady),
+        };
+
+        info!("ConnectionHandler connected to peer.");
+
+        let find_peer_request = state.take().find_peer_request;
+        let new_stream_handle = stream.new_stream_handle().clone();
+        let connection = OutgoingStream::new(stream, new_stream_handle, find_peer_request);
+        transition!(HandleConnection { connection })
+    }
+
+    fn poll_handle_connection<'a, 'c>(
+        state: &'a mut RentToOwn<'a, HandleConnection>,
+        _: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
+    ) -> Poll<AfterHandleConnection, Never> {
+        match state.connection.poll() {
+            Ok(Ready(())) => {}
+            Err(e) => {
+                error!("ConnectionHandler connection error: {:?}", e);
+            }
+            Ok(NotReady) => return Ok(NotReady),
+        };
+
+        let find_peer_request = state.take().connection.into_find_peer_request();
+        transition!(RequestNextPeerAddr { find_peer_request })
     }
 }
 

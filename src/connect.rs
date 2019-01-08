@@ -1,4 +1,3 @@
-
 use connection::{NewConnectionFuture, NewConnectionHandle};
 use error::*;
 use protocol::StreamHello;
