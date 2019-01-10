@@ -76,6 +76,8 @@ impl Context {
         if !config.remote_peers.is_empty() {
             let remote_registry = remote_registry::RemoteRegistry::new(
                 config.remote_peers,
+                config.remote_registry_ping_interval,
+                config.remote_registry_address_resolve_timeout,
                 new_connection_handles.clone(),
                 local_peer_identifier.clone(),
                 handle,

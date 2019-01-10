@@ -4,6 +4,7 @@ use remote_registry::Resolve;
 use std::{
     net::{SocketAddr, ToSocketAddrs},
     path::PathBuf,
+    time::Duration,
 };
 
 use picoquic::{self, FileFormat};
@@ -20,6 +21,18 @@ pub struct ConfigBuilder {
     outgoing_ca_certificates: Option<Vec<PathBuf>>,
     /// The list of known remote peers.
     remote_peers: Vec<Box<dyn Resolve>>,
+    /// The interval used by the remote registry connection to ping the connected peer.
+    /// This duration * 3 will be taken as timeout, so if no answer was received in this time, the
+    /// connection will be closed.
+    /// Default: `5s`
+    remote_registry_ping_interval: Duration,
+    /// The timeout between resolving remote peer addresses.
+    /// If a connection to a remote peer is dropped and all addresses for a remote peer are tried.
+    /// The remote registry will try to resolve the addresse(s) of another peer. The timeout is
+    /// used to not create a hot loop when for example no internet connection is available and
+    /// no peer is resolvable/conntactable.
+    /// Default: `2s`
+    remote_registry_address_resolve_timeout: Duration,
 }
 
 impl ConfigBuilder {
@@ -31,6 +44,8 @@ impl ConfigBuilder {
             incoming_ca_certificates: None,
             outgoing_ca_certificates: None,
             remote_peers: Vec::new(),
+            remote_registry_ping_interval: Duration::from_secs(5),
+            remote_registry_address_resolve_timeout: Duration::from_secs(2),
         }
     }
 
@@ -88,8 +103,20 @@ impl ConfigBuilder {
         self
     }
 
-    /// Adds a remote peer. The `Context` will always hold a connection to one of the known remote
-    /// peers.
+    /// Set the remote registry ping interval.
+    pub fn set_remote_registry_ping_interval(mut self, interval: Duration) -> Self {
+        self.remote_registry_ping_interval = interval;
+        self
+    }
+
+    /// Set the timeout between address resolves in the remote registry.
+    pub fn set_remote_registry_address_resolve_timeout(mut self, timeout: Duration) -> Self {
+        self.remote_registry_address_resolve_timeout = timeout;
+        self
+    }
+
+    /// Adds a remote peer. The `Context` will always try to hold a connection to one of the known
+    /// remote peers.
     pub fn add_remote_peer(mut self, remote_peer: impl ToSocketAddrs + 'static + Send) -> Self {
         self.remote_peers.push(Box::new(remote_peer));
         self
@@ -114,6 +141,8 @@ impl ConfigBuilder {
             incoming_ca_certificates: self.incoming_ca_certificates,
             outgoing_ca_certificates: self.outgoing_ca_certificates,
             remote_peers: self.remote_peers,
+            remote_registry_ping_interval: self.remote_registry_ping_interval,
+            remote_registry_address_resolve_timeout: self.remote_registry_address_resolve_timeout,
         })
     }
 }
@@ -130,6 +159,10 @@ pub struct Config {
     pub(crate) outgoing_ca_certificates: Option<Vec<PathBuf>>,
     /// The list of known remote peers.
     pub(crate) remote_peers: Vec<Box<dyn Resolve>>,
+    /// The remote registry ping interval.
+    pub(crate) remote_registry_ping_interval: Duration,
+    /// The remote registry address resolve timeout.
+    pub(crate) remote_registry_address_resolve_timeout: Duration,
 }
 
 impl Config {

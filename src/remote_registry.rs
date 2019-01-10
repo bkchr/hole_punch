@@ -54,6 +54,8 @@ pub struct RemoteRegistry {
 impl RemoteRegistry {
     pub fn new(
         resolvers: Vec<Box<dyn Resolve>>,
+        ping_interval: Duration,
+        address_resolve_timeout: Duration,
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         handle: TaskExecutor,
@@ -64,6 +66,8 @@ impl RemoteRegistry {
             strategies,
             local_peer_identifier,
             find_peer_request_recv,
+            ping_interval,
+            address_resolve_timeout,
         );
         handle.spawn(con_handler.map_err(|_| ()).map(|_| ()));
 
@@ -78,7 +82,7 @@ impl RegistryProvider for RemoteRegistry {
         let (sender, receiver) = oneshot::channel();
         self.find_peer_request
             .unbounded_send((peer.clone(), sender))
-            .expect("RemoteRegistryConnectionHandler should never end!");
+            .expect("ConnectionHandler should never end!");
         Box::new(TimeoutRequest::new(receiver, Duration::from_secs(10)))
     }
 }
@@ -169,6 +173,7 @@ struct ConnectionHandlerContext {
     next_peer_addr: GetNextAddr,
     strategies: Vec<NewConnectionHandle>,
     local_peer_identifier: PubKeyHash,
+    ping_interval: Duration,
 }
 
 /// Handles the connection to the remote peer.
@@ -199,12 +204,15 @@ impl ConnectionHandler {
         strategies: Vec<NewConnectionHandle>,
         local_peer_identifier: PubKeyHash,
         find_peer_request: FindPeerRequest,
+        ping_interval: Duration,
+        address_resolve_timeout: Duration,
     ) -> ConnectionHandlerFuture {
-        let next_peer_addr = GetNextAddr::new(resolvers, Duration::from_secs(2));
+        let next_peer_addr = GetNextAddr::new(resolvers, address_resolve_timeout);
         let context = ConnectionHandlerContext {
             next_peer_addr,
             strategies,
             local_peer_identifier,
+            ping_interval,
         };
 
         Self::start(find_peer_request, context)
@@ -238,7 +246,7 @@ impl PollConnectionHandler for ConnectionHandler {
 
     fn poll_connect_to_peer<'a, 'c>(
         state: &'a mut RentToOwn<'a, ConnectToPeer>,
-        _: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
+        context: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
     ) -> Poll<AfterConnectToPeer, Never> {
         let stream = match state.connect.poll() {
             Ok(Ready(stream)) => stream,
@@ -256,7 +264,12 @@ impl PollConnectionHandler for ConnectionHandler {
 
         let find_peer_request = state.take().find_peer_request;
         let new_stream_handle = stream.new_stream_handle().clone();
-        let connection = OutgoingStream::new(stream, new_stream_handle, find_peer_request);
+        let connection = OutgoingStream::new(
+            stream,
+            new_stream_handle,
+            find_peer_request,
+            context.ping_interval.clone(),
+        );
         transition!(HandleConnection { connection })
     }
 
@@ -291,17 +304,19 @@ impl OutgoingStream {
         stream: T,
         new_stream_handle: NewStreamHandle,
         find_peer_request: FindPeerRequest,
+        ping_interval: Duration,
     ) -> OutgoingStream
     where
         T: Into<ProtocolStream<RegistryProtocol>>,
     {
+        let pong_interval = ping_interval * 3;
         OutgoingStream {
             stream: stream.into(),
             new_stream_handle,
             find_peer_request,
             requests: HashMap::new(),
-            ping_interval: Interval::new(Instant::now(), Duration::from_secs(1)),
-            pong_timeout: Delay::new(Instant::now() + Duration::from_secs(3)),
+            ping_interval: Interval::new(Instant::now(), ping_interval),
+            pong_timeout: Delay::new(Instant::now() + pong_interval),
         }
     }
 
@@ -425,6 +440,10 @@ impl Future for IncomingStream {
                         RegistryProtocol::NotFound(peer)
                     };
                     self.stream.start_send(answer)?;
+                    self.stream.poll_complete()?;
+                }
+                RegistryProtocol::Ping => {
+                    self.stream.start_send(RegistryProtocol::Pong)?;
                     self.stream.poll_complete()?;
                 }
                 _ => {}
