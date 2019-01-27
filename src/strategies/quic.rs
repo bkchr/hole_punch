@@ -4,7 +4,7 @@ use error::*;
 use strategies::{
     Connection, ConnectionId, GetConnectionId, LocalAddressInformation, NewConnection,
     NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture, NewStreamHandle,
-    PeerAddressInformation, Strategy, Stream,
+    PeerAddressInformation, SetSendChannelSize, Strategy, Stream,
 };
 
 use std::net::SocketAddr;
@@ -203,6 +203,12 @@ impl PeerAddressInformation for StreamWrapper {
 impl GetConnectionId for StreamWrapper {
     fn connection_id(&self) -> ConnectionId {
         self.con_id
+    }
+}
+
+impl SetSendChannelSize for StreamWrapper {
+    fn set_send_channel_size(&mut self, size: usize) {
+        self.stream.set_send_channel_size(size);
     }
 }
 

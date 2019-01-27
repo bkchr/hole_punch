@@ -183,6 +183,10 @@ pub trait PeerAddressInformation {
     fn peer_addr(&self) -> SocketAddr;
 }
 
+pub trait SetSendChannelSize {
+    fn set_send_channel_size(&mut self, size: usize);
+}
+
 impl LocalAddressInformation for Stream {
     fn local_addr(&self) -> SocketAddr {
         self.inner.local_addr()
