@@ -108,7 +108,7 @@ impl Future for NewStreamFuture {
                     _ => (self.peer_identifier.clone(), false),
                 };
 
-                let mut stream_hello: ProtocolStream<StreamHello> = v.into();
+                let mut stream_hello: ProtocolStrategiesStream<StreamHello> = v.into();
                 stream_hello
                     .start_send(self.stream_hello.clone())
                     .expect("start sending stream hello");
@@ -129,10 +129,13 @@ impl Future for NewStreamFuture {
     }
 }
 
-pub type ProtocolStream<P> =
-    WriteJson<ReadJson<Framed<strategies::Stream, LengthDelimitedCodec>, P>, P>;
+type StreamWithProtocol<S, P> = WriteJson<ReadJson<Framed<S, LengthDelimitedCodec>, P>, P>;
 
-impl<P> Into<ProtocolStream<P>> for strategies::Stream
+pub type ProtocolStream<P> = StreamWithProtocol<Stream, P>;
+
+pub type ProtocolStrategiesStream<P> = StreamWithProtocol<strategies::Stream, P>;
+
+impl<P> Into<ProtocolStream<P>> for Stream
 where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
@@ -144,13 +147,25 @@ where
     }
 }
 
-impl<P> Into<ProtocolStream<P>> for Stream
+impl<P> Into<ProtocolStrategiesStream<P>> for Stream
 where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    fn into(self) -> ProtocolStream<P> {
+    fn into(self) -> ProtocolStrategiesStream<P> {
         WriteJson::new(ReadJson::new(Framed::new(
             self.into(),
+            LengthDelimitedCodec::new(),
+        )))
+    }
+}
+
+impl<P> Into<ProtocolStrategiesStream<P>> for strategies::Stream
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    fn into(self) -> ProtocolStrategiesStream<P> {
+        WriteJson::new(ReadJson::new(Framed::new(
+            self,
             LengthDelimitedCodec::new(),
         )))
     }
@@ -162,11 +177,20 @@ impl Into<strategies::Stream> for Stream {
     }
 }
 
-impl<P> From<ProtocolStream<P>> for strategies::Stream
+impl<P> From<ProtocolStream<P>> for Stream
 where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
-    fn from(stream: ProtocolStream<P>) -> strategies::Stream {
+    fn from(stream: ProtocolStream<P>) -> Stream {
+        stream.into_inner().into_inner().into_inner()
+    }
+}
+
+impl<P> From<ProtocolStrategiesStream<P>> for strategies::Stream
+where
+    P: 'static + Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(stream: ProtocolStrategiesStream<P>) -> strategies::Stream {
         stream.into_inner().into_inner().into_inner()
     }
 }
@@ -207,6 +231,10 @@ impl Stream {
 
     pub fn local_addr(&self) -> SocketAddr {
         self.stream.local_addr()
+    }
+
+    pub fn peer_addr(&self) -> SocketAddr {
+        self.stream.peer_addr()
     }
 
     pub fn new_stream_handle(&self) -> &NewStreamHandle {

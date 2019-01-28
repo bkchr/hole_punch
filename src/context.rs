@@ -168,6 +168,10 @@ impl Context {
             }
         }
     }
+
+    pub fn local_peer_identifier(&self) -> &PubKeyHash {
+        &self.local_peer_identifier
+    }
 }
 
 fn create_connection_to_peer(

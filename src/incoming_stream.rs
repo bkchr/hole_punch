@@ -6,7 +6,7 @@ use crate::protocol::StreamHello;
 use crate::registry::Registry;
 use crate::remote_registry;
 use crate::strategies;
-use crate::stream::{NewStreamHandle, ProtocolStream};
+use crate::stream::{NewStreamHandle, ProtocolStrategiesStream};
 use crate::timeout::Timeout;
 use crate::PubKeyHash;
 
@@ -19,7 +19,7 @@ use bytes::BytesMut;
 use tokio;
 
 pub struct IncomingStream {
-    stream: Option<ProtocolStream<StreamHello>>,
+    stream: Option<ProtocolStrategiesStream<StreamHello>>,
     timeout: Timeout,
     pass_stream_to_context: PassStreamToContext,
     registry: Registry,

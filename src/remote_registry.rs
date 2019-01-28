@@ -5,7 +5,7 @@ use crate::error::*;
 use crate::protocol::{Registry as RegistryProtocol, StreamHello};
 use crate::registry::{Registry, RegistryProvider, RegistryResult};
 use crate::strategies;
-use crate::stream::{NewStreamHandle, ProtocolStream};
+use crate::stream::{NewStreamHandle, ProtocolStrategiesStream};
 use crate::timeout::Timeout;
 use crate::PubKeyHash;
 
@@ -29,7 +29,7 @@ use tokio::{
     timer::{Delay, Interval},
 };
 
-use state_machine_future::{RentToOwn, StateMachineFuture, transition};
+use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 
 type ResultSender = oneshot::Sender<RegistryResult>;
 
@@ -78,7 +78,10 @@ impl RemoteRegistry {
 }
 
 impl RegistryProvider for RemoteRegistry {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(
+        &self,
+        peer: &PubKeyHash,
+    ) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
         let (sender, receiver) = oneshot::channel();
         self.find_peer_request
             .unbounded_send((peer.clone(), sender))
@@ -264,11 +267,13 @@ impl PollConnectionHandler for ConnectionHandler {
 
         let find_peer_request = state.take().find_peer_request;
         let new_stream_handle = stream.new_stream_handle().clone();
+        let peer_identifier = stream.peer_identifier().clone();
         let connection = OutgoingStream::new(
             stream,
             new_stream_handle,
             find_peer_request,
             context.ping_interval.clone(),
+            peer_identifier,
         );
         transition!(HandleConnection { connection })
     }
@@ -291,12 +296,13 @@ impl PollConnectionHandler for ConnectionHandler {
 }
 
 struct OutgoingStream {
-    stream: ProtocolStream<RegistryProtocol>,
+    stream: ProtocolStrategiesStream<RegistryProtocol>,
     requests: HashMap<PubKeyHash, Vec<ResultSender>>,
     new_stream_handle: NewStreamHandle,
     find_peer_request: FindPeerRequest,
     ping_interval: Interval,
     pong_timeout: Delay,
+    peer_identifier: PubKeyHash,
 }
 
 impl OutgoingStream {
@@ -305,9 +311,10 @@ impl OutgoingStream {
         new_stream_handle: NewStreamHandle,
         find_peer_request: FindPeerRequest,
         ping_interval: Duration,
+        peer_identifier: PubKeyHash,
     ) -> OutgoingStream
     where
-        T: Into<ProtocolStream<RegistryProtocol>>,
+        T: Into<ProtocolStrategiesStream<RegistryProtocol>>,
     {
         let pong_interval = ping_interval * 3;
         OutgoingStream {
@@ -317,6 +324,7 @@ impl OutgoingStream {
             requests: HashMap::new(),
             ping_interval: Interval::new(Instant::now(), ping_interval),
             pong_timeout: Delay::new(Instant::now() + pong_interval),
+            peer_identifier,
         }
     }
 
@@ -337,14 +345,19 @@ impl OutgoingStream {
                 continue;
             }
 
-            match self.requests.entry(peer.clone()) {
-                Entry::Occupied(mut e) => {
-                    e.get_mut().push(sender);
-                }
-                Entry::Vacant(e) => {
-                    e.insert(vec![sender]);
-                    self.stream.start_send(RegistryProtocol::Find(peer))?;
-                    self.stream.poll_complete()?;
+            if peer == self.peer_identifier {
+                info!("Found peer({}) as remote registry provider locally.", peer);
+                let _ = sender.send(RegistryResult::Found(self.new_stream_handle.clone()));
+            } else {
+                match self.requests.entry(peer.clone()) {
+                    Entry::Occupied(mut e) => {
+                        e.get_mut().push(sender);
+                    }
+                    Entry::Vacant(e) => {
+                        e.insert(vec![sender]);
+                        self.stream.start_send(RegistryProtocol::Find(peer))?;
+                        self.stream.poll_complete()?;
+                    }
                 }
             }
         }
@@ -380,6 +393,7 @@ impl Future for OutgoingStream {
 
             match msg {
                 RegistryProtocol::Found(peer) => {
+                    info!("Found peer({}) remote.", peer);
                     if let Some(requests) = self.requests.remove(&peer) {
                         requests.into_iter().for_each(|req| {
                             let _ = req
@@ -388,6 +402,7 @@ impl Future for OutgoingStream {
                     }
                 }
                 RegistryProtocol::NotFound(peer) => {
+                    info!("Could not find peer({}) remote.", peer);
                     if let Some(requests) = self.requests.remove(&peer) {
                         requests.into_iter().for_each(|req| {
                             let _ = req.send(RegistryResult::NotFound);
@@ -405,7 +420,7 @@ impl Future for OutgoingStream {
 }
 
 pub struct IncomingStream {
-    stream: ProtocolStream<RegistryProtocol>,
+    stream: ProtocolStrategiesStream<RegistryProtocol>,
     registry: Registry,
 }
 
@@ -434,6 +449,7 @@ impl Future for IncomingStream {
 
             match msg {
                 RegistryProtocol::Find(peer) => {
+                    info!("Searching for peer: {}", peer);
                     let answer = if self.registry.has_peer(&peer) {
                         RegistryProtocol::Found(peer)
                     } else {

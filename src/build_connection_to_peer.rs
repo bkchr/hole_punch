@@ -53,7 +53,7 @@ use crate::context::PassStreamToContext;
 use crate::error::*;
 use crate::protocol::{BuildConnectionToPeer as BuildConnectionToPeerProtocol, StreamHello};
 use crate::strategies;
-use crate::stream::{NewStreamFuture, NewStreamHandle, ProtocolStream, Stream};
+use crate::stream::{NewStreamFuture, NewStreamHandle, ProtocolStrategiesStream, Stream};
 use crate::timeout::Timeout;
 use crate::PubKeyHash;
 
@@ -87,7 +87,7 @@ pub enum BuildConnectionToPeer {
     },
     #[state_machine_future(transitions(WaitingForExchangeAddressInformation))]
     WaitingForInternetAddressInformation {
-        proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
+        proxy_stream: ProtocolStrategiesStream<BuildConnectionToPeerProtocol>,
         timeout: Duration,
         new_con_handle: NewConnectionHandle,
         new_stream_handle: NewStreamHandle,
@@ -96,7 +96,7 @@ pub enum BuildConnectionToPeer {
     },
     #[state_machine_future(transitions(WaitingForConnection))]
     WaitingForExchangeAddressInformation {
-        proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
+        proxy_stream: ProtocolStrategiesStream<BuildConnectionToPeerProtocol>,
         timeout: Duration,
         new_con_handle: NewConnectionHandle,
         new_stream_handle: NewStreamHandle,
@@ -107,7 +107,7 @@ pub enum BuildConnectionToPeer {
     WaitingForConnection {
         timeout: Timeout,
         new_cons: FuturesUnordered<NewConnectionFuture>,
-        proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
+        proxy_stream: ProtocolStrategiesStream<BuildConnectionToPeerProtocol>,
         local_peer_identifier: PubKeyHash,
         peer_identifier: PubKeyHash,
         new_stream_handle: NewStreamHandle,
@@ -115,13 +115,13 @@ pub enum BuildConnectionToPeer {
     #[state_machine_future(transitions(ConnectionBuilt, ProxyStream))]
     WaitingForStream {
         new_stream: NewStreamFuture,
-        proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
+        proxy_stream: ProtocolStrategiesStream<BuildConnectionToPeerProtocol>,
         peer_identifier: PubKeyHash,
         new_stream_handle: NewStreamHandle,
     },
     #[state_machine_future(transitions(ConnectionBuilt))]
     ProxyStream {
-        proxy_stream: ProtocolStream<BuildConnectionToPeerProtocol>,
+        proxy_stream: ProtocolStrategiesStream<BuildConnectionToPeerProtocol>,
         peer_identifier: PubKeyHash,
         new_stream_handle: NewStreamHandle,
     },
@@ -338,7 +338,7 @@ fn create_poke_connections(
 
 /// `BuildConnectionToPeerRemote` is used by the remote side of the new connection.
 pub struct BuildConnectionToPeerRemote {
-    stream: Option<ProtocolStream<BuildConnectionToPeerProtocol>>,
+    stream: Option<ProtocolStrategiesStream<BuildConnectionToPeerProtocol>>,
     internet_addr: Option<SocketAddr>,
     peer_identifier: PubKeyHash,
     new_stream_handle: NewStreamHandle,
@@ -423,7 +423,7 @@ impl Future for BuildConnectionToPeerRemote {
 }
 
 fn prepare_stream_for_building(
-    peer: ProtocolStream<BuildConnectionToPeerProtocol>,
+    peer: ProtocolStrategiesStream<BuildConnectionToPeerProtocol>,
 ) -> Result<strategies::Stream> {
     let peer_addr = peer.get_ref().get_ref().get_ref().peer_addr();
     let mut peer = peer;
@@ -439,8 +439,8 @@ pub fn prepare_streams_for_building<T, R>(
     requested_peer: R,
 ) -> Result<(strategies::Stream, strategies::Stream)>
 where
-    T: Into<ProtocolStream<BuildConnectionToPeerProtocol>>,
-    R: Into<ProtocolStream<BuildConnectionToPeerProtocol>>,
+    T: Into<ProtocolStrategiesStream<BuildConnectionToPeerProtocol>>,
+    R: Into<ProtocolStrategiesStream<BuildConnectionToPeerProtocol>>,
 {
     let peer = prepare_stream_for_building(peer.into())?;
     let requested_peer = prepare_stream_for_building(requested_peer.into())?;
