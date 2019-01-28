@@ -1,9 +1,5 @@
-sudo: required
-
 language: rust
 
-services:
-  - docker
-
 script:
-- cd tests && ./run_tests.sh
+  - cargo build --verbose --all
+  - cargo test --verbose --all
