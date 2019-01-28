@@ -1,11 +1,12 @@
 use error::*;
 use protocol::StreamHello;
-use strategies::{self, LocalAddressInformation, NewStream};
+use strategies::{self, NewStream};
 use PubKeyHash;
 
 use std::{
     io::{self, Read, Write},
     net::SocketAddr,
+    ops::Deref,
 };
 
 use futures::{Future, Poll, Sink, StartSend, Stream as FStream};
@@ -215,10 +216,14 @@ impl Stream {
     pub fn peer_identifier(&self) -> &PubKeyHash {
         &self.peer_identifier
     }
+
+    pub fn set_send_channel_size(&mut self, size: usize) {
+        self.stream.set_send_channel_size(size);
+    }
 }
 
 impl FStream for Stream {
-    type Item = <strategies::Stream as FStream>::Item;
+    type Item = <<strategies::Stream as Deref>::Target as FStream>::Item;
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
@@ -227,7 +232,7 @@ impl FStream for Stream {
 }
 
 impl Sink for Stream {
-    type SinkItem = <strategies::Stream as Sink>::SinkItem;
+    type SinkItem = <<strategies::Stream as Deref>::Target as Sink>::SinkItem;
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {

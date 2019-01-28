@@ -7,11 +7,12 @@ use std::{
     cmp::min,
     io::{self, Read, Write},
     net::SocketAddr,
+    ops::{Deref, DerefMut},
 };
 
 use futures::{
     Async::{NotReady, Ready},
-    Future, Poll, Sink, StartSend, Stream as FStream,
+    Future, Poll, Sink, stream::{SplitSink, SplitStream}, Stream as FStream,
 };
 
 use tokio::{
@@ -133,7 +134,7 @@ impl GetConnectionId for Connection {
 }
 
 /// The super `Stream` trait. We need this hack, to store the `inner` of the stream in a `Box`.
-trait StreamTrait:
+pub trait StreamTrait:
     FStream
     + LocalAddressInformation
     + PeerAddressInformation
@@ -141,6 +142,7 @@ trait StreamTrait:
     + NewStream
     + Send
     + GetConnectionId
+    + SetSendChannelSize
 {
 }
 
@@ -151,13 +153,17 @@ impl<
             + Sink
             + NewStream
             + Send
-            + GetConnectionId,
+            + GetConnectionId
+            + SetSendChannelSize,
     > StreamTrait for T
 {
 }
 
+type StreamInner =
+    Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = Bytes, SinkError = Error>>;
+
 pub struct Stream {
-    inner: Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = Bytes, SinkError = Error>>,
+    inner: StreamInner,
     read_overflow: Option<BytesMut>,
 }
 
@@ -173,6 +179,24 @@ impl Stream {
             read_overflow: None,
         }
     }
+
+    pub fn split(self) -> (SplitSink<StreamInner>, SplitStream<StreamInner>) {
+        self.inner.split()
+    }
+}
+
+impl Deref for Stream {
+    type Target = StreamInner;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl DerefMut for Stream {
+    fn deref_mut(&mut self) -> &mut StreamInner {
+        &mut self.inner
+    }
 }
 
 pub trait LocalAddressInformation {
@@ -185,50 +209,6 @@ pub trait PeerAddressInformation {
 
 pub trait SetSendChannelSize {
     fn set_send_channel_size(&mut self, size: usize);
-}
-
-impl LocalAddressInformation for Stream {
-    fn local_addr(&self) -> SocketAddr {
-        self.inner.local_addr()
-    }
-}
-
-impl PeerAddressInformation for Stream {
-    fn peer_addr(&self) -> SocketAddr {
-        self.inner.peer_addr()
-    }
-}
-
-impl FStream for Stream {
-    type Item = BytesMut;
-    type Error = Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.inner.poll()
-    }
-}
-
-impl Sink for Stream {
-    type SinkItem = Bytes;
-    type SinkError = Error;
-
-    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        self.inner.start_send(item)
-    }
-
-    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        self.inner.poll_complete()
-    }
-}
-
-impl NewStream for Stream {
-    fn new_stream(&mut self) -> NewStreamFuture {
-        self.inner.new_stream()
-    }
-
-    fn get_new_stream_handle(&self) -> NewStreamHandle {
-        self.inner.get_new_stream_handle()
-    }
 }
 
 impl Read for Stream {
@@ -291,12 +271,6 @@ impl AsyncWrite for Stream {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         self.inner.close()?;
         Ok(Ready(()))
-    }
-}
-
-impl GetConnectionId for Stream {
-    fn connection_id(&self) -> ConnectionId {
-        self.inner.connection_id()
     }
 }
 

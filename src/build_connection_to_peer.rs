@@ -52,7 +52,7 @@ use connection::{NewConnectionFuture, NewConnectionHandle};
 use context::PassStreamToContext;
 use error::*;
 use protocol::{BuildConnectionToPeer as BuildConnectionToPeerProtocol, StreamHello};
-use strategies::{self, LocalAddressInformation, PeerAddressInformation};
+use strategies;
 use stream::{NewStreamFuture, NewStreamHandle, ProtocolStream, Stream};
 use timeout::Timeout;
 use PubKeyHash;
