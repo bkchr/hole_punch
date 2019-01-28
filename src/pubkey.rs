@@ -1,4 +1,4 @@
-use error::*;
+use crate::error::*;
 
 use std::{
     fmt,
@@ -94,13 +94,13 @@ impl PartialEq for PubKeyHash {
 impl Eq for PubKeyHash {}
 
 impl fmt::Display for PubKeyHash {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", hex::encode_upper(&self.buf[..self.len]))
     }
 }
 
 impl fmt::Debug for PubKeyHash {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "PubKeyHash: {}",

@@ -1,7 +1,7 @@
-use authenticator::Authenticator;
-use config::Config;
-use context::SendFuture;
-use error::*;
+use crate::authenticator::Authenticator;
+use crate::config::Config;
+use crate::context::SendFuture;
+use crate::error::*;
 
 use std::{
     cmp::min,
@@ -30,7 +30,7 @@ trait StrategyTrait: FStream + LocalAddressInformation + NewConnection + Send {}
 impl<T: NewConnection + FStream + LocalAddressInformation + Send> StrategyTrait for T {}
 
 pub struct Strategy {
-    inner: Box<StrategyTrait<Item = Connection, Error = Error>>,
+    inner: Box<dyn StrategyTrait<Item = Connection, Error = Error>>,
 }
 
 impl Strategy {
@@ -86,7 +86,7 @@ impl<
 pub type ConnectionId = u64;
 
 pub struct Connection {
-    inner: Box<ConnectionTrait<Item = Stream, Error = Error>>,
+    inner: Box<dyn ConnectionTrait<Item = Stream, Error = Error>>,
 }
 
 impl Connection {
@@ -160,7 +160,7 @@ impl<
 }
 
 type StreamInner =
-    Box<StreamTrait<Item = BytesMut, Error = Error, SinkItem = Bytes, SinkError = Error>>;
+    Box<dyn StreamTrait<Item = BytesMut, Error = Error, SinkItem = Bytes, SinkError = Error>>;
 
 pub struct Stream {
     inner: StreamInner,
@@ -285,7 +285,7 @@ pub trait NewConnection {
 }
 
 pub struct NewTypeFuture<T> {
-    inner: Box<SendFuture<Item = T, Error = Error>>,
+    inner: Box<dyn SendFuture<Item = T, Error = Error>>,
 }
 
 impl<T> Future for NewTypeFuture<T> {
@@ -311,7 +311,7 @@ trait NewConnectionHandleTrait: NewConnection + objekt::Clone + Send {}
 impl<T: NewConnection + objekt::Clone + Send> NewConnectionHandleTrait for T {}
 
 pub struct NewConnectionHandle {
-    inner: Box<NewConnectionHandleTrait>,
+    inner: Box<dyn NewConnectionHandleTrait>,
 }
 
 impl Clone for NewConnectionHandle {
@@ -343,7 +343,7 @@ trait NewStreamHandleTrait: NewStream + objekt::Clone + Send {}
 impl<T: NewStream + objekt::Clone + Send> NewStreamHandleTrait for T {}
 
 pub struct NewStreamHandle {
-    inner: Box<NewStreamHandleTrait>,
+    inner: Box<dyn NewStreamHandleTrait>,
 }
 
 impl Clone for NewStreamHandle {

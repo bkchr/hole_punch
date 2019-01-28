@@ -1,6 +1,6 @@
-use context::SendFuture;
-use stream::NewStreamHandle;
-use PubKeyHash;
+use crate::context::SendFuture;
+use crate::stream::NewStreamHandle;
+use crate::PubKeyHash;
 
 use std::{
     collections::{hash_map::Entry, HashMap},
@@ -30,7 +30,7 @@ pub enum RegistryResult {
 }
 
 pub trait RegistryProvider: Send {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>>;
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>>;
 }
 
 struct Inner {
@@ -38,7 +38,7 @@ struct Inner {
     /// All the peers that are connected with this peer.
     connected_peers: HashMap<PubKeyHash, (NewStreamHandle, RegistrationToken)>,
     /// Other registries
-    registries: Vec<Box<RegistryProvider>>,
+    registries: Vec<Box<dyn RegistryProvider>>,
 }
 
 impl Inner {
@@ -97,7 +97,7 @@ impl Inner {
 }
 
 impl RegistryProvider for Inner {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
         if let Some(handle) = self.connected_peers.get(peer) {
             Box::new(future::ok(RegistryResult::Found(handle.0.clone())))
         } else {
@@ -109,12 +109,12 @@ impl RegistryProvider for Inner {
 }
 
 struct SearchRemoteRegistries {
-    futures: FuturesUnordered<Box<SendFuture<Item = RegistryResult, Error = ()>>>,
+    futures: FuturesUnordered<Box<dyn SendFuture<Item = RegistryResult, Error = ()>>>,
 }
 
 impl SearchRemoteRegistries {
     fn new(
-        itr: impl Iterator<Item = Box<SendFuture<Item = RegistryResult, Error = ()>>>,
+        itr: impl Iterator<Item = Box<dyn SendFuture<Item = RegistryResult, Error = ()>>>,
     ) -> SearchRemoteRegistries {
         SearchRemoteRegistries {
             futures: futures_unordered(itr),
@@ -184,7 +184,7 @@ impl Registry {
 }
 
 impl RegistryProvider for Registry {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
         self.inner.lock().unwrap().find_peer(peer)
     }
 }

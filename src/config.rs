@@ -1,5 +1,5 @@
-use error::*;
-use remote_registry::Resolve;
+use crate::error::*;
+use crate::remote_registry::Resolve;
 
 use std::{
     net::{SocketAddr, ToSocketAddrs},

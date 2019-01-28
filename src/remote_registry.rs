@@ -1,13 +1,13 @@
-use connect::ConnectWithStrategies;
-use connection::NewConnectionHandle;
-use context::SendFuture;
-use error::*;
-use protocol::{Registry as RegistryProtocol, StreamHello};
-use registry::{Registry, RegistryProvider, RegistryResult};
-use strategies;
-use stream::{NewStreamHandle, ProtocolStream};
-use timeout::Timeout;
-use PubKeyHash;
+use crate::connect::ConnectWithStrategies;
+use crate::connection::NewConnectionHandle;
+use crate::context::SendFuture;
+use crate::error::*;
+use crate::protocol::{Registry as RegistryProtocol, StreamHello};
+use crate::registry::{Registry, RegistryProvider, RegistryResult};
+use crate::strategies;
+use crate::stream::{NewStreamHandle, ProtocolStream};
+use crate::timeout::Timeout;
+use crate::PubKeyHash;
 
 use futures::{
     sync::{
@@ -29,7 +29,7 @@ use tokio::{
     timer::{Delay, Interval},
 };
 
-use state_machine_future::RentToOwn;
+use state_machine_future::{RentToOwn, StateMachineFuture, transition};
 
 type ResultSender = oneshot::Sender<RegistryResult>;
 
@@ -78,7 +78,7 @@ impl RemoteRegistry {
 }
 
 impl RegistryProvider for RemoteRegistry {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
         let (sender, receiver) = oneshot::channel();
         self.find_peer_request
             .unbounded_send((peer.clone(), sender))

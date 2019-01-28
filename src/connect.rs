@@ -1,9 +1,9 @@
-use connection::{NewConnectionFuture, NewConnectionHandle};
-use error::*;
-use protocol::StreamHello;
-use stream::{NewStreamFuture, Stream};
-use timeout::Timeout;
-use PubKeyHash;
+use crate::connection::{NewConnectionFuture, NewConnectionHandle};
+use crate::error::*;
+use crate::protocol::StreamHello;
+use crate::stream::{NewStreamFuture, Stream};
+use crate::timeout::Timeout;
+use crate::PubKeyHash;
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -12,7 +12,7 @@ use futures::{
     Future, Poll,
 };
 
-use state_machine_future::RentToOwn;
+use state_machine_future::{RentToOwn, StateMachineFuture, transition};
 
 use tokio;
 
@@ -134,7 +134,7 @@ impl Future for ConnectWithStrategies {
                 error!("error: {:?}", e);
 
                 match self.strategies.pop() {
-                    Some(mut strat) => {
+                    Some(strat) => {
                         self.connect = ConnectStateMachine::start(
                             strat,
                             self.addr,

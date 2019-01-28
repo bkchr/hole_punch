@@ -1,13 +1,13 @@
-use authenticator::Authenticator;
-use build_connection_to_peer::BuildConnectionToPeer;
-use config::Config;
-use connection::{Connection, NewConnectionHandle};
-use error::*;
-use registry::{Registry, RegistryProvider, RegistryResult};
-use remote_registry;
-use strategies::{self, LocalAddressInformation, NewConnection};
-use stream::{NewStreamHandle, Stream};
-use PubKeyHash;
+use crate::authenticator::Authenticator;
+use crate::build_connection_to_peer::BuildConnectionToPeer;
+use crate::config::Config;
+use crate::connection::{Connection, NewConnectionHandle};
+use crate::error::*;
+use crate::registry::{Registry, RegistryProvider, RegistryResult};
+use crate::remote_registry;
+use crate::strategies::{self, LocalAddressInformation, NewConnection};
+use crate::stream::{NewStreamHandle, Stream};
+use crate::PubKeyHash;
 
 use failure;
 
@@ -184,7 +184,7 @@ fn create_connection_to_peer(
         .find_peer(&peer)
         .map_err(|_| Error::from("Unknown error while finding a peer"))
         .and_then(
-            move |find| -> Result<Box<SendFuture<Item = Stream, Error = Error>>> {
+            move |find| -> Result<Box<dyn SendFuture<Item = Stream, Error = Error>>> {
                 match find {
                     RegistryResult::Found(mut new_stream_handle) => {
                         Ok(Box::new(new_stream_handle.new_stream()))

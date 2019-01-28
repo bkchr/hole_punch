@@ -1,6 +1,6 @@
-use error::*;
-use strategies::GetConnectionId;
-use PubKeyHash;
+use crate::error::*;
+use crate::strategies::GetConnectionId;
+use crate::PubKeyHash;
 
 use std::collections::HashMap;
 use std::fs::File;

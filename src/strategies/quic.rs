@@ -1,7 +1,7 @@
-use authenticator::Authenticator;
-use config::Config;
-use error::*;
-use strategies::{
+use crate::authenticator::Authenticator;
+use crate::config::Config;
+use crate::error::*;
+use crate::strategies::{
     Connection, ConnectionId, GetConnectionId, LocalAddressInformation, NewConnection,
     NewConnectionFuture, NewConnectionHandle, NewStream, NewStreamFuture, NewStreamHandle,
     PeerAddressInformation, SetSendChannelSize, Strategy, Stream,

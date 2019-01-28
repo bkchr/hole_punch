@@ -1,12 +1,12 @@
-use authenticator::Authenticator;
-use context::PassStreamToContext;
-use error::*;
-use incoming_stream::IncomingStream;
-use protocol::StreamHello;
-use registry::{RegistrationToken, Registry};
-use strategies::{self, NewConnection, NewStream};
-use stream::{NewStreamFuture, NewStreamHandle};
-use PubKeyHash;
+use crate::authenticator::Authenticator;
+use crate::context::PassStreamToContext;
+use crate::error::*;
+use crate::incoming_stream::IncomingStream;
+use crate::protocol::StreamHello;
+use crate::registry::{RegistrationToken, Registry};
+use crate::strategies::{self, NewConnection, NewStream};
+use crate::stream::{NewStreamFuture, NewStreamHandle};
+use crate::PubKeyHash;
 
 use std::{net::SocketAddr, time::Duration};
 

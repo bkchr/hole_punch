@@ -1,14 +1,14 @@
-use build_connection_to_peer::{prepare_streams_for_building, BuildConnectionToPeerRemote};
-use connection::NewConnectionHandle;
-use context::PassStreamToContext;
-use error::*;
-use protocol::StreamHello;
-use registry::Registry;
-use remote_registry;
-use strategies;
-use stream::{NewStreamHandle, ProtocolStream};
-use timeout::Timeout;
-use PubKeyHash;
+use crate::build_connection_to_peer::{prepare_streams_for_building, BuildConnectionToPeerRemote};
+use crate::connection::NewConnectionHandle;
+use crate::context::PassStreamToContext;
+use crate::error::*;
+use crate::protocol::StreamHello;
+use crate::registry::Registry;
+use crate::remote_registry;
+use crate::strategies;
+use crate::stream::{NewStreamHandle, ProtocolStream};
+use crate::timeout::Timeout;
+use crate::PubKeyHash;
 
 use std::time::Duration;
 
@@ -67,7 +67,7 @@ impl Future for IncomingStream {
 
         match msg {
             Some(StreamHello::User(peer)) => {
-                let mut stream = self.stream.take().unwrap();
+                let stream = self.stream.take().unwrap();
 
                 let is_proxy_stream = peer != self.peer_identifier;
 

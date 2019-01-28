@@ -1,7 +1,7 @@
-use error::*;
-use protocol::StreamHello;
-use strategies::{self, NewStream};
-use PubKeyHash;
+use crate::error::*;
+use crate::protocol::StreamHello;
+use crate::strategies::{self, NewStream};
+use crate::PubKeyHash;
 
 use std::{
     io::{self, Read, Write},

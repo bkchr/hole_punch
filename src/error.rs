@@ -1,7 +1,7 @@
-use PubKeyHash;
+use crate::PubKeyHash;
 
-use failure;
 pub use failure::ResultExt;
+use failure::{self, Fail};
 
 use std::{io, result};
 

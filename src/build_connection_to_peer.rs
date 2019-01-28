@@ -48,14 +48,14 @@ Protocol
 ```
 */
 
-use connection::{NewConnectionFuture, NewConnectionHandle};
-use context::PassStreamToContext;
-use error::*;
-use protocol::{BuildConnectionToPeer as BuildConnectionToPeerProtocol, StreamHello};
-use strategies;
-use stream::{NewStreamFuture, NewStreamHandle, ProtocolStream, Stream};
-use timeout::Timeout;
-use PubKeyHash;
+use crate::connection::{NewConnectionFuture, NewConnectionHandle};
+use crate::context::PassStreamToContext;
+use crate::error::*;
+use crate::protocol::{BuildConnectionToPeer as BuildConnectionToPeerProtocol, StreamHello};
+use crate::strategies;
+use crate::stream::{NewStreamFuture, NewStreamHandle, ProtocolStream, Stream};
+use crate::timeout::Timeout;
+use crate::PubKeyHash;
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -69,7 +69,7 @@ use futures::{
     Future, Poll, Sink, Stream as FStream,
 };
 
-use state_machine_future::RentToOwn;
+use state_machine_future::{RentToOwn, StateMachineFuture, transition};
 
 use tokio;
 

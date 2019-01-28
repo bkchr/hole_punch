@@ -1,29 +1,9 @@
-extern crate bytes;
-extern crate either;
-#[macro_use]
-extern crate failure;
 #[macro_use]
 extern crate futures;
-extern crate hex;
-extern crate itertools;
 #[macro_use]
 extern crate log;
-extern crate objekt;
-extern crate openssl;
-extern crate openssl_sys;
-extern crate picoquic;
-extern crate pnet_datalink;
-extern crate rand;
-extern crate serde;
-#[macro_use]
-extern crate serde_derive;
-extern crate serde_json;
-#[macro_use]
-extern crate state_machine_future;
-extern crate tokio;
-extern crate tokio_io;
-extern crate tokio_serde_json;
-extern crate tokio_timer;
+
+use picoquic;
 
 mod protocol;
 #[macro_use]
@@ -42,9 +22,9 @@ mod strategies;
 mod stream;
 mod timeout;
 
-pub use config::{Config, ConfigBuilder};
-pub use context::{Context, CreateConnectionToPeerHandle, SendFuture};
-pub use error::Error;
+pub use crate::config::{Config, ConfigBuilder};
+pub use crate::context::{Context, CreateConnectionToPeerHandle, SendFuture};
+pub use crate::error::Error;
 pub use picoquic::FileFormat;
-pub use pubkey::PubKeyHash;
-pub use stream::{NewStreamFuture, NewStreamHandle, Stream};
+pub use crate::pubkey::PubKeyHash;
+pub use crate::stream::{NewStreamFuture, NewStreamHandle, Stream};
