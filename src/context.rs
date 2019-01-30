@@ -13,7 +13,10 @@ use failure;
 
 use futures::{
     stream::{futures_unordered, FuturesUnordered, StreamFuture},
-    sync::mpsc::{self, UnboundedReceiver, UnboundedSender},
+    sync::{
+        mpsc::{self, UnboundedReceiver, UnboundedSender},
+        oneshot,
+    },
     Async::{NotReady, Ready},
     Future, Poll, Stream as FStream,
 };
@@ -30,13 +33,11 @@ impl<T: Future + Send> SendFuture for T {}
 
 pub struct Context {
     new_stream_recv: UnboundedReceiver<NewStreamChannel>,
-    pass_stream_to_context: PassStreamToContext,
-    strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
     new_connection_handles: Vec<NewConnectionHandle>,
-    authenticator: Authenticator,
     registry: Registry,
     local_peer_identifier: PubKeyHash,
     quic_local_addr: SocketAddr,
+    context_inner_handle: oneshot::Receiver<()>,
 }
 
 impl Context {
@@ -80,20 +81,29 @@ impl Context {
                 config.remote_registry_address_resolve_timeout,
                 new_connection_handles.clone(),
                 local_peer_identifier.clone(),
-                handle,
+                handle.clone(),
             );
             registry.add_registry_provider(remote_registry);
         }
 
+        let (sender, context_inner_handle) = oneshot::channel();
+
+        handle.spawn(ContextInner::new(
+            pass_stream_to_context,
+            strats,
+            registry.clone(),
+            local_peer_identifier.clone(),
+            authenticator,
+            sender,
+        ));
+
         Ok(Context {
             new_stream_recv,
-            pass_stream_to_context,
-            strategies: futures_unordered(strats.into_iter().map(|s| s.into_future())),
             new_connection_handles,
-            authenticator,
             registry,
             local_peer_identifier,
             quic_local_addr,
+            context_inner_handle,
         })
     }
 
@@ -128,45 +138,6 @@ impl Context {
 
     pub fn quic_local_addr(&self) -> SocketAddr {
         self.quic_local_addr
-    }
-
-    fn poll_strategies(&mut self) -> Result<()> {
-        loop {
-            match self.strategies.poll() {
-                Ok(NotReady) => return Ok(()),
-                Err(e) => return Err(e.0),
-                Ok(Ready(Some((Some(con), strat)))) => {
-                    let con = Connection::new(
-                        con,
-                        self.local_peer_identifier.clone(),
-                        NewConnectionHandle::new(
-                            self.local_peer_identifier.clone(),
-                            strat.get_new_connection_handle(),
-                            self.pass_stream_to_context.clone(),
-                            self.registry.clone(),
-                            self.authenticator.clone(),
-                        ),
-                        self.pass_stream_to_context.clone(),
-                        self.registry.clone(),
-                        self.authenticator.clone(),
-                    );
-
-                    match con {
-                        Ok(con) => {
-                            tokio::spawn(con);
-                        }
-                        Err(e) => error!("{:?}", e),
-                    }
-                    self.strategies.push(strat.into_future());
-                }
-                Ok(Ready(Some((None, _)))) => {
-                    bail!("strategy returned None!");
-                }
-                Ok(Ready(None)) => {
-                    panic!("strategies empty");
-                }
-            }
-        }
     }
 
     pub fn local_peer_identifier(&self) -> &PubKeyHash {
@@ -214,7 +185,15 @@ impl FStream for Context {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.poll_strategies()?;
+        if self
+            .context_inner_handle
+            .poll()
+            .map(|v| v.is_ready())
+            .unwrap_or(true)
+        {
+            return Err(Error::from("HolePunch::ContextInner dropped!"));
+        }
+
         self.new_stream_recv
             .poll()
             .map_err(|_| failure::err_msg("Could not receive new stream").into())
@@ -292,5 +271,83 @@ impl CreateConnectionToPeerHandle {
             self.local_peer_identifier.clone(),
             switch_to_proxy_timeout,
         )
+    }
+}
+
+struct ContextInner {
+    pass_stream_to_context: PassStreamToContext,
+    strategies: FuturesUnordered<StreamFuture<strategies::Strategy>>,
+    registry: Registry,
+    local_peer_identifier: PubKeyHash,
+    authenticator: Authenticator,
+    _drop_handle: oneshot::Sender<()>,
+}
+
+impl ContextInner {
+    fn new(
+        pass_stream_to_context: PassStreamToContext,
+        strategies: Vec<strategies::Strategy>,
+        registry: Registry,
+        local_peer_identifier: PubKeyHash,
+        authenticator: Authenticator,
+        _drop_handle: oneshot::Sender<()>,
+    ) -> Self {
+        Self {
+            pass_stream_to_context,
+            strategies: futures_unordered(strategies.into_iter().map(|s| s.into_future())),
+            registry,
+            local_peer_identifier,
+            authenticator,
+            _drop_handle,
+        }
+    }
+}
+
+impl Future for ContextInner {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            match self.strategies.poll() {
+                Ok(NotReady) => return Ok(NotReady),
+                Err(e) => {
+                    error!("Strategy returned error: {:?}", e.0);
+                    return Ok(Ready(()));
+                }
+                Ok(Ready(Some((Some(con), strat)))) => {
+                    let con = Connection::new(
+                        con,
+                        self.local_peer_identifier.clone(),
+                        NewConnectionHandle::new(
+                            self.local_peer_identifier.clone(),
+                            strat.get_new_connection_handle(),
+                            self.pass_stream_to_context.clone(),
+                            self.registry.clone(),
+                            self.authenticator.clone(),
+                        ),
+                        self.pass_stream_to_context.clone(),
+                        self.registry.clone(),
+                        self.authenticator.clone(),
+                    );
+
+                    match con {
+                        Ok(con) => {
+                            tokio::spawn(con);
+                        }
+                        Err(e) => error!("{:?}", e),
+                    }
+                    self.strategies.push(strat.into_future());
+                }
+                Ok(Ready(Some((None, _)))) => {
+                    error!("Strategy returned None!");
+                    return Ok(Ready(()));
+                }
+                Ok(Ready(None)) => {
+                    error!("Strategies empty!");
+                    return Ok(Ready(()));
+                }
+            }
+        }
     }
 }

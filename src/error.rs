@@ -3,7 +3,7 @@ use crate::PubKeyHash;
 pub use failure::ResultExt;
 use failure::{self, Fail};
 
-use std::{io, result};
+use std::{io, result, mem};
 
 use picoquic;
 
@@ -98,6 +98,12 @@ impl From<&'static str> for Error {
 impl From<timer::Error> for Error {
     fn from(err: timer::Error) -> Error {
         Error::Timeout(err)
+    }
+}
+
+impl PartialEq for Error {
+    fn eq(&self, other: &Self) -> bool {
+        mem::discriminant(self) == mem::discriminant(other)
     }
 }
 

@@ -160,15 +160,6 @@ impl Connection {
     fn get_new_stream_handle(&self) -> NewStreamHandle {
         self.new_stream_handle.clone()
     }
-
-    fn poll_impl(&mut self) -> Poll<Option<strategies::Stream>, Error> {
-        let stream = match try_ready!(self.con.poll()) {
-            Some(stream) => stream,
-            None => return Ok(Ready(None)),
-        };
-
-        return Ok(Ready(Some(stream)));
-    }
 }
 
 impl Future for Connection {
@@ -177,8 +168,9 @@ impl Future for Connection {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            match self.poll_impl() {
-                Ok(NotReady) => return Ok(NotReady),
+            match self.con.poll() {
+                Ok(NotReady) => {
+                    return Ok(NotReady)},
                 Err(e) => {
                     self.registry
                         .unregister_peer(self.peer_identifier.clone(), self.registration_token);

@@ -351,9 +351,11 @@ impl OutgoingStream {
             } else {
                 match self.requests.entry(peer.clone()) {
                     Entry::Occupied(mut e) => {
+                        info!("Already send remote request for peer: {}", peer);
                         e.get_mut().push(sender);
                     }
                     Entry::Vacant(e) => {
+                        info!("Sending remote request for peer: {}", peer);
                         e.insert(vec![sender]);
                         self.stream.start_send(RegistryProtocol::Find(peer))?;
                         self.stream.poll_complete()?;
@@ -449,7 +451,7 @@ impl Future for IncomingStream {
 
             match msg {
                 RegistryProtocol::Find(peer) => {
-                    info!("Searching for peer: {}", peer);
+                    info!("RemoteRequest: Searching for peer: {}", peer);
                     let answer = if self.registry.has_peer(&peer) {
                         RegistryProtocol::Found(peer)
                     } else {
