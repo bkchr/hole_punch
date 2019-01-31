@@ -11,8 +11,9 @@ use std::{
 };
 
 use futures::{
+    stream::{SplitSink, SplitStream},
     Async::{NotReady, Ready},
-    Future, Poll, Sink, stream::{SplitSink, SplitStream}, Stream as FStream,
+    Future, Poll, Sink, Stream as FStream,
 };
 
 use tokio::{
@@ -182,6 +183,18 @@ impl Stream {
 
     pub fn split(self) -> (SplitSink<StreamInner>, SplitStream<StreamInner>) {
         self.inner.split()
+    }
+}
+
+impl FStream for Stream {
+    type Item = BytesMut;
+    type Error = Error;
+
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match self.read_overflow.take() {
+            Some(buf) => Ok(Ready(Some(buf))),
+            None => self.inner.poll(),
+        }
     }
 }
 
@@ -381,4 +394,84 @@ pub fn init(
 
 pub trait GetConnectionId {
     fn connection_id(&self) -> ConnectionId;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::StartSend;
+    use std::collections::VecDeque;
+
+    struct StreamMock {
+        data: VecDeque<BytesMut>,
+    }
+
+    impl FStream for StreamMock {
+        type Item = BytesMut;
+        type Error = Error;
+
+        fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+            Ok(Ready(self.data.pop_front()))
+        }
+    }
+
+    impl Sink for StreamMock {
+        type SinkItem = Bytes;
+        type SinkError = Error;
+
+        fn start_send(&mut self, _: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+            unimplemented!()
+        }
+
+        fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+            unimplemented!()
+        }
+    }
+
+    impl LocalAddressInformation for StreamMock {
+        fn local_addr(&self) -> SocketAddr {
+            unimplemented!()
+        }
+    }
+    impl PeerAddressInformation for StreamMock {
+        fn peer_addr(&self) -> SocketAddr {
+            unimplemented!()
+        }
+    }
+
+    impl NewStream for StreamMock {
+        fn new_stream(&mut self) -> NewStreamFuture {
+            unimplemented!()
+        }
+
+        fn get_new_stream_handle(&self) -> NewStreamHandle {
+            unimplemented!()
+        }
+    }
+
+    impl GetConnectionId for StreamMock {
+        fn connection_id(&self) -> ConnectionId {
+            unimplemented!()
+        }
+    }
+
+    impl SetSendChannelSize for StreamMock {
+        fn set_send_channel_size(&mut self, _: usize) {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn read_and_poll_stream_does_not_loose_data() {
+        let stream = StreamMock {
+            data: vec![BytesMut::from(vec![1; 100])].into(),
+        };
+        let mut stream = Stream::new(stream);
+
+        let mut buf = vec![0; 50];
+        assert_eq!(stream.poll_read(&mut buf).unwrap(), Ready(50));
+
+        let buf = stream.poll().unwrap();
+        assert_eq!(buf.map(|b| b.map(|b| b.len())), Ready(Some(50)));
+    }
 }
