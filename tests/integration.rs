@@ -155,3 +155,34 @@ fn peer1_connects_to_peer2_via_peer0() {
 
     expect_connect_to_peer_and_recv_hello_message(&peer1, peer2_identifier, &mut runtime);
 }
+
+#[test]
+fn dropping_context_stops_stream() {
+    init_log();
+    let mut runtime = Runtime::new().expect("Creates runtime");
+
+    let peer0 = start_peer0(None, runtime.executor());
+    let peer1 = start_peer1(Some(get_peer_address(&peer0)), runtime.executor());
+
+    let peer0_identifier = peer0.local_peer_identifier().clone();
+    runtime.spawn(
+        peer0
+            .for_each(|s| {
+                tokio::spawn(s.into_future().map(|_| ()).map_err(|_| ()));
+                Ok(())
+            })
+            .map_err(|_| ()),
+    );
+
+    let con: TestProtocolStream = runtime
+        .block_on(peer1.create_connection_to_peer(peer0_identifier))
+        .expect("Connects to peer0")
+        .into();
+
+    drop(peer1);
+
+    let res = runtime
+        .block_on(con.into_future().map(|v| v.0).map_err(|e| e.0))
+        .expect("Connection returns `None`");
+    assert_eq!(None, res);
+}

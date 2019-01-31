@@ -280,7 +280,7 @@ struct ContextInner {
     registry: Registry,
     local_peer_identifier: PubKeyHash,
     authenticator: Authenticator,
-    _drop_handle: oneshot::Sender<()>,
+    drop_handle: Option<oneshot::Sender<()>>,
 }
 
 impl ContextInner {
@@ -290,7 +290,7 @@ impl ContextInner {
         registry: Registry,
         local_peer_identifier: PubKeyHash,
         authenticator: Authenticator,
-        _drop_handle: oneshot::Sender<()>,
+        drop_handle: oneshot::Sender<()>,
     ) -> Self {
         Self {
             pass_stream_to_context,
@@ -298,7 +298,7 @@ impl ContextInner {
             registry,
             local_peer_identifier,
             authenticator,
-            _drop_handle,
+            drop_handle: Some(drop_handle),
         }
     }
 }
@@ -308,6 +308,17 @@ impl Future for ContextInner {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        if self
+            .drop_handle
+            .as_mut()
+            .and_then(|h| h.poll_cancel().ok())
+            .map(|r| r.is_ready())
+            .unwrap_or(true)
+        {
+            trace!("Context dropped, will drop ContextInner");
+            return Ok(Ready(()));
+        }
+
         loop {
             match self.strategies.poll() {
                 Ok(NotReady) => return Ok(NotReady),
@@ -349,5 +360,13 @@ impl Future for ContextInner {
                 }
             }
         }
+    }
+}
+
+impl Drop for ContextInner {
+    fn drop(&mut self) {
+        self.drop_handle.take().map(|h| {
+            let _ = h.send(());
+        });
     }
 }
