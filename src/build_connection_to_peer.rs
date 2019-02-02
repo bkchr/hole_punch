@@ -59,7 +59,7 @@ use crate::PubKeyHash;
 
 use std::{net::SocketAddr, time::Duration};
 
-use interfaces2::Interface;
+use pnet_datalink::interfaces;
 
 use itertools::Itertools;
 
@@ -69,7 +69,7 @@ use futures::{
     Future, Poll, Sink, Stream as FStream,
 };
 
-use state_machine_future::{transition, RentToOwn, StateMachineFuture};
+use state_machine_future::{RentToOwn, StateMachineFuture, transition};
 
 use tokio;
 
@@ -132,22 +132,15 @@ pub enum BuildConnectionToPeer {
 }
 
 fn get_interface_addresses(local_addr: SocketAddr) -> Vec<SocketAddr> {
-    match Interface::get_all() {
-        Ok(interfaces) => interfaces
-            .into_iter()
-            .map(|i| i.addresses.clone())
-            .concat()
-            .into_iter()
-            .filter_map(|v| v.addr)
-            .map(|a| a.ip())
-            .filter(|ip| !ip.is_loopback())
-            .map(|ip| (ip, local_addr.port()).into())
-            .collect_vec(),
-        Err(e) => {
-            error!("Could not get interface addresses: {:?}", e);
-            Vec::new()
-        }
-    }
+    interfaces()
+        .iter()
+        .map(|v| v.ips.clone())
+        .concat()
+        .iter()
+        .map(|v| v.ip())
+        .filter(|ip| !ip.is_loopback())
+        .map(|ip| (ip, local_addr.port()).into())
+        .collect_vec()
 }
 
 impl BuildConnectionToPeer {
