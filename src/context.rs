@@ -145,6 +145,12 @@ impl Context {
     }
 }
 
+impl Drop for Context {
+    fn drop(&mut self) {
+        self.registry.context_being_dropped();
+    }
+}
+
 fn create_connection_to_peer(
     peer: PubKeyHash,
     new_con_handles: &Vec<NewConnectionHandle>,

@@ -181,6 +181,11 @@ impl Registry {
     pub fn add_registry_provider(&self, provider: impl RegistryProvider + 'static) {
         self.inner.lock().unwrap().add_registry_provider(provider);
     }
+
+    /// Should be called when the `Context` is dropped to drop all registries.
+    pub(crate) fn context_being_dropped(&self) {
+        self.inner.lock().unwrap().registries.clear();
+    }
 }
 
 impl RegistryProvider for Registry {
