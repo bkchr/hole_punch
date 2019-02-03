@@ -49,6 +49,9 @@ impl<T: ToSocketAddrs + Send> Resolve for T {
 
 pub struct RemoteRegistry {
     find_peer_request: UnboundedSender<(PubKeyHash, ResultSender)>,
+    /// Will make sure that the `ConnectionHandlerContext` is dropped whe `RemoteRegistry` is
+    /// dropped.
+    _context_handle: oneshot::Receiver<()>,
 }
 
 impl RemoteRegistry {
@@ -61,6 +64,8 @@ impl RemoteRegistry {
         handle: TaskExecutor,
     ) -> RemoteRegistry {
         let (find_peer_request_send, find_peer_request_recv) = unbounded();
+        let (context_handle, _context_handle) = oneshot::channel();
+
         let con_handler = ConnectionHandler::new(
             resolvers,
             strategies,
@@ -68,11 +73,13 @@ impl RemoteRegistry {
             find_peer_request_recv,
             ping_interval,
             address_resolve_timeout,
+            context_handle,
         );
         handle.spawn(con_handler.map_err(|_| ()).map(|_| ()));
 
         RemoteRegistry {
             find_peer_request: find_peer_request_send,
+            _context_handle,
         }
     }
 }
@@ -177,6 +184,22 @@ struct ConnectionHandlerContext {
     strategies: Vec<NewConnectionHandle>,
     local_peer_identifier: PubKeyHash,
     ping_interval: Duration,
+    remote_registry_handle: oneshot::Sender<()>,
+}
+
+impl ConnectionHandlerContext {
+    fn remote_registry_dropped(&mut self) -> Result<()> {
+        if self
+            .remote_registry_handle
+            .poll_cancel()
+            .map(|h| h.is_ready())
+            .unwrap_or(true)
+        {
+            bail!("Remote registry dropped")
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Handles the connection to the remote peer.
@@ -198,7 +221,7 @@ enum ConnectionHandler {
     #[state_machine_future(ready)]
     ReadyState(Never),
     #[state_machine_future(error)]
-    ErrorState(Never),
+    ErrorState(Error),
 }
 
 impl ConnectionHandler {
@@ -209,6 +232,7 @@ impl ConnectionHandler {
         find_peer_request: FindPeerRequest,
         ping_interval: Duration,
         address_resolve_timeout: Duration,
+        remote_registry_handle: oneshot::Sender<()>,
     ) -> ConnectionHandlerFuture {
         let next_peer_addr = GetNextAddr::new(resolvers, address_resolve_timeout);
         let context = ConnectionHandlerContext {
@@ -216,6 +240,7 @@ impl ConnectionHandler {
             strategies,
             local_peer_identifier,
             ping_interval,
+            remote_registry_handle,
         };
 
         Self::start(find_peer_request, context)
@@ -226,11 +251,13 @@ impl PollConnectionHandler for ConnectionHandler {
     fn poll_request_next_peer_addr<'a, 'c>(
         state: &'a mut RentToOwn<'a, RequestNextPeerAddr>,
         context: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
-    ) -> Poll<AfterRequestNextPeerAddr, Never> {
+    ) -> Poll<AfterRequestNextPeerAddr, Error> {
         let addr = match context.next_peer_addr.poll() {
             Ok(Ready(addr)) => addr,
             _ => return Ok(NotReady),
         };
+
+        context.remote_registry_dropped()?;
 
         info!("ConnectionHandler connects to: {}", addr);
 
@@ -250,7 +277,9 @@ impl PollConnectionHandler for ConnectionHandler {
     fn poll_connect_to_peer<'a, 'c>(
         state: &'a mut RentToOwn<'a, ConnectToPeer>,
         context: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
-    ) -> Poll<AfterConnectToPeer, Never> {
+    ) -> Poll<AfterConnectToPeer, Error> {
+        context.remote_registry_dropped()?;
+
         let stream = match state.connect.poll() {
             Ok(Ready(stream)) => stream,
             Err(e) => {
@@ -280,8 +309,9 @@ impl PollConnectionHandler for ConnectionHandler {
 
     fn poll_handle_connection<'a, 'c>(
         state: &'a mut RentToOwn<'a, HandleConnection>,
-        _: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
-    ) -> Poll<AfterHandleConnection, Never> {
+        context: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
+    ) -> Poll<AfterHandleConnection, Error> {
+        context.remote_registry_dropped()?;
         match state.connection.poll() {
             Ok(Ready(())) => {}
             Err(e) => {
