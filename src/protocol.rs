@@ -2,7 +2,7 @@ use crate::PubKeyHash;
 
 use std::net::SocketAddr;
 
-use serde_derive::{Serialize, Deserialize};
+use serde_derive::{Deserialize, Serialize};
 
 /// The first message send by each `Stream` that defines its purpose
 #[derive(Serialize, Deserialize, Debug, Clone)]

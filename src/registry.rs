@@ -30,7 +30,10 @@ pub enum RegistryResult {
 }
 
 pub trait RegistryProvider: Send {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>>;
+    fn find_peer(
+        &self,
+        peer: &PubKeyHash,
+    ) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>>;
 }
 
 struct Inner {
@@ -97,7 +100,10 @@ impl Inner {
 }
 
 impl RegistryProvider for Inner {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(
+        &self,
+        peer: &PubKeyHash,
+    ) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
         if let Some(handle) = self.connected_peers.get(peer) {
             Box::new(future::ok(RegistryResult::Found(handle.0.clone())))
         } else {
@@ -189,7 +195,10 @@ impl Registry {
 }
 
 impl RegistryProvider for Registry {
-    fn find_peer(&self, peer: &PubKeyHash) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
+    fn find_peer(
+        &self,
+        peer: &PubKeyHash,
+    ) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
         self.inner.lock().unwrap().find_peer(peer)
     }
 }

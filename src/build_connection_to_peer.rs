@@ -69,7 +69,7 @@ use futures::{
     Future, Poll, Sink, Stream as FStream,
 };
 
-use state_machine_future::{RentToOwn, StateMachineFuture, transition};
+use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 
 use tokio;
 

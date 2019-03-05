@@ -25,6 +25,6 @@ mod timeout;
 pub use crate::config::{Config, ConfigBuilder};
 pub use crate::context::{Context, CreateConnectionToPeerHandle, SendFuture};
 pub use crate::error::Error;
-pub use picoquic::FileFormat;
 pub use crate::pubkey::PubKeyHash;
-pub use crate::stream::{NewStreamFuture, NewStreamHandle, Stream, ProtocolStream};
+pub use crate::stream::{NewStreamFuture, NewStreamHandle, ProtocolStream, Stream};
+pub use picoquic::FileFormat;

@@ -169,8 +169,7 @@ impl Future for Connection {
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             match self.con.poll() {
-                Ok(NotReady) => {
-                    return Ok(NotReady)},
+                Ok(NotReady) => return Ok(NotReady),
                 Err(e) => {
                     self.registry
                         .unregister_peer(self.peer_identifier.clone(), self.registration_token);

@@ -3,7 +3,7 @@ use crate::PubKeyHash;
 pub use failure::ResultExt;
 use failure::{self, Fail};
 
-use std::{io, result, mem};
+use std::{io, mem, result};
 
 use picoquic;
 
