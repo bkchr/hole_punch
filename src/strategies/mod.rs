@@ -184,6 +184,24 @@ impl Stream {
     pub fn split(self) -> (SplitSink<StreamInner>, SplitStream<StreamInner>) {
         self.inner.split()
     }
+
+    /// If we switch the protocol and the old protocol already read more data than it required,
+    /// this function can be used to reinsert the data that it is available for the next protocol.
+    pub fn reinsert_data(&mut self, mut data: BytesMut) {
+        if data.is_empty() {
+            return;
+        }
+
+        match self.read_overflow.take() {
+            Some(overflow) => {
+                data.extend_from_slice(&overflow);
+                self.read_overflow = Some(data);
+            }
+            None => {
+                self.read_overflow = Some(data);
+            }
+        }
+    }
 }
 
 impl FStream for Stream {
@@ -473,5 +491,21 @@ mod tests {
 
         let buf = stream.poll().unwrap();
         assert_eq!(buf.map(|b| b.map(|b| b.len())), Ready(Some(50)));
+    }
+
+    #[test]
+    fn read_and_poll_stream_does_not_loose_data_with_reinsert() {
+        let input_data = (0..100).collect::<Vec<u8>>();
+        let stream = StreamMock {
+            data: vec![BytesMut::from(input_data.clone())].into(),
+        };
+        let mut stream = Stream::new(stream);
+
+        let mut buf = vec![0; 50];
+        assert_eq!(stream.poll_read(&mut buf).unwrap(), Ready(50));
+
+        stream.reinsert_data(BytesMut::from(buf));
+        let buf = stream.poll().unwrap();
+        assert_eq!(buf.map(|b| b.map(|b| b.to_vec())), Ready(Some(input_data)));
     }
 }

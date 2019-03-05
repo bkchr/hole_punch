@@ -182,7 +182,9 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     fn from(stream: ProtocolStream<P>) -> Stream {
-        stream.into_inner().into_inner().into_inner()
+        let mut parts = stream.into_inner().into_inner().into_parts();
+        parts.io.stream.reinsert_data(parts.read_buf);
+        parts.io
     }
 }
 
@@ -191,7 +193,9 @@ where
     P: 'static + Serialize + for<'de> Deserialize<'de>,
 {
     fn from(stream: ProtocolStrategiesStream<P>) -> strategies::Stream {
-        stream.into_inner().into_inner().into_inner()
+        let mut parts = stream.into_inner().into_inner().into_parts();
+        parts.io.reinsert_data(parts.read_buf);
+        parts.io
     }
 }
 
