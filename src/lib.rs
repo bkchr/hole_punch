@@ -26,5 +26,7 @@ pub use crate::config::{Config, ConfigBuilder};
 pub use crate::context::{Context, CreateConnectionToPeerHandle, SendFuture};
 pub use crate::error::Error;
 pub use crate::pubkey::PubKeyHash;
-pub use crate::stream::{NewStreamFuture, NewStreamHandle, ProtocolStream, Stream};
+pub use crate::stream::{
+    NewStreamFuture, NewStreamHandle, ProtocolStream, Stream, StreamWithProtocol,
+};
 pub use picoquic::FileFormat;

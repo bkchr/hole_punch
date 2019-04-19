@@ -129,7 +129,7 @@ impl Future for NewStreamFuture {
     }
 }
 
-type StreamWithProtocol<S, P> = WriteJson<ReadJson<Framed<S, LengthDelimitedCodec>, P>, P>;
+pub type StreamWithProtocol<S, P> = WriteJson<ReadJson<Framed<S, LengthDelimitedCodec>, P>, P>;
 
 pub type ProtocolStream<P> = StreamWithProtocol<Stream, P>;
 
