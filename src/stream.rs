@@ -20,6 +20,8 @@ use tokio::{
 
 use serde::{Deserialize, Serialize};
 
+use bytes::BytesMut;
+
 #[derive(Clone)]
 pub struct NewStreamHandle {
     peer_identifier: PubKeyHash,
@@ -116,14 +118,12 @@ impl Future for NewStreamFuture {
                     .poll_complete()
                     .expect("poll complete stream hello");
 
-                let stream = Stream::new(
+                Stream::new(
                     stream_hello,
                     peer_identifier,
                     self.new_stream_handle.clone(),
                     is_proxied,
-                );
-
-                stream
+                )
             })
         })
     }
@@ -252,6 +252,12 @@ impl Stream {
     pub fn set_send_channel_size(&mut self, size: usize) {
         self.stream.set_send_channel_size(size);
     }
+
+    /// If we switch the protocol and the old protocol already read more data than it required,
+    /// this function can be used to reinsert the data that it is available for the next protocol.
+    pub fn reinsert_data(&mut self, data: BytesMut) {
+        self.stream.reinsert_data(data);
+    }
 }
 
 impl FStream for Stream {
@@ -259,7 +265,7 @@ impl FStream for Stream {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.stream.poll().map_err(|e| e.into())
+        self.stream.poll().map_err(Into::into)
     }
 }
 
@@ -268,11 +274,11 @@ impl Sink for Stream {
     type SinkError = Error;
 
     fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
-        self.stream.start_send(item).map_err(|e| e.into())
+        self.stream.start_send(item).map_err(Into::into)
     }
 
     fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
-        self.stream.poll_complete().map_err(|e| e.into())
+        self.stream.poll_complete().map_err(Into::into)
     }
 }
 
