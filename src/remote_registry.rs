@@ -116,7 +116,7 @@ impl Future for TimeoutRequest {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Err(_) = self.timeout.poll() {
+        if self.timeout.poll().is_err() {
             error!("RemoteRegistry request timed out.");
             Err(())?;
         }
@@ -301,7 +301,7 @@ impl PollConnectionHandler for ConnectionHandler {
             stream,
             new_stream_handle,
             find_peer_request,
-            context.ping_interval.clone(),
+            context.ping_interval,
             peer_identifier,
         );
         transition!(HandleConnection { connection })

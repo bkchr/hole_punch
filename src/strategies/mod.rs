@@ -246,7 +246,7 @@ impl Read for Stream {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         fn copy_data(mut src: BytesMut, dst: &mut [u8]) -> (usize, Option<BytesMut>) {
             let len = min(src.len(), dst.len());
-            &dst[..len].copy_from_slice(&src[..len]);
+            dst[..len].copy_from_slice(&src[..len]);
 
             if src.len() > len {
                 src.advance(len);
@@ -286,7 +286,7 @@ impl Write for Stream {
         if res.is_ready() {
             Ok(buf.len())
         } else {
-            return Err(io::ErrorKind::WouldBlock.into());
+            Err(io::ErrorKind::WouldBlock.into())
         }
     }
 

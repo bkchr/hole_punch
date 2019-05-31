@@ -143,7 +143,7 @@ impl Future for SearchRemoteRegistries {
 
             match res {
                 RegistryResult::NotFound => {}
-                r @ _ => return Ok(Ready(r)),
+                r => return Ok(Ready(r)),
             }
         }
     }

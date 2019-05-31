@@ -153,7 +153,7 @@ impl Drop for Context {
 
 fn create_connection_to_peer(
     peer: PubKeyHash,
-    new_con_handles: &Vec<NewConnectionHandle>,
+    new_con_handles: &[NewConnectionHandle],
     registry: &Registry,
     local_peer_identifier: PubKeyHash,
     switch_to_proxy_timeout: Duration,
@@ -371,8 +371,8 @@ impl Future for ContextInner {
 
 impl Drop for ContextInner {
     fn drop(&mut self) {
-        self.drop_handle.take().map(|h| {
+        if let Some(h) = self.drop_handle.take() {
             let _ = h.send(());
-        });
+        }
     }
 }

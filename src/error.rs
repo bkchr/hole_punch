@@ -79,19 +79,19 @@ impl From<failure::Error> for Error {
 
 impl From<openssl::error::ErrorStack> for Error {
     fn from(err: openssl::error::ErrorStack) -> Error {
-        Error::Openssl(err.into())
+        Error::Openssl(err)
     }
 }
 
 impl From<hex::FromHexError> for Error {
     fn from(err: hex::FromHexError) -> Error {
-        Error::Hex(err.into())
+        Error::Hex(err)
     }
 }
 
 impl From<&'static str> for Error {
     fn from(err: &'static str) -> Error {
-        Error::Custom(::failure::err_msg::<&'static str>(err).into())
+        Error::Custom(failure::err_msg::<&'static str>(err))
     }
 }
 

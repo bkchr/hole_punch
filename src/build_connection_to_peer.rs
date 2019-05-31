@@ -250,7 +250,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
     fn poll_waiting_for_connection<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForConnection>,
     ) -> Poll<AfterWaitingForConnection, Error> {
-        if let Err(_) = wait.timeout.poll() {
+        if wait.timeout.poll().is_err() {
             let wait = wait.take();
 
             transition!(ProxyStream {

@@ -66,8 +66,8 @@ impl Inner {
         self.incoming_con_pub_keys.insert(id, key);
     }
 
-    fn incoming_con_pub_key(&mut self, id: &ConnectionId) -> Option<PubKeyHash> {
-        self.incoming_con_pub_keys.remove(id).clone()
+    fn incoming_con_pub_key(&mut self, id: ConnectionId) -> Option<PubKeyHash> {
+        self.incoming_con_pub_keys.remove(&id).clone()
     }
 }
 
@@ -102,7 +102,7 @@ impl Authenticator {
         self.inner
             .lock()
             .unwrap()
-            .incoming_con_pub_key(&con.connection_id())
+            .incoming_con_pub_key(con.connection_id())
     }
 }
 

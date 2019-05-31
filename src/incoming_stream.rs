@@ -55,7 +55,7 @@ impl Future for IncomingStream {
     type Error = Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if let Err(_) = self.timeout.poll() {
+        if self.timeout.poll().is_err() {
             bail!("timeout at IncomingStream::poll()");
         }
 
@@ -114,7 +114,7 @@ impl Future for IncomingStream {
                     self.stream.take().unwrap().into(),
                     &self.registry,
                     StreamHello::BuildConnectionToPeer(self.peer_identifier.clone()),
-                    |stream0, stream1| prepare_streams_for_building(stream0, stream1),
+                    prepare_streams_for_building,
                 );
             }
             None => {}
