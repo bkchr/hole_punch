@@ -137,7 +137,7 @@ struct GetNextAddr {
 
 impl GetNextAddr {
     fn new(resolvers: Vec<Box<dyn Resolve>>, timeout: Duration) -> Self {
-        let resolved_addrs = resolvers[0].resolve().unwrap_or_else(|_| Vec::new());
+        let resolved_addrs = resolvers[0].resolve().unwrap_or_default();
 
         GetNextAddr {
             resolvers,
@@ -160,16 +160,15 @@ impl Future for GetNextAddr {
             } else if self.timeout.poll().is_err() {
                 self.timeout.reset();
 
-                let next_resolver = if self.last_resolver + 1 == self.resolvers.len() {
+                self.last_resolver = if self.last_resolver + 1 == self.resolvers.len() {
                     0
                 } else {
                     self.last_resolver + 1
                 };
 
-                self.resolved_addrs = self.resolvers[next_resolver]
+                self.resolved_addrs = self.resolvers[self.last_resolver]
                     .resolve()
-                    .unwrap_or_else(|_| Vec::new());
-                self.last_resolver = next_resolver;
+                    .unwrap_or_default();
             }
         }
 
@@ -497,5 +496,60 @@ impl Future for IncomingStream {
                 _ => {}
             };
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::{Arc, Mutex};
+    use tokio::prelude::FutureExt;
+
+    struct Resolver {
+        res: Arc<Mutex<Option<SocketAddr>>>,
+    }
+
+    impl Resolve for Resolver {
+        fn resolve(&self) -> Result<Vec<SocketAddr>> {
+            match *self.res.lock().unwrap() {
+                Some(addr) => Ok(vec![addr]),
+                None => Err("lol".into()),
+            }
+        }
+    }
+
+    #[test]
+    fn get_next_addr() {
+        let mut runtime = tokio::runtime::Runtime::new().unwrap();
+        let res = Arc::new(Mutex::new(None));
+        let socket_addr = SocketAddr::from(([127, 0, 0, 1], 5555));
+
+        assert!(runtime
+            .block_on(
+                GetNextAddr::new(
+                    vec![Box::new(Resolver { res: res.clone() })],
+                    Duration::from_nanos(1000)
+                )
+                .timeout(Duration::from_secs(1))
+            )
+            .unwrap_err()
+            .is_elapsed());
+
+        *res.lock().unwrap() = Some(socket_addr);
+
+        assert_eq!(
+            runtime
+                .block_on(
+                    GetNextAddr::new(
+                        vec![Box::new(Resolver { res: res.clone() })],
+                        Duration::from_nanos(1000)
+                    )
+                    .timeout(Duration::from_secs(1))
+                )
+                .map_err(|_| panic!())
+                .unwrap(),
+            socket_addr
+        );
     }
 }
