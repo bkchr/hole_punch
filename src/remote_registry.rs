@@ -331,6 +331,7 @@ struct OutgoingStream {
     find_peer_request: FindPeerRequest,
     ping_interval: Interval,
     pong_timeout: Delay,
+    pong_timeout_duration: Duration,
     peer_identifier: PubKeyHash,
 }
 
@@ -345,14 +346,15 @@ impl OutgoingStream {
     where
         T: Into<ProtocolStrategiesStream<RegistryProtocol>>,
     {
-        let pong_interval = ping_interval * 3;
+        let pong_timeout_duration = ping_interval * 3;
         OutgoingStream {
             stream: stream.into(),
             new_stream_handle,
             find_peer_request,
             requests: HashMap::new(),
             ping_interval: Interval::new(Instant::now(), ping_interval),
-            pong_timeout: Delay::new(Instant::now() + pong_interval),
+            pong_timeout: Delay::new(Instant::now() + pong_timeout_duration),
+            pong_timeout_duration,
             peer_identifier,
         }
     }
@@ -404,7 +406,11 @@ impl OutgoingStream {
             self.stream.poll_complete()?;
         }
 
-        self.pong_timeout.poll().map(|_| ()).map_err(Into::into)
+        if let Ready(()) = self.pong_timeout.poll()? {
+            bail!("OutgoingStream timeout");
+        }
+
+        Ok(())
     }
 }
 
@@ -442,7 +448,11 @@ impl Future for OutgoingStream {
                 }
                 RegistryProtocol::Pong => {
                     self.pong_timeout
-                        .reset(Instant::now() + Duration::from_secs(3));
+                        .reset(Instant::now() + self.pong_timeout_duration);
+                    self.pong_timeout.poll()?;
+                    if self.pong_timeout.is_elapsed() {
+                        panic!("OugoingStream pong timeout instantly elapsed!")
+                    }
                 }
                 _ => {}
             };
