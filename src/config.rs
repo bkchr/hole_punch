@@ -1,5 +1,5 @@
 use crate::error::*;
-use crate::remote_registry::Resolve;
+use crate::registries::Resolve;
 
 use std::{
     net::{SocketAddr, ToSocketAddrs},
@@ -33,6 +33,8 @@ pub struct ConfigBuilder {
     /// no peer is resolvable/conntactable.
     /// Default: `2s`
     remote_registry_address_resolve_timeout: Duration,
+    /// Enables mDNS peer searching and registers this peer as `_given-service-name.local`.
+    enable_mdns: Option<String>,
 }
 
 impl ConfigBuilder {
@@ -46,6 +48,7 @@ impl ConfigBuilder {
             remote_peers: Vec::new(),
             remote_registry_ping_interval: Duration::from_secs(5),
             remote_registry_address_resolve_timeout: Duration::from_secs(2),
+            enable_mdns: None,
         }
     }
 
@@ -122,6 +125,12 @@ impl ConfigBuilder {
         self
     }
 
+    /// Enables mDNS peer searching and registers this peer as `_given-service-name.local`
+    pub fn enable_mdns<S: Into<String>>(mut self, service_name: S) -> Self {
+        self.enable_mdns = Some(service_name.into());
+        self
+    }
+
     /// Build the `Config`.
     pub fn build(self) -> Result<Config> {
         if self.quic_config.private_key.is_none() && self.quic_config.private_key_filename.is_none()
@@ -143,6 +152,7 @@ impl ConfigBuilder {
             remote_peers: self.remote_peers,
             remote_registry_ping_interval: self.remote_registry_ping_interval,
             remote_registry_address_resolve_timeout: self.remote_registry_address_resolve_timeout,
+            enable_mdns: self.enable_mdns,
         })
     }
 }
@@ -163,6 +173,8 @@ pub struct Config {
     pub(crate) remote_registry_ping_interval: Duration,
     /// The remote registry address resolve timeout.
     pub(crate) remote_registry_address_resolve_timeout: Duration,
+    /// Enable mDNS peer searching and registering with the given service name.
+    pub(crate) enable_mdns: Option<String>,
 }
 
 impl Config {

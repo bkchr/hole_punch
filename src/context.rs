@@ -3,8 +3,8 @@ use crate::build_connection_to_peer::BuildConnectionToPeer;
 use crate::config::Config;
 use crate::connection::{Connection, NewConnectionHandle};
 use crate::error::*;
+use crate::registries::{MdnsRegistry, RemoteRegistry};
 use crate::registry::{Registry, RegistryProvider, RegistryResult};
-use crate::remote_registry;
 use crate::strategies::{self, LocalAddressInformation, NewConnection};
 use crate::stream::{NewStreamHandle, Stream};
 use crate::PubKeyHash;
@@ -75,15 +75,25 @@ impl Context {
             .collect::<Vec<_>>();
 
         if !config.remote_peers.is_empty() {
-            let remote_registry = remote_registry::RemoteRegistry::new(
+            let remote_registry = RemoteRegistry::new(
                 config.remote_peers,
                 config.remote_registry_ping_interval,
                 config.remote_registry_address_resolve_timeout,
                 new_connection_handles.clone(),
-                local_peer_identifier.clone(),
                 handle.clone(),
             );
             registry.add_registry_provider(remote_registry);
+        }
+
+        if let Some(service_name) = config.enable_mdns {
+            let mdns_registry = MdnsRegistry::new(
+                local_peer_identifier.clone(),
+                new_connection_handles.clone(),
+                &service_name,
+                quic_local_addr.port(),
+                handle.clone(),
+            )?;
+            registry.add_registry_provider(mdns_registry);
         }
 
         let (sender, context_inner_handle) = oneshot::channel();

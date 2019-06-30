@@ -47,6 +47,7 @@ impl<T: ToSocketAddrs + Send> Resolve for T {
     }
 }
 
+/// A registry that connects to a remote peer to query it for searched peers.
 pub struct RemoteRegistry {
     find_peer_request: UnboundedSender<(PubKeyHash, ResultSender)>,
     /// Will make sure that the `ConnectionHandlerContext` is dropped whe `RemoteRegistry` is
@@ -60,7 +61,6 @@ impl RemoteRegistry {
         ping_interval: Duration,
         address_resolve_timeout: Duration,
         strategies: Vec<NewConnectionHandle>,
-        local_peer_identifier: PubKeyHash,
         handle: TaskExecutor,
     ) -> RemoteRegistry {
         let (find_peer_request_send, find_peer_request_recv) = unbounded();
@@ -69,7 +69,6 @@ impl RemoteRegistry {
         let con_handler = ConnectionHandler::new(
             resolvers,
             strategies,
-            local_peer_identifier,
             find_peer_request_recv,
             ping_interval,
             address_resolve_timeout,
@@ -181,7 +180,6 @@ enum Never {}
 struct ConnectionHandlerContext {
     next_peer_addr: GetNextAddr,
     strategies: Vec<NewConnectionHandle>,
-    local_peer_identifier: PubKeyHash,
     ping_interval: Duration,
     remote_registry_handle: oneshot::Sender<()>,
 }
@@ -227,7 +225,6 @@ impl ConnectionHandler {
     fn new(
         resolvers: Vec<Box<dyn Resolve>>,
         strategies: Vec<NewConnectionHandle>,
-        local_peer_identifier: PubKeyHash,
         find_peer_request: FindPeerRequest,
         ping_interval: Duration,
         address_resolve_timeout: Duration,
@@ -237,7 +234,6 @@ impl ConnectionHandler {
         let context = ConnectionHandlerContext {
             next_peer_addr,
             strategies,
-            local_peer_identifier,
             ping_interval,
             remote_registry_handle,
         };
@@ -261,12 +257,8 @@ impl PollConnectionHandler for ConnectionHandler {
         info!("ConnectionHandler connects to: {}", addr);
 
         let find_peer_request = state.take().find_peer_request;
-        let connect = ConnectWithStrategies::new(
-            context.strategies.clone(),
-            addr,
-            context.local_peer_identifier.clone(),
-            StreamHello::Registry,
-        );
+        let connect =
+            ConnectWithStrategies::new(context.strategies.clone(), addr, StreamHello::Registry);
         transition!(ConnectToPeer {
             connect,
             find_peer_request

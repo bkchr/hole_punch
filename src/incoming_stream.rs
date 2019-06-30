@@ -3,8 +3,8 @@ use crate::connection::NewConnectionHandle;
 use crate::context::PassStreamToContext;
 use crate::error::*;
 use crate::protocol::StreamHello;
+use crate::registries::RemoteRegistryIncomingStream;
 use crate::registry::Registry;
-use crate::remote_registry;
 use crate::strategies;
 use crate::stream::{NewStreamHandle, ProtocolStrategiesStream};
 use crate::timeout::Timeout;
@@ -89,7 +89,7 @@ impl Future for IncomingStream {
             }
             Some(StreamHello::Registry) => {
                 tokio::spawn(
-                    remote_registry::IncomingStream::new(
+                    RemoteRegistryIncomingStream::new(
                         self.stream.take().unwrap(),
                         self.registry.clone(),
                     )

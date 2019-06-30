@@ -39,6 +39,8 @@ pub enum Error {
     PeerNotFound(PubKeyHash),
     #[fail(display = "Timeout error {}.", _0)]
     Timeout(timer::Error),
+    #[fail(display = "Mdns error {}", _0)]
+    Mdns(String),
 }
 
 impl From<Error> for io::Error {
@@ -98,6 +100,12 @@ impl From<&'static str> for Error {
 impl From<timer::Error> for Error {
     fn from(err: timer::Error) -> Error {
         Error::Timeout(err)
+    }
+}
+
+impl From<mdns::Error> for Error {
+    fn from(err: mdns::Error) -> Error {
+        Error::Mdns(format!("{:?}", err))
     }
 }
 

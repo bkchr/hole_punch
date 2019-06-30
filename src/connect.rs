@@ -1,9 +1,10 @@
-use crate::connection::{NewConnectionFuture, NewConnectionHandle};
-use crate::error::*;
-use crate::protocol::StreamHello;
-use crate::stream::{NewStreamFuture, Stream};
-use crate::timeout::Timeout;
-use crate::PubKeyHash;
+use crate::{
+    connection::{NewConnectionFuture, NewConnectionHandle},
+    error::*,
+    protocol::StreamHello,
+    stream::{NewStreamFuture, Stream},
+    timeout::Timeout,
+};
 
 use std::{net::SocketAddr, time::Duration};
 
@@ -22,14 +23,12 @@ enum ConnectStateMachine {
     InitConnect {
         strat: NewConnectionHandle,
         addr: SocketAddr,
-        local_peer_identifier: PubKeyHash,
         hello_msg: StreamHello,
     },
     #[state_machine_future(transitions(WaitForConnectStream))]
     WaitForConnection {
         wait: NewConnectionFuture,
         timeout: Timeout,
-        local_peer_identifier: PubKeyHash,
         hello_msg: StreamHello,
     },
     #[state_machine_future(transitions(ConnectionCreated))]
@@ -55,7 +54,6 @@ impl PollConnectStateMachine for ConnectStateMachine {
         transition!(WaitForConnection {
             wait,
             timeout,
-            local_peer_identifier: init.local_peer_identifier,
             hello_msg: init.hello_msg
         })
     }
@@ -92,7 +90,6 @@ pub struct ConnectWithStrategies {
     strategies: Vec<NewConnectionHandle>,
     connect: ConnectStateMachineFuture,
     addr: SocketAddr,
-    local_peer_identifier: PubKeyHash,
     hello_msg: StreamHello,
 }
 
@@ -100,7 +97,6 @@ impl ConnectWithStrategies {
     pub(crate) fn new(
         mut strategies: Vec<NewConnectionHandle>,
         addr: SocketAddr,
-        local_peer_identifier: PubKeyHash,
         hello_msg: StreamHello,
     ) -> ConnectWithStrategies {
         let strategy = strategies
@@ -110,13 +106,7 @@ impl ConnectWithStrategies {
         ConnectWithStrategies {
             strategies,
             addr,
-            connect: ConnectStateMachine::start(
-                strategy,
-                addr,
-                local_peer_identifier.clone(),
-                hello_msg.clone(),
-            ),
-            local_peer_identifier,
+            connect: ConnectStateMachine::start(strategy, addr, hello_msg.clone()),
             hello_msg,
         }
     }
@@ -135,12 +125,8 @@ impl Future for ConnectWithStrategies {
 
                 match self.strategies.pop() {
                     Some(strat) => {
-                        self.connect = ConnectStateMachine::start(
-                            strat,
-                            self.addr,
-                            self.local_peer_identifier.clone(),
-                            self.hello_msg.clone(),
-                        );
+                        self.connect =
+                            ConnectStateMachine::start(strat, self.addr, self.hello_msg.clone());
                         let _ = self.connect.poll()?;
                         Ok(NotReady)
                     }

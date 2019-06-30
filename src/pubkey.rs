@@ -1,6 +1,7 @@
 use crate::error::*;
 
 use std::{
+    cmp::{Ord, Ordering, PartialOrd},
     fmt,
     hash::{Hash, Hasher as StdHasher},
     ops::Deref,
@@ -39,6 +40,18 @@ pub struct PubKeyHash {
 impl Hash for PubKeyHash {
     fn hash<H: StdHasher>(&self, state: &mut H) {
         (&self.buf).hash(state);
+    }
+}
+
+impl Ord for PubKeyHash {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.buf.cmp(&other.buf)
+    }
+}
+
+impl PartialOrd for PubKeyHash {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
