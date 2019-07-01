@@ -1,5 +1,5 @@
 use crate::context::SendFuture;
-use crate::stream::NewStreamHandle;
+use crate::stream::{NewStreamHandle, Stream};
 use crate::PubKeyHash;
 
 use std::{
@@ -20,8 +20,10 @@ use futures::{
 pub type RegistrationToken = u64;
 
 pub enum RegistryResult {
-    /// Found the peer. The given handle returns new `Stream`s directly to the peer.
-    Found(NewStreamHandle),
+    /// Found the peer. The given stream is a direct stream to the peer.
+    Found(Stream),
+    /// Found the peer. The given handle creates a direct stream to the peer.
+    FoundWithHandle(NewStreamHandle),
     /// Found the peer, but available at a remote peer. The given handle returns new `Stream`s to
     /// the remote peer that holds the connection to the searched peer.
     FoundRemote(NewStreamHandle),
@@ -105,7 +107,9 @@ impl RegistryProvider for Inner {
         peer: &PubKeyHash,
     ) -> Box<dyn SendFuture<Item = RegistryResult, Error = ()>> {
         if let Some(handle) = self.connected_peers.get(peer) {
-            Box::new(future::ok(RegistryResult::Found(handle.0.clone())))
+            Box::new(future::ok(RegistryResult::FoundWithHandle(
+                handle.0.clone(),
+            )))
         } else {
             Box::new(SearchRemoteRegistries::new(
                 self.registries.iter().map(|r| r.find_peer(peer)),

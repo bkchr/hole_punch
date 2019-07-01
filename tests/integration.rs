@@ -1,16 +1,23 @@
-use hole_punch::{Config, Context, Error, FileFormat, ProtocolStream, PubKeyHash};
+use hole_punch::{Config, Context, Error, FileFormat, ProtocolStream, PubKeyHash, SendFuture, CreateConnectionToPeerHandle};
 
-use tokio::runtime::{Runtime, TaskExecutor};
+use tokio::{
+    prelude::FutureExt,
+    runtime::{Runtime, TaskExecutor},
+    timer::Interval,
+};
 
 use serde_derive::{Deserialize, Serialize};
 
-use futures::{Future, Sink, Stream as FStream};
+use futures::{sync::oneshot, Future, Sink, Stream as FStream};
 
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use pretty_env_logger;
 
-use log::{info, LevelFilter};
+use log::{error, info, LevelFilter};
 
 const PEER0_KEY: &[u8] = include_bytes!("certs/peer0_key.pem");
 const PEER0_CERT: &[u8] = include_bytes!("certs/peer0_cert.pem");
@@ -30,7 +37,7 @@ type TestProtocolStream = ProtocolStream<TestProtocol>;
 
 fn init_log() {
     pretty_env_logger::formatted_builder()
-        .filter_level(LevelFilter::Debug)
+        .filter_module("hole_punch", LevelFilter::Debug)
         .try_init()
         .ok();
 }
@@ -39,14 +46,21 @@ fn start_peer(
     key: &[u8],
     cert: &[u8],
     remote_peer: Option<SocketAddr>,
+    mdns: Option<&'static str>,
     executor: TaskExecutor,
 ) -> Context {
     let config_builder = Config::builder()
         .set_private_key(key.into(), FileFormat::PEM)
         .set_certificate_chain(vec![cert.into()], FileFormat::PEM);
 
-    let config = if let Some(remote) = remote_peer {
-        config_builder.add_remote_peer(remote).build()
+    let config_builder = if let Some(remote) = remote_peer {
+        config_builder.add_remote_peer(remote)
+    } else {
+        config_builder
+    };
+
+    let config = if let Some(service) = mdns {
+        config_builder.enable_mdns(service).build()
     } else {
         config_builder.build()
     }
@@ -61,19 +75,43 @@ fn start_peer(
 }
 
 fn start_peer0(remote_peer: Option<SocketAddr>, executor: TaskExecutor) -> Context {
-    let peer = start_peer(PEER0_KEY, PEER0_CERT, remote_peer, executor);
+    let peer = start_peer(PEER0_KEY, PEER0_CERT, remote_peer, None, executor);
     info!("Started peer0 {}", peer.local_peer_identifier());
     peer
 }
 
+fn start_peer0_with_mdns(executor: TaskExecutor) -> Context {
+    let peer = start_peer(
+        PEER0_KEY,
+        PEER0_CERT,
+        None,
+        Some("hole_punch_test"),
+        executor,
+    );
+    info!("Started peer0 with mDNS {}", peer.local_peer_identifier());
+    peer
+}
+
 fn start_peer1(remote_peer: Option<SocketAddr>, executor: TaskExecutor) -> Context {
-    let peer = start_peer(PEER1_KEY, PEER1_CERT, remote_peer, executor);
+    let peer = start_peer(PEER1_KEY, PEER1_CERT, remote_peer, None, executor);
     info!("Started peer1 {}", peer.local_peer_identifier());
     peer
 }
 
+fn start_peer1_with_mdns(executor: TaskExecutor) -> Context {
+    let peer = start_peer(
+        PEER1_KEY,
+        PEER1_CERT,
+        None,
+        Some("hole_punch_test"),
+        executor,
+    );
+    info!("Started peer1 with mDNS {}", peer.local_peer_identifier());
+    peer
+}
+
 fn start_peer2(remote_peer: Option<SocketAddr>, executor: TaskExecutor) -> Context {
-    let peer = start_peer(PEER2_KEY, PEER2_CERT, remote_peer, executor);
+    let peer = start_peer(PEER2_KEY, PEER2_CERT, remote_peer, None, executor);
     info!("Started peer2 {}", peer.local_peer_identifier());
     peer
 }
@@ -99,22 +137,35 @@ fn spawn_hello_responder(peer: Context, executor: TaskExecutor) {
     );
 }
 
+/// Connect to the given peer and wait for the `Hello` message.
+///
+/// Returns a `Future` that will resolve to `true` when everything worked as expected.
+fn connect_to_peer_and_recv_hello_message(
+    handle: CreateConnectionToPeerHandle,
+    remote_peer_identifier: PubKeyHash,
+) -> impl SendFuture<Item = bool, Error = Error> {
+    handle.create_connection_to_peer(remote_peer_identifier.clone())
+        .and_then(|con| {
+            let con: TestProtocolStream = con.into();
+            con.into_future().map(|v| v.0).map_err(|e| Error::from(e.0))
+        })
+        .map(move |msg| Some(TestProtocol::Hello(remote_peer_identifier)) == msg)
+}
+
 fn expect_connect_to_peer_and_recv_hello_message(
     peer: &Context,
     remote_peer_identifier: PubKeyHash,
     runtime: &mut Runtime,
 ) {
-    let con: TestProtocolStream = runtime
-        .block_on(peer.create_connection_to_peer(remote_peer_identifier.clone()))
-        .expect("Connects to peer0")
-        .into();
-
-    let message = runtime
-        .block_on(con.into_future().map(|v| v.0).map_err(|e| e.0))
-        .expect("Retrieves hello message.")
-        .expect("Is not `None`");
-
-    assert_eq!(TestProtocol::Hello(remote_peer_identifier), message);
+    assert!(
+        runtime
+            .block_on(connect_to_peer_and_recv_hello_message(
+                peer.create_connection_to_peer_handle(),
+                remote_peer_identifier
+            ))
+            .unwrap(),
+        "Did not connect to requested peer or did not receive the correct hello message"
+    );
 }
 
 #[test]
@@ -129,6 +180,40 @@ fn peer1_connects_to_peer0() {
     spawn_hello_responder(peer0, runtime.executor());
 
     expect_connect_to_peer_and_recv_hello_message(&peer1, peer0_identifier, &mut runtime);
+}
+
+#[test]
+fn peer1_connects_to_peer0_with_mdns() {
+    init_log();
+    let mut runtime = Runtime::new().expect("Creates runtime");
+
+    let peer0 = start_peer0_with_mdns(runtime.executor());
+    let peer1 = start_peer1_with_mdns(runtime.executor());
+
+    let peer0_identifier = peer0.local_peer_identifier().clone();
+    spawn_hello_responder(peer0, runtime.executor());
+
+    let (sender, receiver) = oneshot::channel();
+    let mut sender = Some(sender);
+    let handle = peer1.create_connection_to_peer_handle();
+    let _ = runtime
+        .block_on(
+            Interval::new(Instant::now(), Duration::from_millis(500))
+                .map_err(Error::from)
+                .and_then(move |_| connect_to_peer_and_recv_hello_message(handle.clone(), peer0_identifier.clone()).then(|res| Ok(res.ok())))
+                .for_each(move |res| {
+                    if res.unwrap_or(false) {
+                        if let Some(sender) = sender.take() {
+                            let _ = sender.send(());
+                        }
+                    }
+
+                    Ok(())
+                })
+                .map_err(|e| error!("{:?}", e))
+                .select(receiver.timeout(Duration::from_secs(60)).map_err(|_| ())).map_err(|_| ()),
+        )
+        .expect("Finds peer with mDNS and connects.");
 }
 
 #[test]

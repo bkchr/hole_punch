@@ -46,16 +46,22 @@ impl MdnsRegistry {
         listen_port: u16,
         handle: TaskExecutor,
     ) -> Result<Self> {
-        let service_name = if service_name.starts_with("_") {
+        let service_name = if service_name.starts_with('_') {
             service_name.to_owned()
         } else {
             format!("_{}", service_name)
         };
 
+        let local_peer_identifier_string = local_peer_identifier.to_string();
         let responder = Responder::new()?;
         let service = responder.register(
             service_name.clone(),
-            local_peer_identifier.to_string(),
+            // The hash is to long and we need to split it up.
+            format!(
+                "{}.{}",
+                &local_peer_identifier_string[..local_peer_identifier_string.len() / 2],
+                &local_peer_identifier_string[local_peer_identifier_string.len() / 2..],
+            ),
             listen_port,
             &[],
         );
@@ -119,13 +125,14 @@ impl RegistryProvider for MdnsRegistry {
         });
         Box::new(
             future::select_all(connections)
-                .map(|s| RegistryResult::Found(s.0.new_stream_handle().clone()))
+                .map(|s| RegistryResult::Found(s.0))
                 .map_err(|_| ()),
         )
     }
 }
 
 /// The result found by `DiscoveryStream`.
+#[derive(Debug)]
 struct DiscoveryResult {
     peer: PubKeyHash,
     ports: Vec<u16>,
@@ -150,7 +157,7 @@ impl DiscoveryResult {
                     }
 
                     if let Some(pos) = hash.find(&format!(".{}", record.name)) {
-                        peer = PubKeyHash::from_hashed_hex(&hash[..pos]).ok();
+                        peer = PubKeyHash::from_hashed_hex(&hash[..pos].replace('.', "")).ok();
                     }
                 }
                 _ => {}
@@ -205,6 +212,7 @@ impl Stream for DiscoveryStream {
             };
 
             if let Some(r) = DiscoveryResult::try_from(res, &self.service_name) {
+                debug!("mDNS found peer: {:?}", r);
                 return Ok(Ready(Some(r)));
             }
         }

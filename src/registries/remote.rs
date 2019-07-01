@@ -370,7 +370,9 @@ impl OutgoingStream {
 
             if peer == self.peer_identifier {
                 info!("Found peer({}) as remote registry provider locally.", peer);
-                let _ = sender.send(RegistryResult::Found(self.new_stream_handle.clone()));
+                let _ = sender.send(RegistryResult::FoundWithHandle(
+                    self.new_stream_handle.clone(),
+                ));
             } else {
                 match self.requests.entry(peer.clone()) {
                     Entry::Occupied(mut e) => {

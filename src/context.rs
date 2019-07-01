@@ -18,7 +18,7 @@ use futures::{
         oneshot,
     },
     Async::{NotReady, Ready},
-    Future, Poll, Stream as FStream,
+    Future, IntoFuture, Poll, Stream as FStream,
 };
 
 use std::{net::SocketAddr, time::Duration};
@@ -177,9 +177,7 @@ fn create_connection_to_peer(
         .and_then(
             move |find| -> Result<Box<dyn SendFuture<Item = Stream, Error = Error>>> {
                 match find {
-                    RegistryResult::Found(mut new_stream_handle) => {
-                        Ok(Box::new(new_stream_handle.new_stream()))
-                    }
+                    RegistryResult::Found(stream) => Ok(Box::new(Ok(stream).into_future())),
                     RegistryResult::FoundRemote(new_stream_handle) => {
                         Ok(Box::new(BuildConnectionToPeer::new(
                             local_peer_identifier,
@@ -188,6 +186,9 @@ fn create_connection_to_peer(
                             new_stream_handle,
                             switch_to_proxy_timeout,
                         )))
+                    }
+                    RegistryResult::FoundWithHandle(mut handle) => {
+                        Ok(Box::new(handle.new_stream()))
                     }
                     RegistryResult::NotFound => Err(Error::PeerNotFound(peer)),
                 }
