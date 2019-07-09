@@ -50,7 +50,7 @@ impl<T: ToSocketAddrs + Send> Resolve for T {
 /// A registry that connects to a remote peer to query it for searched peers.
 pub struct RemoteRegistry {
     find_peer_request: UnboundedSender<(PubKeyHash, ResultSender)>,
-    /// Will make sure that the `ConnectionHandlerContext` is dropped whe `RemoteRegistry` is
+    /// Will make sure that the `ConnectionHandlerContext` is dropped the `RemoteRegistry` is
     /// dropped.
     _context_handle: oneshot::Receiver<()>,
 }

@@ -1,4 +1,7 @@
-use hole_punch::{Config, Context, Error, FileFormat, ProtocolStream, PubKeyHash, SendFuture, CreateConnectionToPeerHandle};
+use hole_punch::{
+    Config, Context, CreateConnectionToPeerHandle, Error, FileFormat, ProtocolStream, PubKeyHash,
+    SendFuture,
+};
 
 use tokio::{
     prelude::FutureExt,
@@ -144,7 +147,8 @@ fn connect_to_peer_and_recv_hello_message(
     handle: CreateConnectionToPeerHandle,
     remote_peer_identifier: PubKeyHash,
 ) -> impl SendFuture<Item = bool, Error = Error> {
-    handle.create_connection_to_peer(remote_peer_identifier.clone())
+    handle
+        .create_connection_to_peer(remote_peer_identifier.clone())
         .and_then(|con| {
             let con: TestProtocolStream = con.into();
             con.into_future().map(|v| v.0).map_err(|e| Error::from(e.0))
@@ -200,7 +204,10 @@ fn peer1_connects_to_peer0_with_mdns() {
         .block_on(
             Interval::new(Instant::now(), Duration::from_millis(500))
                 .map_err(Error::from)
-                .and_then(move |_| connect_to_peer_and_recv_hello_message(handle.clone(), peer0_identifier.clone()).then(|res| Ok(res.ok())))
+                .and_then(move |_| {
+                    connect_to_peer_and_recv_hello_message(handle.clone(), peer0_identifier.clone())
+                        .then(|res| Ok(res.ok()))
+                })
                 .for_each(move |res| {
                     if res.unwrap_or(false) {
                         if let Some(sender) = sender.take() {
@@ -211,7 +218,8 @@ fn peer1_connects_to_peer0_with_mdns() {
                     Ok(())
                 })
                 .map_err(|e| error!("{:?}", e))
-                .select(receiver.timeout(Duration::from_secs(60)).map_err(|_| ())).map_err(|_| ()),
+                .select(receiver.timeout(Duration::from_secs(60)).map_err(|_| ()))
+                .map_err(|_| ()),
         )
         .expect("Finds peer with mDNS and connects.");
 }
