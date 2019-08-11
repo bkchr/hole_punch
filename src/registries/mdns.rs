@@ -12,11 +12,11 @@ use libmdns::{Responder, Service};
 
 use mdns::RecordKind;
 
-use tokio::runtime::TaskExecutor;
+use tokio::{runtime::TaskExecutor, timer::Delay};
 
 use std::{
     net::{IpAddr, SocketAddr},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures::{
@@ -25,12 +25,14 @@ use futures::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
         oneshot,
     },
+    Async::{NotReady, Ready},
     Future, Poll, Stream,
 };
 
 use lru_time_cache::LruCache;
 
-type RequestReceiver = UnboundedReceiver<(oneshot::Sender<RegistryResult>, PubKeyHash)>;
+type PeerRequest = (oneshot::Sender<RegistryResult>, PubKeyHash);
+type RequestReceiver = UnboundedReceiver<PeerRequest>;
 
 /// A registry that registers the local peer in local DNS (mDNS) and also searches for other peers
 /// in local DNS.
@@ -147,6 +149,7 @@ struct Discovery {
     local_peer_identifier: PubKeyHash,
     known_peers: LruCache<PubKeyHash, DiscoveryResult>,
     strategies: Vec<NewConnectionHandle>,
+    initial_delay: Delay,
 }
 
 impl Discovery {
@@ -165,6 +168,7 @@ impl Discovery {
         };
 
         let discovery = mdns::discover::all(&service_name, interval)?;
+        let initial_delay = Delay::new(Instant::now() + Duration::from_secs(5));
 
         Ok(Self {
             discovery,
@@ -173,6 +177,7 @@ impl Discovery {
             local_peer_identifier,
             known_peers: LruCache::with_expiry_duration_and_capacity(Duration::from_secs(60), 20),
             strategies,
+            initial_delay,
         })
     }
 
@@ -209,6 +214,14 @@ impl Future for Discovery {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.poll_results()?;
+
+        match self.initial_delay.poll() {
+            Ok(NotReady) => return Ok(NotReady),
+            Err(e) => {
+                error!(target: "mdns-registry", "Faulty timer: {:?}", e);
+            }
+            Ok(Ready(_)) => {}
+        }
 
         loop {
             let (sender, peer) = match try_ready!(self.request_recv.poll().map_err(|_| ())) {
