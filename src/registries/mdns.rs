@@ -185,15 +185,16 @@ impl Discovery {
             {
                 Some(res) => res,
                 None => {
-                    error!("mDNS returned `None`");
+                    error!(target: "mdns-registry", "mDNS returned `None`");
                     return Err(());
                 }
             };
 
             if let Some(r) = DiscoveryResult::try_from(res, &self.service_name) {
-                debug!("mDNS found peer: {:?}", r);
                 // We don't want to add us self
                 if r.peer != self.local_peer_identifier {
+                    debug!(target: "mdns-registry", "mDNS found peer: {:?}", r);
+
                     let hash = r.peer.clone();
                     self.known_peers.insert(hash, r);
                 }
@@ -215,15 +216,22 @@ impl Future for Discovery {
                 None => return Err(()),
             };
 
+            debug!(target: "mdns-registry", "Peer request: {}", peer);
+
             let addrs = match self.known_peers.get(&peer) {
                 Some(peer) => {
                     let mut addrs = Vec::new();
                     peer.ports.iter().for_each(|p| {
                         addrs.extend(peer.ip_addresses.iter().map(|ip| SocketAddr::new(*ip, *p)))
                     });
+
+                    debug!(target: "mdns-registry", "Found peer addresses: {:?}", addrs);
                     addrs
                 }
-                None => continue,
+                None => {
+                    debug!(target: "mdns-registry", "Could not find requested peer.");
+                    continue;
+                }
             };
 
             let connections = addrs.into_iter().map(|a| {
@@ -238,7 +246,6 @@ impl Future for Discovery {
                 future::select_all(connections)
                     .map(|s| {
                         let _ = sender.send(RegistryResult::Found(s.0));
-                        ()
                     })
                     .map_err(|_| ()),
             );
