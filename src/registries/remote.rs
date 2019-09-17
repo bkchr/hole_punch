@@ -1,15 +1,23 @@
-use crate::connect::ConnectWithStrategies;
-use crate::connection::NewConnectionHandle;
-use crate::context::SendFuture;
-use crate::error::*;
-use crate::protocol::{Registry as RegistryProtocol, StreamHello};
-use crate::registry::{Registry, RegistryProvider, RegistryResult};
-use crate::strategies;
-use crate::stream::{NewStreamHandle, ProtocolStrategiesStream};
-use crate::timeout::Timeout;
-use crate::PubKeyHash;
+use crate::{
+    connect::ConnectWithStrategies,
+    connection::NewConnectionHandle,
+    context::SendFuture,
+    error::*,
+    protocol::{Registry as RegistryProtocol, StreamHello},
+    registry::{Registry, RegistryProvider, RegistryResult},
+    strategies,
+    stream::{NewStreamHandle, ProtocolStrategiesStream},
+    timeout::Timeout,
+    PubKeyHash,
+};
+
+use trust_dns_resolver::{
+    config::{ResolverConfig, ResolverOpts},
+    AsyncResolver,
+};
 
 use futures::{
+    stream::{self, Fuse},
     sync::{
         mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
         oneshot,
@@ -20,7 +28,8 @@ use futures::{
 
 use std::{
     collections::{hash_map::Entry, HashMap},
-    net::{SocketAddr, ToSocketAddrs},
+    convert::AsRef,
+    net::SocketAddr,
     time::{Duration, Instant},
 };
 
@@ -34,16 +43,34 @@ use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 type ResultSender = oneshot::Sender<RegistryResult>;
 
 /// A common trait for resolving `Url`s and `SocketAddr`s to `SocketAddr`s.
-pub trait Resolve: Send {
+pub trait Resolve: Send + 'static {
     /// Resolve the addresses, if possible.
-    fn resolve(&self) -> Result<Vec<SocketAddr>>;
+    fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>;
 }
 
-impl<T: ToSocketAddrs + Send> Resolve for T {
-    fn resolve(&self) -> Result<Vec<SocketAddr>> {
-        self.to_socket_addrs()
-            .map(|v| v.collect::<Vec<_>>())
-            .map_err(|e| e.into())
+impl Resolve for SocketAddr {
+    fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
+        Box::new(stream::once(Ok(*self)))
+    }
+}
+
+impl<T: AsRef<str> + Send + 'static> Resolve for (T, u16) {
+    fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
+        let (resolver, background) =
+            AsyncResolver::new(ResolverConfig::default(), ResolverOpts::default());
+
+        tokio::spawn(background);
+
+        let port = self.1;
+
+        Box::new(
+            resolver
+                .lookup_ip(format!("{}.", self.0.as_ref()).as_str())
+                .and_then(|addresses| Ok(stream::iter_ok(addresses.into_iter())))
+                .flatten_stream()
+                .map(move |ip| (ip, port).into())
+                .map_err(|_| ()),
+        )
     }
 }
 
@@ -127,51 +154,62 @@ impl Future for TimeoutRequest {
 type FindPeerRequest = UnboundedReceiver<(PubKeyHash, ResultSender)>;
 
 struct GetNextAddr {
+    /// All resolvers for ip addresses.
     resolvers: Vec<Box<dyn Resolve>>,
-    resolved_addrs: Vec<SocketAddr>,
-    last_resolver: usize,
-    /// Timeout between calling the resolvers.
-    timeout: Timeout,
+    /// A `Stream` that resolves to `SocketAddr`'s.
+    resolve_addrs: Fuse<Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>>,
+    /// Duration to wait between calling `resolve` after `resolve_addrs` ended.
+    wait_between_resolve_duration: Duration,
+    wait_between_resolve: Delay,
+}
+
+/// Converts the given resolvers to a `Stream` that resolves addresses using these resolvers.
+fn resolvers_to_stream<'a>(
+    mut resolvers: impl Iterator<Item = &'a Box<dyn Resolve>>,
+) -> Fuse<Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>> {
+    let first = resolvers
+        .next()
+        .expect("`resolvers` need to contain at least one element")
+        .resolve();
+
+    resolvers
+        .fold(first, |o, c| Box::new(o.select(c.resolve())))
+        .fuse()
 }
 
 impl GetNextAddr {
-    fn new(resolvers: Vec<Box<dyn Resolve>>, timeout: Duration) -> Self {
-        let resolved_addrs = resolvers[0].resolve().unwrap_or_default();
-
+    fn new(resolvers: Vec<Box<dyn Resolve>>, wait_between_resolve_duration: Duration) -> Self {
+        let resolve_addrs = resolvers_to_stream(resolvers.iter());
+        let wait_between_resolve = Delay::new(Instant::now() + wait_between_resolve_duration);
         GetNextAddr {
             resolvers,
-            resolved_addrs,
-            last_resolver: 0,
-            timeout: Timeout::new(timeout),
+            resolve_addrs,
+            wait_between_resolve,
+            wait_between_resolve_duration,
         }
     }
 }
 
-impl Future for GetNextAddr {
+impl FStream for GetNextAddr {
     type Item = SocketAddr;
     type Error = Never;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        // Check in maximum one extra resolver per call.
-        for _ in 0..2 {
-            if !self.resolved_addrs.is_empty() {
-                return Ok(Ready(self.resolved_addrs.pop().unwrap()));
-            } else if self.timeout.poll().is_err() {
-                self.timeout.reset();
-
-                self.last_resolver = if self.last_resolver + 1 == self.resolvers.len() {
-                    0
-                } else {
-                    self.last_resolver + 1
-                };
-
-                self.resolved_addrs = self.resolvers[self.last_resolver]
-                    .resolve()
-                    .unwrap_or_default();
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        loop {
+            match self.resolve_addrs.poll() {
+                Ok(Ready(Some(addr))) => return Ok(Ready(Some(addr))),
+                Ok(Ready(None)) => match self.wait_between_resolve.poll() {
+                    Err(_) | Ok(Ready(_)) => {
+                        self.resolve_addrs = resolvers_to_stream(self.resolvers.iter());
+                        self.wait_between_resolve
+                            .reset(Instant::now() + self.wait_between_resolve_duration);
+                    }
+                    Ok(NotReady) => return Ok(NotReady),
+                },
+                Err(_) => {}
+                Ok(NotReady) => return Ok(NotReady),
             }
         }
-
-        Ok(NotReady)
     }
 }
 
@@ -248,7 +286,7 @@ impl PollConnectionHandler for ConnectionHandler {
         context: &'c mut RentToOwn<'c, ConnectionHandlerContext>,
     ) -> Poll<AfterRequestNextPeerAddr, Error> {
         let addr = match context.next_peer_addr.poll() {
-            Ok(Ready(addr)) => addr,
+            Ok(Ready(addr)) => addr.expect("`GetNextAddr` always returns an address."),
             _ => return Ok(NotReady),
         };
 
@@ -508,17 +546,17 @@ mod tests {
     use super::*;
 
     use std::sync::{Arc, Mutex};
-    use tokio::prelude::FutureExt;
+    use tokio::prelude::StreamExt;
 
     struct Resolver {
         res: Arc<Mutex<Option<SocketAddr>>>,
     }
 
     impl Resolve for Resolver {
-        fn resolve(&self) -> Result<Vec<SocketAddr>> {
+        fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
             match *self.res.lock().unwrap() {
-                Some(addr) => Ok(vec![addr]),
-                None => Err("lol".into()),
+                Some(addr) => Box::new(stream::once(Ok(addr))),
+                None => Box::new(stream::once(Err(()))),
             }
         }
     }
@@ -536,7 +574,10 @@ mod tests {
                     Duration::from_nanos(1000)
                 )
                 .timeout(Duration::from_secs(1))
+                .into_future()
             )
+            .map_err(|e| e.0)
+            .map(|e| e.0)
             .unwrap_err()
             .is_elapsed());
 
@@ -550,10 +591,12 @@ mod tests {
                         Duration::from_nanos(1000)
                     )
                     .timeout(Duration::from_secs(1))
+                    .into_future()
                 )
                 .map_err(|_| panic!())
+                .map(|e| e.0)
                 .unwrap(),
-            socket_addr
+            Some(socket_addr),
         );
     }
 }

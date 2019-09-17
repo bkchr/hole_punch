@@ -1,11 +1,6 @@
-use crate::error::*;
-use crate::registries::Resolve;
+use crate::{error::*, registries::Resolve};
 
-use std::{
-    net::{SocketAddr, ToSocketAddrs},
-    path::PathBuf,
-    time::Duration,
-};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use picoquic::{self, FileFormat};
 
@@ -120,7 +115,7 @@ impl ConfigBuilder {
 
     /// Adds a remote peer. The `Context` will always try to hold a connection to one of the known
     /// remote peers.
-    pub fn add_remote_peer(mut self, remote_peer: impl ToSocketAddrs + 'static + Send) -> Self {
+    pub fn add_remote_peer(mut self, remote_peer: impl Resolve) -> Self {
         self.remote_peers.push(Box::new(remote_peer));
         self
     }
