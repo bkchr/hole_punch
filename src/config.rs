@@ -120,6 +120,17 @@ impl ConfigBuilder {
         self
     }
 
+    /// Adds a remote peer. The `Context` will always try to hold a connection to one of the known
+    /// remote peers.
+    /// The `url` needs to be in the format `url:port`, otherwise this returns an error.
+    pub fn add_remote_peer_by_url(mut self, url: String) -> Result<Self> {
+        let mut url = url::Url::parse(&url).map_err(|e| format!("{:?}", e))?;
+        let port = url.port().ok_or_else(|| "No port supplied")?;
+        url.set_port(None).map_err(|e| format!("{:?}", e))?;
+        self.remote_peers.push(Box::new((url.to_string(), port)));
+        Ok(self)
+    }
+
     /// Enables mDNS peer searching and registers this peer as `_given-service-name.local`
     pub fn enable_mdns<S: Into<String>>(mut self, service_name: S) -> Self {
         self.enable_mdns = Some(service_name.into());

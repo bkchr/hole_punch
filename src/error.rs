@@ -97,6 +97,12 @@ impl From<&'static str> for Error {
     }
 }
 
+impl From<String> for Error {
+    fn from(err: String) -> Error {
+        Error::Custom(failure::err_msg::<String>(err))
+    }
+}
+
 impl From<timer::Error> for Error {
     fn from(err: timer::Error) -> Error {
         Error::Timeout(err)
