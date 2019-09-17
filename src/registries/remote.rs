@@ -45,24 +45,29 @@ type ResultSender = oneshot::Sender<RegistryResult>;
 /// A common trait for resolving `Url`s and `SocketAddr`s to `SocketAddr`s.
 pub trait Resolve: Send + 'static {
     /// Resolve the addresses, if possible.
-    fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>;
+    fn resolve(
+        &self,
+        handle: TaskExecutor,
+    ) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>;
 }
 
 impl Resolve for SocketAddr {
-    fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
+    fn resolve(&self, _: TaskExecutor) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
         Box::new(stream::once(Ok(*self)))
     }
 }
 
 impl<T: AsRef<str> + Send + 'static> Resolve for (T, u16) {
-    fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
+    fn resolve(
+        &self,
+        handle: TaskExecutor,
+    ) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
         let (resolver, background) =
             AsyncResolver::new(ResolverConfig::default(), ResolverOpts::default());
 
-        tokio::spawn(background);
+        handle.spawn(background);
 
         let port = self.1;
-
         Box::new(
             resolver
                 .lookup_ip(format!("{}.", self.0.as_ref()).as_str())
@@ -100,6 +105,7 @@ impl RemoteRegistry {
             ping_interval,
             address_resolve_timeout,
             context_handle,
+            handle.clone(),
         );
         handle.spawn(con_handler.map_err(|_| ()).map(|_| ()));
 
@@ -161,31 +167,38 @@ struct GetNextAddr {
     /// Duration to wait between calling `resolve` after `resolve_addrs` ended.
     wait_between_resolve_duration: Duration,
     wait_between_resolve: Delay,
+    handle: TaskExecutor,
 }
 
 /// Converts the given resolvers to a `Stream` that resolves addresses using these resolvers.
 fn resolvers_to_stream<'a>(
     mut resolvers: impl Iterator<Item = &'a Box<dyn Resolve>>,
+    handle: TaskExecutor,
 ) -> Fuse<Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>> {
     let first = resolvers
         .next()
         .expect("`resolvers` need to contain at least one element")
-        .resolve();
+        .resolve(handle.clone());
 
     resolvers
-        .fold(first, |o, c| Box::new(o.select(c.resolve())))
+        .fold(first, |o, c| Box::new(o.select(c.resolve(handle.clone()))))
         .fuse()
 }
 
 impl GetNextAddr {
-    fn new(resolvers: Vec<Box<dyn Resolve>>, wait_between_resolve_duration: Duration) -> Self {
-        let resolve_addrs = resolvers_to_stream(resolvers.iter());
+    fn new(
+        resolvers: Vec<Box<dyn Resolve>>,
+        wait_between_resolve_duration: Duration,
+        handle: TaskExecutor,
+    ) -> Self {
+        let resolve_addrs = resolvers_to_stream(resolvers.iter(), handle.clone());
         let wait_between_resolve = Delay::new(Instant::now() + wait_between_resolve_duration);
         GetNextAddr {
             resolvers,
             resolve_addrs,
             wait_between_resolve,
             wait_between_resolve_duration,
+            handle,
         }
     }
 }
@@ -200,7 +213,8 @@ impl FStream for GetNextAddr {
                 Ok(Ready(Some(addr))) => return Ok(Ready(Some(addr))),
                 Ok(Ready(None)) => match self.wait_between_resolve.poll() {
                     Err(_) | Ok(Ready(_)) => {
-                        self.resolve_addrs = resolvers_to_stream(self.resolvers.iter());
+                        self.resolve_addrs =
+                            resolvers_to_stream(self.resolvers.iter(), self.handle.clone());
                         self.wait_between_resolve
                             .reset(Instant::now() + self.wait_between_resolve_duration);
                     }
@@ -267,8 +281,9 @@ impl ConnectionHandler {
         ping_interval: Duration,
         address_resolve_timeout: Duration,
         remote_registry_handle: oneshot::Sender<()>,
+        handle: TaskExecutor,
     ) -> ConnectionHandlerFuture {
-        let next_peer_addr = GetNextAddr::new(resolvers, address_resolve_timeout);
+        let next_peer_addr = GetNextAddr::new(resolvers, address_resolve_timeout, handle);
         let context = ConnectionHandlerContext {
             next_peer_addr,
             strategies,
@@ -553,7 +568,10 @@ mod tests {
     }
 
     impl Resolve for Resolver {
-        fn resolve(&self) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
+        fn resolve(
+            &self,
+            _: TaskExecutor,
+        ) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
             match *self.res.lock().unwrap() {
                 Some(addr) => Box::new(stream::once(Ok(addr))),
                 None => Box::new(stream::once(Err(()))),
@@ -571,7 +589,8 @@ mod tests {
             .block_on(
                 GetNextAddr::new(
                     vec![Box::new(Resolver { res: res.clone() })],
-                    Duration::from_nanos(1000)
+                    Duration::from_nanos(1000),
+                    runtime.executor(),
                 )
                 .timeout(Duration::from_secs(1))
                 .into_future()
@@ -588,7 +607,8 @@ mod tests {
                 .block_on(
                     GetNextAddr::new(
                         vec![Box::new(Resolver { res: res.clone() })],
-                        Duration::from_nanos(1000)
+                        Duration::from_nanos(1000),
+                        runtime.executor(),
                     )
                     .timeout(Duration::from_secs(1))
                     .into_future()
@@ -598,5 +618,35 @@ mod tests {
                 .unwrap(),
             Some(socket_addr),
         );
+    }
+
+    #[test]
+    fn resolves_example_dot_com() {
+        let mut runtime = tokio::runtime::Runtime::new().unwrap();
+        let get_next_addr = GetNextAddr::new(
+            vec![Box::new(("example.com", 80))],
+            Duration::from_nanos(1000),
+            runtime.executor(),
+        );
+
+        let address = runtime
+            .block_on(get_next_addr.into_future())
+            .map(|r| r.0)
+            .map_err(|_| panic!("`GetNextAddr` never returns an error"))
+            .unwrap()
+            .unwrap();
+
+        if address.is_ipv4() {
+            assert_eq!(address, ([93, 184, 216, 34], 80).into());
+        } else {
+            assert_eq!(
+                address,
+                (
+                    [0x2606, 0x2800, 0x220, 0x1, 0x248, 0x1893, 0x25c8, 0x1946],
+                    80
+                )
+                    .into(),
+            );
+        }
     }
 }
