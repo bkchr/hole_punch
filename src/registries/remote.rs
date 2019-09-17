@@ -43,7 +43,7 @@ use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 type ResultSender = oneshot::Sender<RegistryResult>;
 
 /// A common trait for resolving `Url`s and `SocketAddr`s to `SocketAddr`s.
-pub trait Resolve: Send + 'static {
+pub trait Resolve: Send + 'static + objekt::Clone {
     /// Resolve the addresses, if possible.
     fn resolve(
         &self,
@@ -51,7 +51,9 @@ pub trait Resolve: Send + 'static {
     ) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>;
 }
 
-impl<T: Resolve> Resolve for Box<T> {
+objekt::clone_trait_object!(Resolve);
+
+impl<T: Resolve + Clone> Resolve for Box<T> {
     fn resolve(
         &self,
         handle: TaskExecutor,
@@ -75,7 +77,7 @@ impl Resolve for SocketAddr {
     }
 }
 
-impl<T: AsRef<str> + Send + 'static> Resolve for (T, u16) {
+impl<T: AsRef<str> + Send + 'static + Clone> Resolve for (T, u16) {
     fn resolve(
         &self,
         handle: TaskExecutor,
@@ -581,6 +583,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tokio::prelude::StreamExt;
 
+    #[derive(Clone)]
     struct Resolver {
         res: Arc<Mutex<Option<SocketAddr>>>,
     }
