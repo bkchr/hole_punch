@@ -51,6 +51,15 @@ pub trait Resolve: Send + 'static {
     ) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send>;
 }
 
+impl<T: Resolve> Resolve for Box<T> {
+    fn resolve(
+        &self,
+        handle: TaskExecutor,
+    ) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
+        (**self).resolve(handle)
+    }
+}
+
 impl Resolve for SocketAddr {
     fn resolve(&self, _: TaskExecutor) -> Box<dyn FStream<Item = SocketAddr, Error = ()> + Send> {
         Box::new(stream::once(Ok(*self)))
