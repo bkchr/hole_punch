@@ -170,6 +170,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
     fn poll_waiting_for_proxy_stream<'a>(
         wait: &'a mut RentToOwn<'a, WaitingForProxyStream>,
     ) -> Poll<AfterWaitingForProxyStream, Error> {
+        trace!(target: "PollBuildConnectionToPeer", "poll_waiting_for_proxy_stream()");
         let proxy_stream = try_ready!(wait.proxy_stream.poll());
         let wait = wait.take();
         transition!(WaitingForInternetAddressInformation {
@@ -195,10 +196,14 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
             _ => bail!("Received illegal message while waiting for internet address information"),
         };
 
+        trace!(target: "PollBuildConnectionToPeer", "poll_waiting_for_internet_address_information() - internet address: {:?}", addr);
+
         let mut wait = wait.take();
         let mut addresses =
             get_interface_addresses(wait.proxy_stream.get_ref().get_ref().get_ref().local_addr());
         addresses.push(addr);
+
+        trace!(target: "PollBuildConnectionToPeer", "poll_waiting_for_internet_address_information() - send addresses: {:?}", addresses);
 
         wait.proxy_stream
             .start_send(BuildConnectionToPeerProtocol::ExchangeAddressInformation(
@@ -229,6 +234,8 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
             _ => bail!("Received illegal message while waiting for exchange address information"),
         };
 
+        trace!(target: "PollBuildConnectionToPeer", "poll_waiting_for_exchange_address_information() - addresses: {:?}", addresses);
+
         let mut wait = wait.take();
         let timeout = Timeout::new(wait.timeout);
         let new_cons = futures_unordered(
@@ -251,6 +258,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
         wait: &'a mut RentToOwn<'a, WaitingForConnection>,
     ) -> Poll<AfterWaitingForConnection, Error> {
         if wait.timeout.poll().is_err() {
+            trace!(target: "PollBuildConnectionToPeer", "poll_waiting_for_connection() time out");
             let wait = wait.take();
 
             transition!(ProxyStream {
@@ -263,6 +271,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
         let mut new_con = match wait.new_cons.poll() {
             Ok(Ready(Some(con))) => con,
             Err(_) | Ok(Ready(None)) => {
+                trace!(target: "PollBuildConnectionToPeer", "poll_waiting_for_connection() new connections error or empty");
                 let wait = wait.take();
 
                 transition!(ProxyStream {
@@ -293,7 +302,8 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
     ) -> Poll<AfterWaitingForStream, Error> {
         let stream = match wait.new_stream.poll() {
             Ok(Ready(stream)) => stream,
-            Err(_) => {
+            Err(e) => {
+                trace!(target: "PollBuildConnectionToPeer", "poll_waiting_for_stream() error: {:?}", e);
                 let wait = wait.take();
 
                 transition!(ProxyStream {
@@ -311,6 +321,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
     fn poll_proxy_stream<'a>(
         wait: &'a mut RentToOwn<'a, ProxyStream>,
     ) -> Poll<AfterProxyStream, Error> {
+        trace!(target: "PollBuildConnectionToPeer", "poll_proxy_stream()");
         let mut wait = wait.take();
 
         wait.proxy_stream
@@ -321,7 +332,7 @@ impl PollBuildConnectionToPeer for BuildConnectionToPeer {
             wait.proxy_stream,
             wait.peer_identifier,
             wait.new_stream_handle,
-            true
+            true,
         )))
     }
 }

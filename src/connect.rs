@@ -49,7 +49,7 @@ impl PollConnectStateMachine for ConnectStateMachine {
         let mut init = init.take();
 
         let wait = init.strat.new_connection(init.addr);
-        let timeout = Timeout::new(Duration::from_secs(2));
+        let timeout = Timeout::new(Duration::from_secs(4));
 
         transition!(WaitForConnection {
             wait,

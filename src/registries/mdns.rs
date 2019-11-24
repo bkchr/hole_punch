@@ -248,10 +248,14 @@ impl Future for Discovery {
                     a,
                     StreamHello::User(self.local_peer_identifier.clone()),
                 )
+                .map_err(|e| {
+                    trace!(target: "mdns-registry", "Could not connect to local peer: {:?}", e);
+                    e
+                })
             });
 
             tokio::spawn(
-                future::select_all(connections)
+                future::select_ok(connections)
                     .map(|s| {
                         let _ = sender.send(RegistryResult::Found(s.0));
                     })

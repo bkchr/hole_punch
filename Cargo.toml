@@ -5,25 +5,25 @@ authors = ["Bastian Köcher <git@kchr.de>"]
 edition = "2018"
 
 [dependencies]
-pnet_datalink = "0.22"
+pnet_datalink = "0.23.0"
 tokio = "0.1"
 serde_json = "1.0"
 serde_derive = "1.0"
-serde = "1.0.94"
+serde = "1.0.102"
 futures = "0.1.28"
-tokio-serde-json = "0.2"
+tokio-serde-json = "0.2.0"
 itertools = "0.8"
 state_machine_future = "0.2"
 bytes = "0.4"
 log = "0.4"
 picoquic = { git = "https://github.com/bkchr/picoquic-rs.git" }
 rand = "0.7.2"
-either = "1.5.2"
+either = "1.5.3"
 objekt = "0.1"
 failure = "0.1"
-openssl = "0.10.23"
-openssl-sys = "0.9.47"
-hex = "0.3"
+openssl = "0.10.26"
+openssl-sys = "0.9.53"
+hex = "0.4.0"
 mdns = { git = "https://github.com/bkchr/mdns.git", branch = "tokio_rewrite" }
 libmdns = { git = "https://github.com/bkchr/libmdns.git", branch = "babyphone" }
 lru_time_cache = "0.9.0"

@@ -194,6 +194,10 @@ fn create_connection_to_peer(
                 }
             },
         )
+        .map_err(|e| {
+            trace!(target: "Context", "Create connection to peer error: {:?}", e);
+            e
+        })
         .flatten()
 }
 
