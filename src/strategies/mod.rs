@@ -11,9 +11,7 @@ use std::{
 };
 
 use futures::{
-    stream::{SplitSink, SplitStream},
-    Async::{NotReady, Ready},
-    Future, Poll, Sink, Stream as FStream,
+    StartSend, Async::{NotReady, Ready}, Future, Poll, Sink, Stream as FStream,
 };
 
 use tokio::{
@@ -181,10 +179,6 @@ impl Stream {
         }
     }
 
-    pub fn split(self) -> (SplitSink<StreamInner>, SplitStream<StreamInner>) {
-        self.inner.split()
-    }
-
     /// If we switch the protocol and the old protocol already read more data than it required,
     /// this function can be used to reinsert the data that it is available for the next protocol.
     pub fn reinsert_data(&mut self, mut data: BytesMut) {
@@ -213,6 +207,19 @@ impl FStream for Stream {
             Some(buf) => Ok(Ready(Some(buf))),
             None => self.inner.poll(),
         }
+    }
+}
+
+impl Sink for Stream {
+    type SinkItem = Bytes;
+    type SinkError = Error;
+
+    fn start_send(&mut self, item: Self::SinkItem) -> StartSend<Self::SinkItem, Self::SinkError> {
+        self.inner.start_send(item)
+    }
+
+    fn poll_complete(&mut self) -> Poll<(), Self::SinkError> {
+        self.inner.poll_complete()
     }
 }
 
@@ -417,7 +424,6 @@ pub trait GetConnectionId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures::StartSend;
     use std::collections::VecDeque;
 
     struct StreamMock {

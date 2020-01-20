@@ -6,7 +6,7 @@ use crate::error::*;
 use crate::registries::{MdnsRegistry, RemoteRegistry};
 use crate::registry::{Registry, RegistryProvider, RegistryResult};
 use crate::strategies::{self, LocalAddressInformation, NewConnection};
-use crate::stream::{NewStreamHandle, Stream};
+use crate::stream::{Stream};
 use crate::PubKeyHash;
 
 use failure;
@@ -25,14 +25,12 @@ use std::{net::SocketAddr, time::Duration};
 
 use tokio::{self, runtime::TaskExecutor};
 
-type NewStreamChannel = (strategies::Stream, PubKeyHash, NewStreamHandle, bool);
-
 /// A `Future` that implements `Send`.
 pub trait SendFuture: Future + Send {}
 impl<T: Future + Send> SendFuture for T {}
 
 pub struct Context {
-    new_stream_recv: UnboundedReceiver<NewStreamChannel>,
+    new_stream_recv: UnboundedReceiver<Stream>,
     new_connection_handles: Vec<NewConnectionHandle>,
     registry: Registry,
     local_peer_identifier: PubKeyHash,
@@ -218,38 +216,21 @@ impl FStream for Context {
         self.new_stream_recv
             .poll()
             .map_err(|_| failure::err_msg("Could not receive new stream").into())
-            .map(|r| {
-                r.map(|o| {
-                    o.map(
-                        |(stream, peer_identifier, new_stream_handle, is_proxy_stream)| {
-                            Stream::new(stream, peer_identifier, new_stream_handle, is_proxy_stream)
-                        },
-                    )
-                })
-            })
     }
 }
 
 #[derive(Clone)]
 pub struct PassStreamToContext {
-    send: UnboundedSender<NewStreamChannel>,
+    send: UnboundedSender<Stream>,
 }
 
 impl PassStreamToContext {
-    fn new(send: UnboundedSender<NewStreamChannel>) -> PassStreamToContext {
+    fn new(send: UnboundedSender<Stream>) -> PassStreamToContext {
         PassStreamToContext { send }
     }
 
-    pub fn pass_stream(
-        &mut self,
-        stream: strategies::Stream,
-        peer_identifier: PubKeyHash,
-        new_stream_handle: NewStreamHandle,
-        is_proxy_stream: bool,
-    ) {
-        let _ =
-            self.send
-                .unbounded_send((stream, peer_identifier, new_stream_handle, is_proxy_stream));
+    pub fn pass_stream(&mut self, stream: Stream) {
+        let _ = self.send.unbounded_send(stream);
     }
 }
 

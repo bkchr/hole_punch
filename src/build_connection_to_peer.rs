@@ -417,10 +417,12 @@ impl Future for BuildConnectionToPeerRemote {
                 }
                 Some(BuildConnectionToPeerProtocol::ProxyConnection) => {
                     self.pass_stream_to_context.pass_stream(
-                        self.stream.take().unwrap().into(),
-                        self.peer_identifier.clone(),
-                        self.new_stream_handle.clone(),
-                        true,
+                        Stream::new(
+                            self.stream.take().unwrap(),
+                            self.peer_identifier.clone(),
+                            self.new_stream_handle.clone(),
+                            true,
+                        )
                     );
 
                     return Ok(Ready(()));

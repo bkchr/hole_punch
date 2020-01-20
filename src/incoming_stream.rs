@@ -6,7 +6,7 @@ use crate::protocol::StreamHello;
 use crate::registries::RemoteRegistryIncomingStream;
 use crate::registry::Registry;
 use crate::strategies;
-use crate::stream::{NewStreamHandle, ProtocolStrategiesStream};
+use crate::stream::{NewStreamHandle, ProtocolStrategiesStream, Stream};
 use crate::timeout::Timeout;
 use crate::PubKeyHash;
 
@@ -72,10 +72,7 @@ impl Future for IncomingStream {
                 let is_proxy_stream = peer != self.peer_identifier;
 
                 self.pass_stream_to_context.pass_stream(
-                    stream.into(),
-                    peer,
-                    self.new_stream_handle.clone(),
-                    is_proxy_stream,
+                    Stream::new(stream, peer, self.new_stream_handle.clone(), is_proxy_stream)
                 );
             }
             Some(StreamHello::UserProxy(peer)) => {
