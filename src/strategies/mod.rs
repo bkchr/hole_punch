@@ -11,7 +11,8 @@ use std::{
 };
 
 use futures::{
-    StartSend, Async::{NotReady, Ready}, Future, Poll, Sink, Stream as FStream,
+    Async::{NotReady, Ready},
+    Future, Poll, Sink, StartSend, Stream as FStream,
 };
 
 use tokio::{

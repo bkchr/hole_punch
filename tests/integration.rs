@@ -151,11 +151,18 @@ fn connect_to_peer_and_recv_hello_message(
     handle
         .create_connection_to_peer(remote_peer_identifier.clone())
         .and_then(|con| {
-            con.new_stream_handle().clone().new_stream().and_then(|con| {
-            con.new_stream_handle().clone().new_stream().and_then(|con| {
-            let con: TestProtocolStream = con.into();
-                con.into_future().map(|v| v.0).map_err(|e| Error::from(e.0))})
-            })
+            con.new_stream_handle()
+                .clone()
+                .new_stream()
+                .and_then(|con| {
+                    con.new_stream_handle()
+                        .clone()
+                        .new_stream()
+                        .and_then(|con| {
+                            let con: TestProtocolStream = con.into();
+                            con.into_future().map(|v| v.0).map_err(|e| Error::from(e.0))
+                        })
+                })
         })
         .map(move |msg| Some(TestProtocol::Hello(remote_peer_identifier)) == msg)
 }

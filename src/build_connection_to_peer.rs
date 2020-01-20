@@ -416,14 +416,12 @@ impl Future for BuildConnectionToPeerRemote {
                     create_poke_connections(&mut self.new_con_handle, remote_addresses);
                 }
                 Some(BuildConnectionToPeerProtocol::ProxyConnection) => {
-                    self.pass_stream_to_context.pass_stream(
-                        Stream::new(
-                            self.stream.take().unwrap(),
-                            self.peer_identifier.clone(),
-                            self.new_stream_handle.clone(),
-                            true,
-                        )
-                    );
+                    self.pass_stream_to_context.pass_stream(Stream::new(
+                        self.stream.take().unwrap(),
+                        self.peer_identifier.clone(),
+                        self.new_stream_handle.clone(),
+                        true,
+                    ));
 
                     return Ok(Ready(()));
                 }

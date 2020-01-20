@@ -6,7 +6,7 @@ use crate::error::*;
 use crate::registries::{MdnsRegistry, RemoteRegistry};
 use crate::registry::{Registry, RegistryProvider, RegistryResult};
 use crate::strategies::{self, LocalAddressInformation, NewConnection};
-use crate::stream::{Stream};
+use crate::stream::Stream;
 use crate::PubKeyHash;
 
 use failure;

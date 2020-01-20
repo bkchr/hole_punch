@@ -15,12 +15,14 @@ use mdns::RecordKind;
 use tokio::{runtime::TaskExecutor, timer::Delay};
 
 use std::{
+    collections::{hash_map::Entry, HashMap},
     net::{IpAddr, SocketAddr},
     time::{Duration, Instant},
 };
 
 use futures::{
     future,
+    stream::FuturesUnordered,
     sync::{
         mpsc::{self, UnboundedReceiver, UnboundedSender},
         oneshot,
@@ -35,6 +37,8 @@ use state_machine_future::{transition, RentToOwn, StateMachineFuture};
 
 type PeerRequest = (oneshot::Sender<RegistryResult>, PubKeyHash);
 type RequestReceiver = UnboundedReceiver<PeerRequest>;
+/// Maximum number of queued requests.
+const MAX_QUEUED_REQUESTS: usize = 10;
 
 /// A registry that registers the local peer in local DNS (mDNS) and also searches for other peers
 /// in local DNS.
@@ -96,7 +100,7 @@ impl RegistryProvider for MdnsRegistry {
 }
 
 /// The result found by `Discovery`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct DiscoveryResult {
     peer: PubKeyHash,
     ports: Vec<u16>,
@@ -144,7 +148,9 @@ struct Discovery {
     local_peer_identifier: PubKeyHash,
     known_peers: LruCache<PubKeyHash, DiscoveryResult>,
     strategies: Vec<NewConnectionHandle>,
-    initial_delay: Delay,
+    queued_requests: HashMap<PubKeyHash, oneshot::Sender<RegistryResult>>,
+    queued_requests_timeouts:
+        FuturesUnordered<Box<dyn Future<Item = PubKeyHash, Error = ()> + Send>>,
 }
 
 impl Discovery {
@@ -163,7 +169,6 @@ impl Discovery {
         };
 
         let discovery = mdns::discover::all(&service_name, interval)?;
-        let initial_delay = Delay::new(Instant::now() + Duration::from_secs(5));
 
         Ok(Self {
             discovery,
@@ -172,7 +177,8 @@ impl Discovery {
             local_peer_identifier,
             known_peers: LruCache::with_expiry_duration_and_capacity(Duration::from_secs(60), 20),
             strategies,
-            initial_delay,
+            queued_requests: Default::default(),
+            queued_requests_timeouts: Default::default(),
         })
     }
 
@@ -196,8 +202,55 @@ impl Discovery {
                     debug!(target: "mdns-registry", "mDNS found peer: {:?}", r);
 
                     let hash = r.peer.clone();
+
+                    if let Some(request) = self.queued_requests.remove(&hash) {
+                        self.fulfill_request(request, &r);
+                    }
+
                     self.known_peers.insert(hash, r);
                 }
+            }
+        }
+    }
+
+    fn fulfill_request(&self, sender: oneshot::Sender<RegistryResult>, peer: &DiscoveryResult) {
+        let mut addrs = Vec::new();
+        peer.ports.iter().for_each(|p| {
+            addrs.extend(peer.ip_addresses.iter().map(|ip| SocketAddr::new(*ip, *p)))
+        });
+
+        debug!(target: "mdns-registry", "Found peer({}) addresses: {:?}", peer.peer, addrs);
+
+        let connections = addrs.into_iter().map(|a| {
+            ConnectWithStrategies::new(
+                self.strategies.clone(),
+                a,
+                StreamHello::User(self.local_peer_identifier.clone()),
+            )
+            .map_err(|e| {
+                trace!(target: "mdns-registry", "Could not connect to local peer: {:?}", e);
+                e
+            })
+        });
+
+        tokio::spawn(
+            future::select_ok(connections)
+                .map(|s| {
+                    let _ = sender.send(RegistryResult::Found(s.0));
+                })
+                .map_err(|_| ()),
+        );
+    }
+
+    fn poll_queued_requests_timeouts(&mut self) {
+        loop {
+            match self.queued_requests_timeouts.poll() {
+                Ok(Ready(Some(request))) => {
+                    // Request timeouted
+                    self.queued_requests.remove(&request);
+                }
+                Ok(NotReady) | Ok(Ready(None)) => break,
+                Err(_) => continue,
             }
         }
     }
@@ -209,14 +262,7 @@ impl Future for Discovery {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.poll_results()?;
-
-        match self.initial_delay.poll() {
-            Ok(NotReady) => return Ok(NotReady),
-            Err(e) => {
-                error!(target: "mdns-registry", "Faulty timer: {:?}", e);
-            }
-            Ok(Ready(_)) => {}
-        }
+        self.poll_queued_requests_timeouts();
 
         loop {
             let (sender, peer) = match try_ready!(self.request_recv.poll().map_err(|_| ())) {
@@ -226,41 +272,36 @@ impl Future for Discovery {
 
             debug!(target: "mdns-registry", "Peer request: {}", peer);
 
-            let addrs = match self.known_peers.get(&peer) {
-                Some(peer) => {
-                    let mut addrs = Vec::new();
-                    peer.ports.iter().for_each(|p| {
-                        addrs.extend(peer.ip_addresses.iter().map(|ip| SocketAddr::new(*ip, *p)))
-                    });
-
-                    debug!(target: "mdns-registry", "Found peer addresses: {:?}", addrs);
-                    addrs
-                }
+            let result = match self.known_peers.get(&peer) {
+                Some(peer) => peer.clone(),
                 None => {
-                    debug!(target: "mdns-registry", "Could not find requested peer.");
+                    debug!(target: "mdns-registry", "Could not find requested peer, queueing it.");
+
+                    // We use the timers, as `queued_requests` get removed in the moment they are fulfilled.
+                    let queued_requests = self.queued_requests_timeouts.len();
+                    match self.queued_requests.entry(peer.clone()) {
+                        Entry::Occupied(_) => {
+                            debug!(target: "mdns-registry", "Same request already found, ignoring.");
+                        }
+                        Entry::Vacant(entry) => {
+                            if queued_requests >= MAX_QUEUED_REQUESTS {
+                                debug!(target: "mdns-registry", "Maximum number of queued requests reached, dropping new request.");
+                            } else {
+                                entry.insert(sender);
+                                self.queued_requests_timeouts.push(Box::new(
+                                    Delay::new(Instant::now() + Duration::from_secs(10))
+                                        .map(|_| peer)
+                                        .map_err(|_| ()),
+                                ));
+                            }
+                        }
+                    }
+
                     continue;
                 }
             };
 
-            let connections = addrs.into_iter().map(|a| {
-                ConnectWithStrategies::new(
-                    self.strategies.clone(),
-                    a,
-                    StreamHello::User(self.local_peer_identifier.clone()),
-                )
-                .map_err(|e| {
-                    trace!(target: "mdns-registry", "Could not connect to local peer: {:?}", e);
-                    e
-                })
-            });
-
-            tokio::spawn(
-                future::select_ok(connections)
-                    .map(|s| {
-                        let _ = sender.send(RegistryResult::Found(s.0));
-                    })
-                    .map_err(|_| ()),
-            );
+            self.fulfill_request(sender, &result);
         }
     }
 }

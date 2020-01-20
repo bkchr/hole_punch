@@ -71,9 +71,12 @@ impl Future for IncomingStream {
 
                 let is_proxy_stream = peer != self.peer_identifier;
 
-                self.pass_stream_to_context.pass_stream(
-                    Stream::new(stream, peer, self.new_stream_handle.clone(), is_proxy_stream)
-                );
+                self.pass_stream_to_context.pass_stream(Stream::new(
+                    stream,
+                    peer,
+                    self.new_stream_handle.clone(),
+                    is_proxy_stream,
+                ));
             }
             Some(StreamHello::UserProxy(peer)) => {
                 handle_proxy_stream(
